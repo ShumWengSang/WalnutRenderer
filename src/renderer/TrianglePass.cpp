@@ -65,10 +65,12 @@ namespace walnut
         // larger meshes should be copied into a DEFAULT heap.
         const UINT size = sizeof(kTriangleVertices);
         const CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_UPLOAD);
-        const CD3DX12_RESOURCE_DESC bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(size);
-        WR_CHECK(m_device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
-                                                   D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                                   IID_PPV_ARGS(&m_vertexBuffer)));
+        const CD3DX12_RESOURCE_DESC1 bufferDesc = CD3DX12_RESOURCE_DESC1::Buffer(size);
+        // Enhanced Barriers creation API: resources take an InitialLayout instead of an initial state.
+        // Buffers have no layout, so it must be UNDEFINED; their access is declared by barriers instead.
+        WR_CHECK(m_device->CreateCommittedResource3(&heapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+                                                    D3D12_BARRIER_LAYOUT_UNDEFINED, nullptr, nullptr, 0, nullptr,
+                                                    IID_PPV_ARGS(&m_vertexBuffer)));
         SetDebugName(m_vertexBuffer.Get(), L"TriangleVertexBuffer");
 
         void* mapped = nullptr;

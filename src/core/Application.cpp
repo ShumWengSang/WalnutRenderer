@@ -216,7 +216,6 @@ namespace walnut
         if (m_input.WasKeyPressed(VK_SPACE))
             m_autoRotate = !m_autoRotate;
 
-        // WASD / arrow keys move the triangle.
         float moveX = 0.0f;
         float moveY = 0.0f;
         if (m_input.IsKeyDown('A') || m_input.IsKeyDown(VK_LEFT)) moveX -= 1.0f;
@@ -226,7 +225,6 @@ namespace walnut
         m_triangle.offset[0] = std::clamp(m_triangle.offset[0] + moveX * m_moveSpeed * deltaSeconds, -1.0f, 1.0f);
         m_triangle.offset[1] = std::clamp(m_triangle.offset[1] + moveY * m_moveSpeed * deltaSeconds, -1.0f, 1.0f);
 
-        // Mouse wheel scales.
         if (const float wheel = m_input.GetMouseWheel(); wheel != 0.0f)
             m_triangle.scale = std::clamp(m_triangle.scale * std::pow(1.1f, wheel), 0.1f, 4.0f);
 
@@ -237,7 +235,6 @@ namespace walnut
             m_triangle.angle += m_rotationSpeed * deltaSeconds;
         m_triangle.angle = std::remainder(m_triangle.angle, 2.0f * std::numbers::pi_v<float>);
 
-        // Middle click resets the transform.
         if (m_input.WasMousePressed(MouseButton::Middle))
         {
             m_triangle.offset[0] = m_triangle.offset[1] = 0.0f;

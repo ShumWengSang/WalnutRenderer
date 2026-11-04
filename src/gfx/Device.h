@@ -22,7 +22,9 @@ namespace walnut
         Device(const Device&) = delete;
         Device& operator=(const Device&) = delete;
 
-        ID3D12Device* Get() const { return m_device.Get(); }
+        // ID3D12Device10 adds the Enhanced Barriers resource creation APIs (CreateCommittedResource3,
+        // InitialLayout). It converts implicitly to ID3D12Device* for everything else.
+        ID3D12Device10* Get() const { return m_device.Get(); }
         IDXGIFactory6* GetFactory() const { return m_factory.Get(); }
         const std::wstring& GetAdapterName() const { return m_adapterName; }
         bool IsTearingSupported() const { return m_tearingSupported; }
@@ -39,7 +41,7 @@ namespace walnut
 
         ComPtr<IDXGIFactory6> m_factory;
         ComPtr<IDXGIAdapter4> m_adapter;
-        ComPtr<ID3D12Device> m_device;
+        ComPtr<ID3D12Device10> m_device;
         std::wstring m_adapterName;
         bool m_tearingSupported = false;
         bool m_debugLayerEnabled = false;

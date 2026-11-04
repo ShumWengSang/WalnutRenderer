@@ -38,7 +38,7 @@ namespace walnut
         void CreateRootSignature();
         void CreateVertexBuffer();
 
-        ID3D12Device* m_device = nullptr;
+        ID3D12Device10* m_device = nullptr;
         const ShaderCompiler& m_compiler;
         std::filesystem::path m_shaderPath;
         DXGI_FORMAT m_rtvFormat;

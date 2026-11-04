@@ -43,7 +43,8 @@ namespace walnut
         void Resize(uint32_t width, uint32_t height);
         void WaitForGpu();
 
-        ID3D12GraphicsCommandList* GetCommandList() const { return m_commandList.Get(); }
+        // Command list 7 is the first version with Barrier() (Enhanced Barriers).
+        ID3D12GraphicsCommandList7* GetCommandList() const { return m_commandList.Get(); }
         Device& GetDevice() { return *m_device; }
         CommandQueue& GetDirectQueue() { return *m_directQueue; }
         SwapChain& GetSwapChain() { return *m_swapChain; }
@@ -65,7 +66,7 @@ namespace walnut
         std::unique_ptr<SwapChain> m_swapChain;
         std::unique_ptr<DescriptorHeap> m_srvHeap;
         std::array<FrameContext, kFramesInFlight> m_frames;
-        ComPtr<ID3D12GraphicsCommandList> m_commandList;
+        ComPtr<ID3D12GraphicsCommandList7> m_commandList;
 
         uint32_t m_frameIndex = 0;
         uint32_t m_backBufferIndex = 0;

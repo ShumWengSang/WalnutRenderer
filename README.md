@@ -4,7 +4,7 @@ A small Direct3D 12 learning engine for Windows. It uses raw Win32 for the windo
 
 ## Requirements
 
-- Windows 10/11 x64 with a D3D12 (feature level 12_0) GPU.
+- Windows 10/11 x64 with a D3D12 (feature level 12_0) GPU whose driver supports **Enhanced Barriers** (`D3D12_OPTIONS12::EnhancedBarriersSupported`). Enhanced Barriers have no automatic fallback, so the app refuses to start without them; a driver update usually fixes that.
 - Visual Studio Build Tools 2022 or newer, with the **Desktop development with C++** workload and a Windows SDK.
 - CMake 3.26+ and Ninja.
 - Optional, but needed for the D3D12 debug layer: the **Graphics Tools** Windows feature.
@@ -117,9 +117,18 @@ Example prompt: *"Survey captures\WalnutRenderer_timing_….wpix with PixMcp: fr
 1. `Input::BeginFrame()` resets the per-frame state. `Window::PumpMessages()` then passes Win32 messages to ImGui and to `Input`.
 2. If the window was resized, the renderer flushes the GPU and calls `ResizeBuffers` on the swapchain.
 3. ImGui starts a new frame. `Input` is told whether ImGui is using the keyboard or mouse, and ignores that device for game input while it is.
-4. `Renderer::BeginFrame()` waits on this frame slot's fence and resets its command allocator. It then moves the back buffer from PRESENT to RENDER_TARGET, clears it, and sets the viewport and scissor.
+4. `Renderer::BeginFrame()` waits on this frame slot's fence and resets its command allocator. It then records an Enhanced Barrier that changes the back buffer's layout from PRESENT to RENDER_TARGET (`SyncBefore = NONE`, `SyncAfter = RENDER_TARGET`), clears it, and sets the viewport and scissor.
 5. The triangle and the ImGui overlay are recorded into the command list.
-6. `Renderer::EndFrame()` moves the back buffer back to PRESENT and executes the command list. It then presents and signals the frame fence.
+6. `Renderer::EndFrame()` records an Enhanced Barrier from RENDER_TARGET back to PRESENT (`SyncBefore = RENDER_TARGET`, `SyncAfter = NONE`) and executes the command list. It then presents and signals the frame fence.
+
+### Barriers
+
+The renderer uses **Enhanced Barriers** only: `ID3D12GraphicsCommandList7::Barrier`, plus `CreateCommittedResource3` with an `InitialLayout`. A barrier states three things separately:
+- **Sync:** which GPU work must finish first, and which work must wait.
+- **Access:** which caches must be flushed or invalidated.
+- **Layout:** textures only; how the data is arranged in memory.
+
+ImGui's DX12 backend still uses legacy `ResourceBarrier` on its own textures. That's allowed, because the two models never touch the same resource.
 
 The **Agility SDK** is enabled through the `D3D12SDKVersion` and `D3D12SDKPath` exports in `main.cpp`. `D3D12Core.dll` is loaded from `bin/D3D12/`, and the log shows which copy was used.
 

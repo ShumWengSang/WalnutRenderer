@@ -9,11 +9,18 @@
 
 namespace walnut
 {
+    namespace
+    {
+        // In D3D12_BARRIER_SUBRESOURCE_RANGE, an index of 0xffffffff (with NumMipLevels = 0) means
+        // "every subresource".
+        constexpr UINT kAllSubresources = 0xffffffff;
+    }
+
     Renderer::Renderer(Window& window, const RendererDesc& desc)
         : m_vsync(desc.vsync)
     {
         m_device = std::make_unique<Device>(desc.device);
-        ID3D12Device* device = m_device->Get();
+        ID3D12Device10* device = m_device->Get();
 
         m_directQueue = std::make_unique<CommandQueue>(device, D3D12_COMMAND_LIST_TYPE_DIRECT, L"DirectQueue");
         m_swapChain = std::make_unique<SwapChain>(*m_device, *m_directQueue, window.GetHandle(), window.GetWidth(), window.GetHeight());
@@ -26,11 +33,10 @@ namespace walnut
             SetDebugName(m_frames[i].allocator.Get(), name.c_str());
         }
 
-        // Command lists are created in the recording state; close it so BeginFrame can Reset it.
-        WR_CHECK(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, m_frames[0].allocator.Get(), nullptr,
-                                           IID_PPV_ARGS(&m_commandList)));
+        // CreateCommandList1 creates the list closed, ready for BeginFrame to Reset it.
+        WR_CHECK(device->CreateCommandList1(0, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_LIST_FLAG_NONE,
+                                            IID_PPV_ARGS(&m_commandList)));
         SetDebugName(m_commandList.Get(), L"FrameCommandList");
-        WR_CHECK(m_commandList->Close());
 
         log::Info("Renderer initialized: {}x{}, {} back buffers, {} frames in flight, tearing {}",
                   m_swapChain->GetWidth(), m_swapChain->GetHeight(), SwapChain::kBufferCount, kFramesInFlight,
@@ -66,9 +72,17 @@ namespace walnut
         ID3D12Resource* backBuffer = m_swapChain->GetBackBuffer(m_backBufferIndex);
 
         PIXScopedEvent(m_commandList.Get(), pix::kColorGpu, L"Clear back buffer");
-        const auto toRenderTarget = CD3DX12_RESOURCE_BARRIER::Transition(
-            backBuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-        m_commandList->ResourceBarrier(1, &toRenderTarget);
+        // PRESENT -> RENDER_TARGET. Nothing earlier in this command list touched the back buffer, and
+        // ExecuteCommandLists boundaries already finish all prior GPU work (including the previous
+        // Present), so there is nothing to wait for: SyncBefore = NONE, AccessBefore = NO_ACCESS.
+        // SyncAfter/AccessAfter = RENDER_TARGET blocks the clear and draws until the layout change is done.
+        const CD3DX12_TEXTURE_BARRIER toRenderTarget(
+            D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_SYNC_RENDER_TARGET,
+            D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_ACCESS_RENDER_TARGET,
+            D3D12_BARRIER_LAYOUT_PRESENT, D3D12_BARRIER_LAYOUT_RENDER_TARGET,
+            backBuffer, CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources));
+        const CD3DX12_BARRIER_GROUP toRenderTargetGroup(1, &toRenderTarget);
+        m_commandList->Barrier(1, &toRenderTargetGroup);
 
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_swapChain->GetRtv(m_backBufferIndex);
         m_commandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
@@ -85,9 +99,16 @@ namespace walnut
     void Renderer::EndFrame()
     {
         ID3D12Resource* backBuffer = m_swapChain->GetBackBuffer(m_backBufferIndex);
-        const auto toPresent = CD3DX12_RESOURCE_BARRIER::Transition(
-            backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-        m_commandList->ResourceBarrier(1, &toPresent);
+        // RENDER_TARGET -> PRESENT (= COMMON, the layout Present requires). Wait for every render-target
+        // write before it (clear, triangle, ImGui). Nothing later in this list uses the buffer, so
+        // SyncAfter = NONE and AccessAfter = NO_ACCESS; Present runs after ExecuteCommandLists completes.
+        const CD3DX12_TEXTURE_BARRIER toPresent(
+            D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_SYNC_NONE,
+            D3D12_BARRIER_ACCESS_RENDER_TARGET, D3D12_BARRIER_ACCESS_NO_ACCESS,
+            D3D12_BARRIER_LAYOUT_RENDER_TARGET, D3D12_BARRIER_LAYOUT_PRESENT,
+            backBuffer, CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources));
+        const CD3DX12_BARRIER_GROUP toPresentGroup(1, &toPresent);
+        m_commandList->Barrier(1, &toPresentGroup);
         PIXEndEvent(m_commandList.Get()); // "Frame"
 
         WR_CHECK(m_commandList->Close());

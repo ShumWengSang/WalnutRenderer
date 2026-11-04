@@ -8,7 +8,7 @@
 
 .NOTES
     Captures go to <repo>\captures (git-ignored). Timing Captures can then be analyzed with the
-    pix-timing-captures MCP server (.vscode/mcp.json) or opened in the PIX UI.
+    PixMcp MCP server (.vscode/mcp.json) or opened in the PIX UI.
 #>
 param(
     [ValidateSet('Timing', 'Gpu')] [string] $Kind = 'Timing',

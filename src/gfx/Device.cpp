@@ -98,18 +98,35 @@ namespace walnut
             if (adapterDesc.Flags & DXGI_ADAPTER_FLAG3_SOFTWARE)
                 continue;
 
-            if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&m_device))))
+            ComPtr<ID3D12Device10> device;
+            if (FAILED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device))))
+                continue;
+
+            // Enhanced Barriers are an optional driver feature with no automatic fallback, and the
+            // renderer only records Barrier() calls, so skip adapters that don't support them.
+            D3D12_FEATURE_DATA_D3D12_OPTIONS12 options12{};
+            if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS12, &options12, sizeof(options12)))
+                || !options12.EnhancedBarriersSupported)
             {
-                m_adapter = adapter;
-                m_adapterName = adapterDesc.Description;
-                log::Info("Using adapter: {} ({} MB VRAM)", ToUtf8(m_adapterName),
-                          adapterDesc.DedicatedVideoMemory / (1024 * 1024));
-                break;
+                log::Warn("Skipping adapter {}: Enhanced Barriers not supported (update the GPU driver)",
+                          ToUtf8(adapterDesc.Description));
+                continue;
             }
+
+            m_device = std::move(device);
+            m_adapter = adapter;
+            m_adapterName = adapterDesc.Description;
+            log::Info("Using adapter: {} ({} MB VRAM), Enhanced Barriers supported", ToUtf8(m_adapterName),
+                      adapterDesc.DedicatedVideoMemory / (1024 * 1024));
+            break;
         }
 
         if (!m_device)
-            throw std::runtime_error("No D3D12 (feature level 12_0) hardware adapter found");
+        {
+            throw std::runtime_error(
+                "No suitable GPU found. WalnutRenderer needs a D3D12 feature level 12_0 adapter with "
+                "Enhanced Barriers support (D3D12_OPTIONS12::EnhancedBarriersSupported). Try updating the GPU driver.");
+        }
 
         SetDebugName(m_device.Get(), L"WalnutDevice");
 
@@ -120,10 +137,6 @@ namespace walnut
             GetModuleFileNameW(core, corePath, MAX_PATH);
             log::Info("D3D12Core loaded from: {}", ToUtf8(corePath));
         }
-
-        D3D12_FEATURE_DATA_D3D12_OPTIONS12 options12{};
-        if (SUCCEEDED(m_device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS12, &options12, sizeof(options12))))
-            log::Info("Enhanced barriers supported: {}", options12.EnhancedBarriersSupported ? "yes" : "no");
     }
 
     void Device::ConfigureInfoQueue()
