@@ -1,0 +1,25 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "WalnutRenderer",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${command:cmake.launchTargetPath}",
+            "args": [],
+            "cwd": "${command:cmake.launchTargetDirectory}",
+            "console": "internalConsole",
+            "preLaunchTask": "CMake: build"
+        },
+        {
+            "name": "WalnutRenderer (GPU-based validation)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${command:cmake.launchTargetPath}",
+            "args": ["--gpu-validation"],
+            "cwd": "${command:cmake.launchTargetDirectory}",
+            "console": "internalConsole",
+            "preLaunchTask": "CMake: build"
+        }
+    ]
+}

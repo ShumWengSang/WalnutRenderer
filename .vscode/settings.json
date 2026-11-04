@@ -1,0 +1,22 @@
+{
+    "cmake.useCMakePresets": "always",
+    "cmake.configureOnOpen": true,
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "files.associations": {
+        "*.hlsl": "hlsl",
+        "*.hlsli": "hlsl"
+    },
+
+    // Make CMake and Ninja reachable even if VS Code was started before they were installed.
+    "terminal.integrated.env.windows": {
+        "PATH": "${env:ProgramFiles}\\CMake\\bin;${env:LOCALAPPDATA}\\Microsoft\\WinGet\\Links;${env:PATH}"
+    },
+    "terminal.integrated.profiles.windows": {
+        "Developer PowerShell (x64)": {
+            "path": "pwsh.exe",
+            "args": ["-NoExit", "-NoLogo", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\.vscode\\vs-dev-shell.ps1"],
+            "icon": "tools"
+        }
+    },
+    "terminal.integrated.defaultProfile.windows": "Developer PowerShell (x64)"
+}

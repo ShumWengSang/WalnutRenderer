@@ -1,0 +1,11 @@
+# Build output
+build/
+out/
+
+# IDE
+.vs/
+*.user
+
+# Runtime artifacts
+imgui.ini
+*.log
