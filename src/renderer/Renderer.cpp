@@ -3,6 +3,7 @@
 #include "core/Log.h"
 #include "core/Window.h"
 #include "gfx/GpuUtils.h"
+#include "gfx/Pix.h"
 
 #include <string>
 
@@ -52,14 +53,19 @@ namespace walnut
         FrameContext& frame = m_frames[m_frameIndex];
 
         // Don't reuse this slot's allocator until the GPU has finished the commands recorded with it.
-        m_directQueue->WaitForFence(frame.fenceValue);
+        {
+            PIXScopedEvent(pix::kColorWait, L"Wait for frame fence");
+            m_directQueue->WaitForFence(frame.fenceValue);
+        }
 
         WR_CHECK(frame.allocator->Reset());
         WR_CHECK(m_commandList->Reset(frame.allocator.Get(), nullptr));
+        PIXBeginEvent(m_commandList.Get(), pix::kColorFrame, L"Frame");
 
         m_backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
         ID3D12Resource* backBuffer = m_swapChain->GetBackBuffer(m_backBufferIndex);
 
+        PIXScopedEvent(m_commandList.Get(), pix::kColorGpu, L"Clear back buffer");
         const auto toRenderTarget = CD3DX12_RESOURCE_BARRIER::Transition(
             backBuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
         m_commandList->ResourceBarrier(1, &toRenderTarget);
@@ -82,11 +88,17 @@ namespace walnut
         const auto toPresent = CD3DX12_RESOURCE_BARRIER::Transition(
             backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
         m_commandList->ResourceBarrier(1, &toPresent);
+        PIXEndEvent(m_commandList.Get()); // "Frame"
 
         WR_CHECK(m_commandList->Close());
         m_directQueue->Execute(m_commandList.Get());
 
-        const HRESULT presentResult = m_swapChain->Present(m_vsync);
+        HRESULT presentResult = S_OK;
+        {
+            // Time spent here is DXGI throttling the CPU (frame queue full / waiting for vsync).
+            PIXScopedEvent(pix::kColorWait, L"Present");
+            presentResult = m_swapChain->Present(m_vsync);
+        }
         if (presentResult == DXGI_ERROR_DEVICE_REMOVED || presentResult == DXGI_ERROR_DEVICE_RESET)
         {
             m_device->LogDeviceRemoved();
@@ -101,6 +113,7 @@ namespace walnut
 
     void Renderer::Resize(uint32_t width, uint32_t height)
     {
+        PIXScopedEvent(pix::kColorWait, L"Resize swapchain");
         WaitForGpu();
         m_swapChain->Resize(width, height);
         log::Info("Swapchain resized to {}x{}", width, height);

@@ -3,6 +3,7 @@
 #include "core/Log.h"
 #include "gfx/Device.h"
 #include "gfx/GpuUtils.h"
+#include "gfx/Pix.h"
 #include "gfx/ShaderCompiler.h"
 
 #include <cstddef>
@@ -129,6 +130,7 @@ namespace walnut
 
     void TrianglePass::Render(ID3D12GraphicsCommandList* commandList, const TriangleConstants& constants) const
     {
+        PIXScopedEvent(commandList, pix::kColorGpu, L"TrianglePass");
         commandList->SetGraphicsRootSignature(m_rootSignature.Get());
         commandList->SetPipelineState(m_pipelineState.Get());
         commandList->SetGraphicsRoot32BitConstants(0, kNumRootConstants, &constants, 0);

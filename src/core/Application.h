@@ -19,10 +19,14 @@ namespace walnut
     {
         bool debugLayer = false;
         bool gpuValidation = false;
+        bool pixGpuCapturer = false;   // load WinPixGpuCapturer.dll at startup
+        uint64_t pixCaptureFrame = 0;  // take a GPU capture at this frame (implies pixGpuCapturer)
         uint64_t exitAfterFrames = 0; // 0 = run until closed (useful for automated smoke tests)
+        double exitAfterSeconds = 0.0; // 0 = run until closed
     };
 
-    // Parses --debug-layer, --no-debug-layer, --gpu-validation and --exit-after-frames=N.
+    // Parses --debug-layer, --no-debug-layer, --gpu-validation, --pix, --pix-capture-frame=N,
+    // --exit-after-frames=N and --exit-after-seconds=S.
     AppOptions ParseCommandLine();
 
     class Application
@@ -39,7 +43,9 @@ namespace walnut
     private:
         void Update(float deltaSeconds);
         void DrawUI(float deltaSeconds);
+        void DrawPixUI();
         void ReloadShaders();
+        void RequestGpuCapture();
 
         AppOptions m_options;
         std::filesystem::path m_exeDir;
@@ -60,5 +66,6 @@ namespace walnut
         float m_moveSpeed = 1.0f;     // NDC units per second
         bool m_showDemoWindow = false;
         float m_smoothedFrameMs = 0.0f;
+        std::filesystem::path m_lastCapturePath;
     };
 }

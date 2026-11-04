@@ -42,7 +42,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int)
     catch (const std::exception& e)
     {
         walnut::log::Error("Fatal: {}", e.what());
-        if (options.exitAfterFrames == 0)
+        if (options.exitAfterFrames == 0 && options.exitAfterSeconds <= 0.0)
             MessageBoxA(nullptr, e.what(), "WalnutRenderer - fatal error", MB_OK | MB_ICONERROR);
         exitCode = EXIT_FAILURE;
     }

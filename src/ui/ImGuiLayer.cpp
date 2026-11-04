@@ -1,6 +1,7 @@
 #include "ui/ImGuiLayer.h"
 
 #include "core/Window.h"
+#include "gfx/Pix.h"
 #include "renderer/Renderer.h"
 
 #include <imgui.h>
@@ -70,7 +71,11 @@ namespace walnut
 
     void ImGuiLayer::Render(ID3D12GraphicsCommandList* commandList)
     {
-        ImGui::Render();
+        {
+            PIXScopedEvent(pix::kColorCpu, L"ImGui::Render");
+            ImGui::Render();
+        }
+        PIXScopedEvent(commandList, pix::kColorGpu, L"ImGui");
         ID3D12DescriptorHeap* heaps[] = { m_renderer.GetSrvHeap().Get() };
         commandList->SetDescriptorHeaps(1, heaps);
         ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList);

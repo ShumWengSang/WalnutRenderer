@@ -3,6 +3,7 @@
 #include "core/Log.h"
 #include "core/StringUtils.h"
 #include "core/Window.h"
+#include "gfx/Pix.h"
 #include "gfx/ShaderCompiler.h"
 #include "renderer/Renderer.h"
 #include "ui/ImGuiLayer.h"
@@ -55,6 +56,8 @@ namespace walnut
             return options;
 
         constexpr std::wstring_view kExitAfterFrames = L"--exit-after-frames=";
+        constexpr std::wstring_view kExitAfterSeconds = L"--exit-after-seconds=";
+        constexpr std::wstring_view kPixCaptureFrame = L"--pix-capture-frame=";
         for (int i = 1; i < argc; ++i)
         {
             const std::wstring_view arg = argv[i];
@@ -64,8 +67,17 @@ namespace walnut
                 options.debugLayer = false;
             else if (arg == L"--gpu-validation")
                 options.gpuValidation = true;
+            else if (arg == L"--pix")
+                options.pixGpuCapturer = true;
+            else if (arg.starts_with(kPixCaptureFrame))
+            {
+                options.pixGpuCapturer = true;
+                options.pixCaptureFrame = std::wcstoull(std::wstring(arg.substr(kPixCaptureFrame.size())).c_str(), nullptr, 10);
+            }
             else if (arg.starts_with(kExitAfterFrames))
                 options.exitAfterFrames = std::wcstoull(std::wstring(arg.substr(kExitAfterFrames.size())).c_str(), nullptr, 10);
+            else if (arg.starts_with(kExitAfterSeconds))
+                options.exitAfterSeconds = std::wcstod(std::wstring(arg.substr(kExitAfterSeconds.size())).c_str(), nullptr);
             else
                 log::Warn("Unknown command-line argument: {}", ToUtf8(arg));
         }
@@ -76,6 +88,10 @@ namespace walnut
     Application::Application(const AppOptions& options)
         : m_options(options), m_exeDir(GetExecutableDirectory())
     {
+        // The GPU capturer hooks D3D12 creation, so it has to be in the process before the device exists.
+        if (options.pixGpuCapturer)
+            pix::LoadGpuCapturer();
+
         m_window = std::make_unique<Window>(WindowDesc{ L"WalnutRenderer", 1280, 720 });
 
         // Register input before ImGui so input always sees every message, even ones ImGui consumes.
@@ -126,11 +142,17 @@ namespace walnut
 
         while (true)
         {
+            PIXScopedEvent(pix::kColorFrame, L"Frame");
+
             m_input.BeginFrame();
-            if (!m_window->PumpMessages())
-                break;
+            {
+                PIXScopedEvent(pix::kColorCpu, L"PumpMessages");
+                if (!m_window->PumpMessages())
+                    break;
+            }
 
             const float deltaSeconds = m_timer.Tick();
+            PIXReportCounter(L"Frame time (ms)", deltaSeconds * 1000.0f);
 
             uint32_t width = 0;
             uint32_t height = 0;
@@ -143,24 +165,39 @@ namespace walnut
                 continue;
             }
 
-            m_imgui->BeginFrame();
-            m_input.SetUICapture(m_imgui->WantsKeyboard(), m_imgui->WantsMouse());
+            if (m_options.pixCaptureFrame != 0 && m_renderer->GetFrameCount() == m_options.pixCaptureFrame)
+                RequestGpuCapture();
 
-            Update(deltaSeconds);
-            DrawUI(deltaSeconds);
+            {
+                PIXScopedEvent(pix::kColorCpu, L"Update + UI");
+                m_imgui->BeginFrame();
+                m_input.SetUICapture(m_imgui->WantsKeyboard(), m_imgui->WantsMouse());
+
+                Update(deltaSeconds);
+                DrawUI(deltaSeconds);
+            }
 
             const SwapChain& swapChain = m_renderer->GetSwapChain();
             m_triangle.aspect = static_cast<float>(swapChain.GetWidth()) / static_cast<float>(swapChain.GetHeight());
 
-            m_renderer->BeginFrame(m_clearColor);
-            ID3D12GraphicsCommandList* commandList = m_renderer->GetCommandList();
-            m_trianglePass->Render(commandList, m_triangle);
-            m_imgui->Render(commandList);
-            m_renderer->EndFrame();
+            {
+                PIXScopedEvent(pix::kColorCpu, L"Render");
+                m_renderer->BeginFrame(m_clearColor);
+                ID3D12GraphicsCommandList* commandList = m_renderer->GetCommandList();
+                m_trianglePass->Render(commandList, m_triangle);
+                m_imgui->Render(commandList);
+                m_renderer->EndFrame();
+            }
 
             if (m_options.exitAfterFrames != 0 && m_renderer->GetFrameCount() >= m_options.exitAfterFrames)
             {
                 log::Info("Rendered {} frames, exiting (--exit-after-frames)", m_renderer->GetFrameCount());
+                break;
+            }
+            if (m_options.exitAfterSeconds > 0.0 && m_timer.GetTotalSeconds() >= m_options.exitAfterSeconds)
+            {
+                log::Info("Ran for {:.1f} s ({} frames), exiting (--exit-after-seconds)",
+                          m_timer.GetTotalSeconds(), m_renderer->GetFrameCount());
                 break;
             }
         }
@@ -215,6 +252,43 @@ namespace walnut
         m_renderer->WaitForGpu();
         if (m_trianglePass->ReloadShaders())
             log::Info("Shaders reloaded");
+    }
+
+    void Application::RequestGpuCapture()
+    {
+        SYSTEMTIME t{};
+        GetLocalTime(&t);
+        const std::string name = std::format("WalnutRenderer_{:04}{:02}{:02}_{:02}{:02}{:02}_frame{}.wpix",
+                                             t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond,
+                                             m_renderer->GetFrameCount());
+        const std::filesystem::path path = m_exeDir / "captures" / name;
+        if (pix::CaptureNextFrames(path, 1))
+            m_lastCapturePath = path;
+    }
+
+    void Application::DrawPixUI()
+    {
+        if (!ImGui::CollapsingHeader("PIX"))
+            return;
+
+        const bool capturerLoaded = pix::IsGpuCapturerLoaded();
+        ImGui::Text("GPU capturer: %s", capturerLoaded ? "loaded" : "not loaded (run with --pix)");
+        ImGui::Text("Attached for GPU capture: %s", PIXIsAttachedForGpuCapture() ? "yes" : "no");
+
+        ImGui::BeginDisabled(!capturerLoaded);
+        if (ImGui::Button("Capture next frame"))
+            RequestGpuCapture();
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::TextDisabled("(when attached from PIX, F11 also captures)");
+
+        if (!m_lastCapturePath.empty())
+        {
+            const std::string capture = ToUtf8(m_lastCapturePath.filename().wstring());
+            ImGui::TextWrapped("Last capture: %s", capture.c_str());
+            if (ImGui::Button("Open in PIX") && std::filesystem::exists(m_lastCapturePath))
+                ShellExecuteW(nullptr, L"open", m_lastCapturePath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        }
     }
 
     void Application::DrawUI(float deltaSeconds)
@@ -295,6 +369,8 @@ namespace walnut
             ImGui::TextDisabled("WASD/arrows: move   wheel: scale   right-drag: rotate");
             ImGui::TextDisabled("Space: toggle auto-rotate   middle-click: reset   Esc: quit");
         }
+
+        DrawPixUI();
 
         ImGui::Checkbox("Show ImGui demo window", &m_showDemoWindow);
         ImGui::End();

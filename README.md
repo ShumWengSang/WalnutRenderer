@@ -43,6 +43,9 @@ The presets are `x64-debug` and `x64-release` (RelWithDebInfo).
 | `--debug-layer` / `--no-debug-layer` | Force the D3D12 debug layer on or off. It is on by default in Debug builds. |
 | `--gpu-validation` | Turns on GPU-based validation, which also enables the debug layer. Slow. |
 | `--exit-after-frames=N` | Quit after N frames. Useful for smoke tests. |
+| `--exit-after-seconds=S` | Quit after S seconds. Used by `tools/pix-capture.ps1`. |
+| `--pix` | Load PIX's GPU capturer (`WinPixGpuCapturer.dll`) at startup, so you can attach PIX or take captures from inside the app. |
+| `--pix-capture-frame=N` | Take a GPU capture of frame N into `bin/captures/`. Implies `--pix`. |
 
 Logs go to the debugger output and to `WalnutRenderer.log` next to the exe. When the debug layer is active, its messages also go to the log.
 
@@ -61,13 +64,53 @@ Logs go to the debugger output and to `WalnutRenderer.log` next to the exe. When
 ## Layout
 
 ```
-cmake/Dependencies.cmake  FetchContent: DirectX-Headers, Agility SDK, DXC, Dear ImGui (all pinned)
+cmake/Dependencies.cmake  FetchContent: DirectX-Headers, Agility SDK, DXC, Dear ImGui, WinPixEventRuntime (all pinned)
 shaders/                  HLSL sources, copied next to the exe and compiled at runtime
 src/core/                 Application loop, Win32 Window, Input, Timer, Log
-src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, ShaderCompiler
+src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, ShaderCompiler, Pix
 src/renderer/             Renderer (frames in flight, begin/end frame), TrianglePass
 src/ui/                   ImGuiLayer (Win32 + DX12 backends)
+tools/                    pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher)
 ```
+
+## Profiling and debugging with PIX
+
+Install [PIX on Windows](https://devblogs.microsoft.com/pix/download/) **2610.28 or newer**; that release adds the MCP servers. The MCP servers also need the .NET 10 runtime and the ASP.NET Core 10 runtime:
+`winget install Microsoft.DotNet.Runtime.10 Microsoft.DotNet.AspNetCore.10`.
+
+### Markers
+
+The code uses WinPixEventRuntime (`src/gfx/Pix.h`). `USE_PIX` is defined in every configuration, so Release builds can be profiled too.
+
+| Timeline | Events |
+|---|---|
+| CPU | `Frame` › `PumpMessages`, `Update + UI`, `Render` › `Wait for frame fence`, `ImGui::Render`, `Present` |
+| GPU (command list) | `Frame` › `Clear back buffer`, `TrianglePass`, `ImGui` |
+| Counter | `Frame time (ms)`, recorded with `PIXReportCounter` every frame |
+
+Keep event names constant, with no frame numbers formatted into them. PIX groups executions by name, so a name that changes every frame creates a separate event each frame and breaks per-event statistics.
+
+### Taking captures
+
+```powershell
+.\tools\pix-capture.ps1 -Kind Timing -DurationMs 3000   # Timing Capture -> captures\*.wpix
+.\tools\pix-capture.ps1 -Kind Gpu                         # GPU Capture of 1 frame
+```
+
+You can also run the app with `--pix` and use the **PIX → Capture next frame** button, or attach from the PIX UI. When attached, PIX's own F11 hotkey also works. The `captures/` folder is git-ignored.
+
+### Analyzing with AI agents (MCP)
+
+[.vscode/mcp.json](.vscode/mcp.json) registers PIX's MCP servers through `tools/pix-mcp.cmd`, which always launches the newest installed PIX:
+
+| Server | For | Example tools |
+|---|---|---|
+| `PixMcp` | Timing Captures (`.wpix`) | `tc_open_capture`, `tc_get_capture_manifest`, `tc_query_pix_event_definitions`, `tc_query_executions_in_event`, `tc_query_gpu_executions_by_event` |
+| `DxDmpMcp` | DirectX dump files (`.dxdmp`) from GPU hangs or device removal | `open_dump`, `get_dred`, `list_page_faults`, `query_known_issues` |
+
+PIX also ships agent skills, `pix-timing-capture-analysis` and `pix-diagnose`, which guide an agent through using these tools. Copy them into `~/.copilot/skills/` from `<PIX>\skills\` and `<PIX>\Tools\DxDmp\agent-kit\skills\`. GPU Captures don't have an MCP server yet; use `pixtool` (for example `open-capture X save-event-list Y`) or the PIX UI.
+
+Example prompt: *"Survey captures\WalnutRenderer_timing_….wpix with PixMcp: frame time, Present and fence waits, and GPU pass costs."*
 
 ## How a frame works
 
@@ -87,5 +130,6 @@ The **Agility SDK** is enabled through the `D3D12SDKVersion` and `D3D12SDKPath` 
 | D3D12 Agility SDK / DirectX-Headers | 1.620.1 |
 | DXC | 1.9.2609.5 |
 | Dear ImGui | v1.93.0-docking |
+| WinPixEventRuntime | 1.0.240308001 |
 
 Versions are set at the top of `cmake/Dependencies.cmake`. Keep the Agility SDK and DirectX-Headers on the same version.

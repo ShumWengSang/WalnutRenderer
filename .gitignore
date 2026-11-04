@@ -9,3 +9,7 @@ out/
 # Runtime artifacts
 imgui.ini
 *.log
+
+# PIX captures and MCP analysis output
+captures/
+*.wpix

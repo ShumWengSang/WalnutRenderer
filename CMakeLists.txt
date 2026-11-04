@@ -34,6 +34,8 @@ set(WALNUT_SOURCES
     src/gfx/Device.cpp
     src/gfx/Device.h
     src/gfx/GpuUtils.h
+    src/gfx/Pix.cpp
+    src/gfx/Pix.h
     src/gfx/ShaderCompiler.cpp
     src/gfx/ShaderCompiler.h
     src/gfx/SwapChain.cpp
@@ -59,6 +61,7 @@ target_link_libraries(WalnutRenderer PRIVATE
     imgui
     Microsoft::DirectX-Headers
     walnut_dxc
+    walnut_pix
     d3d12
     dxgi
     dxguid

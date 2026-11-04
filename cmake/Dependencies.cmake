@@ -4,6 +4,7 @@ include(FetchContent)
 set(WALNUT_AGILITY_SDK_VERSION "1.620.1")
 set(WALNUT_DXC_VERSION "1.9.2609.5")
 set(WALNUT_IMGUI_TAG "v1.93.0-docking")
+set(WALNUT_PIX_EVENT_RUNTIME_VERSION "1.0.240308001")
 
 # The Agility SDK "minor" number is what the exe exports as D3D12SDKVersion (e.g. 1.620.1 -> 620).
 string(REGEX MATCH "^1\\.([0-9]+)" _ "${WALNUT_AGILITY_SDK_VERSION}")
@@ -40,7 +41,15 @@ FetchContent_Declare(imgui
     GIT_SHALLOW    TRUE
 )
 
-FetchContent_MakeAvailable(directx_headers agility_sdk dxc imgui)
+# PIX markers (PIXBeginEvent/PIXScopedEvent), counters and programmatic capture API (pix3.h).
+FetchContent_Declare(winpixeventruntime
+    URL           https://www.nuget.org/api/v2/package/WinPixEventRuntime/${WALNUT_PIX_EVENT_RUNTIME_VERSION}
+    URL_HASH      SHA256=726ACC93D6968E2146261A1E415521747D50AD69894C2B42B5D0D4C29FD66EC4
+    DOWNLOAD_NAME winpixeventruntime.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+
+FetchContent_MakeAvailable(directx_headers agility_sdk dxc imgui winpixeventruntime)
 
 # --- Agility SDK -------------------------------------------------------------
 set(WALNUT_AGILITY_BIN_DIR "${agility_sdk_SOURCE_DIR}/build/native/bin/x64")
@@ -50,6 +59,15 @@ set(WALNUT_DXC_BIN_DIR "${dxc_SOURCE_DIR}/build/native/bin/x64")
 add_library(walnut_dxc INTERFACE)
 target_include_directories(walnut_dxc INTERFACE "${dxc_SOURCE_DIR}/build/native/include")
 target_link_libraries(walnut_dxc INTERFACE "${dxc_SOURCE_DIR}/build/native/lib/x64/dxcompiler.lib")
+
+# --- WinPixEventRuntime ------------------------------------------------------
+# USE_PIX is defined for every configuration so Release builds can be profiled too;
+# the markers cost almost nothing when no PIX tool is attached.
+set(WALNUT_PIX_BIN_DIR "${winpixeventruntime_SOURCE_DIR}/bin/x64")
+add_library(walnut_pix INTERFACE)
+target_include_directories(walnut_pix INTERFACE "${winpixeventruntime_SOURCE_DIR}/Include")
+target_link_libraries(walnut_pix INTERFACE "${WALNUT_PIX_BIN_DIR}/WinPixEventRuntime.lib")
+target_compile_definitions(walnut_pix INTERFACE USE_PIX)
 
 # --- Dear ImGui (Win32 + DX12 backends) --------------------------------------
 add_library(imgui STATIC
@@ -70,7 +88,7 @@ target_include_directories(imgui BEFORE PRIVATE "${directx_headers_SOURCE_DIR}/i
 target_compile_definitions(imgui PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(imgui PUBLIC d3d12 dxgi PRIVATE d3dcompiler dwmapi)
 
-# Copies the runtime DLLs (Agility SDK + DXC) next to an executable target.
+# Copies the runtime DLLs (Agility SDK, DXC, WinPixEventRuntime) next to an executable target.
 function(walnut_copy_runtime_dlls target)
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/D3D12"
@@ -83,8 +101,9 @@ function(walnut_copy_runtime_dlls target)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${WALNUT_DXC_BIN_DIR}/dxcompiler.dll"
             "${WALNUT_DXC_BIN_DIR}/dxil.dll"
+            "${WALNUT_PIX_BIN_DIR}/WinPixEventRuntime.dll"
             "$<TARGET_FILE_DIR:${target}>/"
-        COMMENT "Copying Agility SDK and DXC runtime DLLs"
+        COMMENT "Copying Agility SDK, DXC and WinPixEventRuntime DLLs"
         VERBATIM
     )
 endfunction()

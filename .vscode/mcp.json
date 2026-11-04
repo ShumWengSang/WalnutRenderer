@@ -1,0 +1,16 @@
+{
+    // PIX MCP servers (PIX 2610.28+). tools\pix-mcp.cmd launches them from the newest PIX install.
+    // Server names match the PIX agent skills, which refer to tools as "PixMcp-tc_*" and "DxDmpMcp".
+    "servers": {
+        "PixMcp": {
+            "type": "stdio",
+            "command": "${workspaceFolder}\\tools\\pix-mcp.cmd",
+            "args": ["timing"]
+        },
+        "DxDmpMcp": {
+            "type": "stdio",
+            "command": "${workspaceFolder}\\tools\\pix-mcp.cmd",
+            "args": ["dxdmp"]
+        }
+    }
+}
