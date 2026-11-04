@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gfx/Buffer.h"
 #include "gfx/D3D12Common.h"
 
 #include <filesystem>
@@ -45,7 +46,7 @@ namespace walnut
 
         ComPtr<ID3D12RootSignature> m_rootSignature;
         ComPtr<ID3D12PipelineState> m_pipelineState;
-        ComPtr<ID3D12Resource> m_vertexBuffer;
+        Buffer m_vertexBuffer;
         D3D12_VERTEX_BUFFER_VIEW m_vertexBufferView{};
         std::string m_lastError;
     };

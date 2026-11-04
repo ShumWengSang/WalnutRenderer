@@ -26,6 +26,8 @@ set(WALNUT_SOURCES
     src/core/Window.cpp
     src/core/Window.h
 
+    src/gfx/Buffer.cpp
+    src/gfx/Buffer.h
     src/gfx/CommandQueue.cpp
     src/gfx/CommandQueue.h
     src/gfx/D3D12Common.h

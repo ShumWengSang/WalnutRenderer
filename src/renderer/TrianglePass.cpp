@@ -63,24 +63,16 @@ namespace walnut
     {
         // An upload-heap buffer is CPU-writable and GPU-readable. Fine for tiny static data;
         // larger meshes should be copied into a DEFAULT heap.
-        const UINT size = sizeof(kTriangleVertices);
-        const CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_UPLOAD);
-        const CD3DX12_RESOURCE_DESC1 bufferDesc = CD3DX12_RESOURCE_DESC1::Buffer(size);
-        // Enhanced Barriers creation API: resources take an InitialLayout instead of an initial state.
-        // Buffers have no layout, so it must be UNDEFINED; their access is declared by barriers instead.
-        WR_CHECK(m_device->CreateCommittedResource3(&heapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
-                                                    D3D12_BARRIER_LAYOUT_UNDEFINED, nullptr, nullptr, 0, nullptr,
-                                                    IID_PPV_ARGS(&m_vertexBuffer)));
-        SetDebugName(m_vertexBuffer.Get(), L"TriangleVertexBuffer");
+        const uint64_t size = sizeof(kTriangleVertices);
+        m_vertexBuffer = Buffer(m_device, BufferDesc{
+            .size = size,
+            .heapType = D3D12_HEAP_TYPE_UPLOAD,
+            .name = L"TriangleVertexBuffer",
+        });
+        std::memcpy(m_vertexBuffer.GetMappedData(), kTriangleVertices, size);
 
-        void* mapped = nullptr;
-        const CD3DX12_RANGE noRead(0, 0);
-        WR_CHECK(m_vertexBuffer->Map(0, &noRead, &mapped));
-        std::memcpy(mapped, kTriangleVertices, size);
-        m_vertexBuffer->Unmap(0, nullptr);
-
-        m_vertexBufferView.BufferLocation = m_vertexBuffer->GetGPUVirtualAddress();
-        m_vertexBufferView.SizeInBytes = size;
+        m_vertexBufferView.BufferLocation = m_vertexBuffer.GetGpuAddress();
+        m_vertexBufferView.SizeInBytes = static_cast<UINT>(size);
         m_vertexBufferView.StrideInBytes = sizeof(Vertex);
     }
 
