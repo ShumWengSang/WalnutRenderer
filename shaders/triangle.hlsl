@@ -1,6 +1,7 @@
 // Hello-triangle shaders. Compiled at runtime by DXC (see TrianglePass.cpp).
 
-// Root constants (root parameter 0). Layout must match TriangleConstants in TrianglePass.h.
+// Constant buffer at b0, bound as a root CBV (root parameter 0). Layout must match TriangleConstants in
+// TrianglePass.h. The shader doesn't care whether b0 is fed by root constants or a CBV.
 cbuffer TriangleConstants : register(b0)
 {
     float4 g_tint;

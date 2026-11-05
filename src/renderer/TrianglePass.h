@@ -9,10 +9,11 @@
 namespace walnut
 {
     class Device;
+    class FrameAllocator;
     class ShaderCompiler;
     class UploadContext;
 
-    // Root constants for triangle.hlsl. Must match the cbuffer layout there.
+    // Constant buffer data for triangle.hlsl. Must match the cbuffer layout there.
     struct TriangleConstants
     {
         float tint[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -36,7 +37,8 @@ namespace walnut
         bool ReloadShaders();
         const std::string& GetLastError() const { return m_lastError; }
 
-        void Render(ID3D12GraphicsCommandList* commandList, const TriangleConstants& constants) const;
+        void Render(ID3D12GraphicsCommandList* commandList, FrameAllocator& frameAllocator,
+                    const TriangleConstants& constants) const;
 
     private:
         void CreateRootSignature();

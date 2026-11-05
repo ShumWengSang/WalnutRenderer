@@ -2,6 +2,7 @@
 
 #include "core/Log.h"
 #include "gfx/Device.h"
+#include "gfx/FrameAllocator.h"
 #include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
 #include "gfx/ShaderCompiler.h"
@@ -24,8 +25,6 @@ namespace walnut
             { {  0.433f, -0.25f, 0.0f }, { 0.0f, 1.0f, 0.0f } },
             { { -0.433f, -0.25f, 0.0f }, { 0.0f, 0.0f, 1.0f } },
         };
-
-        constexpr UINT kNumRootConstants = sizeof(TriangleConstants) / 4;
     }
 
     TrianglePass::TrianglePass(Device& device, UploadContext& upload, const ShaderCompiler& compiler,
@@ -40,9 +39,13 @@ namespace walnut
 
     void TrianglePass::CreateRootSignature()
     {
-        // One root parameter: TriangleConstants as 32-bit root constants bound to b0.
+        // One root parameter: a root CBV for b0. Unlike root constants (the data itself, copied into the
+        // command list), a root CBV is just a 64-bit GPU address; the shader reads the data from memory.
+        // DATA_STATIC_WHILE_SET_AT_EXECUTE promises the data won't change while the GPU may read it, which
+        // lets the driver optimize. The FrameAllocator keeps that promise: one region per frame in flight.
         CD3DX12_ROOT_PARAMETER1 parameters[1];
-        parameters[0].InitAsConstants(kNumRootConstants, 0, 0, D3D12_SHADER_VISIBILITY_ALL);
+        parameters[0].InitAsConstantBufferView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE,
+                                               D3D12_SHADER_VISIBILITY_ALL);
 
         CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC desc;
         desc.Init_1_1(_countof(parameters), parameters, 0, nullptr,
@@ -123,12 +126,17 @@ namespace walnut
         return true;
     }
 
-    void TrianglePass::Render(ID3D12GraphicsCommandList* commandList, const TriangleConstants& constants) const
+    void TrianglePass::Render(ID3D12GraphicsCommandList* commandList, FrameAllocator& frameAllocator,
+                              const TriangleConstants& constants) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"TrianglePass");
+
+        // Copy this frame's constants into this frame's region of upload memory, then point b0 at them.
+        const D3D12_GPU_VIRTUAL_ADDRESS constantsAddress = frameAllocator.AllocateConstants(constants);
+
         commandList->SetGraphicsRootSignature(m_rootSignature.Get());
         commandList->SetPipelineState(m_pipelineState.Get());
-        commandList->SetGraphicsRoot32BitConstants(0, kNumRootConstants, &constants, 0);
+        commandList->SetGraphicsRootConstantBufferView(0, constantsAddress);
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         commandList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
         commandList->DrawInstanced(3, 1, 0, 0);

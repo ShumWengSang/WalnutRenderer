@@ -26,6 +26,7 @@ namespace walnut
         m_uploadContext = std::make_unique<UploadContext>(device, *m_directQueue);
         m_swapChain = std::make_unique<SwapChain>(*m_device, *m_directQueue, window.GetHandle(), window.GetWidth(), window.GetHeight());
         m_srvHeap = std::make_unique<DescriptorHeap>(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kSrvHeapCapacity, true, L"SrvHeap");
+        m_frameAllocator = std::make_unique<FrameAllocator>(device, kFramesInFlight, kFrameAllocatorBytesPerFrame);
 
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
@@ -64,6 +65,9 @@ namespace walnut
             PIXScopedEvent(pix::kColorWait, L"Wait for frame fence");
             m_directQueue->WaitForFence(frame.fenceValue);
         }
+
+        // The same fence also covers this slot's region of per-frame upload memory.
+        m_frameAllocator->BeginFrame(m_frameIndex);
 
         WR_CHECK(frame.allocator->Reset());
         WR_CHECK(m_commandList->Reset(frame.allocator.Get(), nullptr));

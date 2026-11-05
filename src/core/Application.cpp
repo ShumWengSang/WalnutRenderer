@@ -187,7 +187,7 @@ namespace walnut
                 PIXScopedEvent(pix::kColorCpu, L"Render");
                 m_renderer->BeginFrame(m_clearColor);
                 ID3D12GraphicsCommandList* commandList = m_renderer->GetCommandList();
-                m_trianglePass->Render(commandList, m_triangle);
+                m_trianglePass->Render(commandList, m_renderer->GetFrameAllocator(), m_triangle);
                 m_imgui->Render(commandList);
                 m_renderer->EndFrame();
             }
@@ -317,6 +317,12 @@ namespace walnut
             ImGui::SameLine();
             ImGui::TextDisabled(swapChain.IsTearingSupported() ? "(tearing supported)" : "(tearing unsupported)");
             ImGui::ColorEdit3("Clear color", m_clearColor);
+
+            // Read before this frame's allocations, so this shows what the previous frame used.
+            const FrameAllocator& frameAllocator = m_renderer->GetFrameAllocator();
+            ImGui::Text("Frame upload memory: %llu / %llu bytes",
+                        static_cast<unsigned long long>(frameAllocator.GetUsedBytes()),
+                        static_cast<unsigned long long>(frameAllocator.GetBytesPerFrame()));
         }
 
         if (ImGui::CollapsingHeader("Triangle", ImGuiTreeNodeFlags_DefaultOpen))

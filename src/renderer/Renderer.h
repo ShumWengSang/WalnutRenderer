@@ -4,6 +4,7 @@
 #include "gfx/D3D12Common.h"
 #include "gfx/DescriptorHeap.h"
 #include "gfx/Device.h"
+#include "gfx/FrameAllocator.h"
 #include "gfx/SwapChain.h"
 #include "gfx/UploadContext.h"
 
@@ -32,6 +33,7 @@ namespace walnut
         // Frames the CPU may record ahead of the GPU. Independent of the swapchain buffer count.
         static constexpr uint32_t kFramesInFlight = 2;
         static constexpr uint32_t kSrvHeapCapacity = 256;
+        static constexpr uint64_t kFrameAllocatorBytesPerFrame = 1024 * 1024;
 
         Renderer(Window& window, const RendererDesc& desc);
         ~Renderer();
@@ -49,6 +51,7 @@ namespace walnut
         Device& GetDevice() { return *m_device; }
         CommandQueue& GetDirectQueue() { return *m_directQueue; }
         UploadContext& GetUploadContext() { return *m_uploadContext; }
+        FrameAllocator& GetFrameAllocator() { return *m_frameAllocator; }
         SwapChain& GetSwapChain() { return *m_swapChain; }
         DescriptorHeap& GetSrvHeap() { return *m_srvHeap; }
 
@@ -68,6 +71,7 @@ namespace walnut
         std::unique_ptr<UploadContext> m_uploadContext; // after the queue: destroyed before it
         std::unique_ptr<SwapChain> m_swapChain;
         std::unique_ptr<DescriptorHeap> m_srvHeap;
+        std::unique_ptr<FrameAllocator> m_frameAllocator;
         std::array<FrameContext, kFramesInFlight> m_frames;
         ComPtr<ID3D12GraphicsCommandList7> m_commandList;
 
