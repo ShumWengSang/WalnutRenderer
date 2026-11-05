@@ -10,6 +10,7 @@ namespace walnut
 {
     class Device;
     class ShaderCompiler;
+    class UploadContext;
 
     // Root constants for triangle.hlsl. Must match the cbuffer layout there.
     struct TriangleConstants
@@ -26,7 +27,9 @@ namespace walnut
     class TrianglePass
     {
     public:
-        TrianglePass(Device& device, const ShaderCompiler& compiler, std::filesystem::path shaderPath, DXGI_FORMAT rtvFormat);
+        // The vertex upload is only recorded here; the caller must Flush() the UploadContext before drawing.
+        TrianglePass(Device& device, UploadContext& upload, const ShaderCompiler& compiler,
+                     std::filesystem::path shaderPath, DXGI_FORMAT rtvFormat);
 
         // Recompiles the shaders and rebuilds the PSO. On failure the previous PSO is kept.
         // The old PSO is released on success, so the GPU must be idle before calling this.
@@ -37,7 +40,7 @@ namespace walnut
 
     private:
         void CreateRootSignature();
-        void CreateVertexBuffer();
+        void CreateVertexBuffer(UploadContext& upload);
 
         ID3D12Device10* m_device = nullptr;
         const ShaderCompiler& m_compiler;

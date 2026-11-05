@@ -5,6 +5,7 @@
 #include "gfx/DescriptorHeap.h"
 #include "gfx/Device.h"
 #include "gfx/SwapChain.h"
+#include "gfx/UploadContext.h"
 
 #include <array>
 #include <cstdint>
@@ -47,6 +48,7 @@ namespace walnut
         ID3D12GraphicsCommandList7* GetCommandList() const { return m_commandList.Get(); }
         Device& GetDevice() { return *m_device; }
         CommandQueue& GetDirectQueue() { return *m_directQueue; }
+        UploadContext& GetUploadContext() { return *m_uploadContext; }
         SwapChain& GetSwapChain() { return *m_swapChain; }
         DescriptorHeap& GetSrvHeap() { return *m_srvHeap; }
 
@@ -63,6 +65,7 @@ namespace walnut
 
         std::unique_ptr<Device> m_device;
         std::unique_ptr<CommandQueue> m_directQueue;
+        std::unique_ptr<UploadContext> m_uploadContext; // after the queue: destroyed before it
         std::unique_ptr<SwapChain> m_swapChain;
         std::unique_ptr<DescriptorHeap> m_srvHeap;
         std::array<FrameContext, kFramesInFlight> m_frames;

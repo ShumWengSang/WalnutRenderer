@@ -5,9 +5,9 @@
 #include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
 #include "gfx/ShaderCompiler.h"
+#include "gfx/UploadContext.h"
 
 #include <cstddef>
-#include <cstring>
 
 namespace walnut
 {
@@ -28,11 +28,12 @@ namespace walnut
         constexpr UINT kNumRootConstants = sizeof(TriangleConstants) / 4;
     }
 
-    TrianglePass::TrianglePass(Device& device, const ShaderCompiler& compiler, std::filesystem::path shaderPath, DXGI_FORMAT rtvFormat)
+    TrianglePass::TrianglePass(Device& device, UploadContext& upload, const ShaderCompiler& compiler,
+                               std::filesystem::path shaderPath, DXGI_FORMAT rtvFormat)
         : m_device(device.Get()), m_compiler(compiler), m_shaderPath(std::move(shaderPath)), m_rtvFormat(rtvFormat)
     {
         CreateRootSignature();
-        CreateVertexBuffer();
+        CreateVertexBuffer(upload);
         if (!ReloadShaders())
             throw std::runtime_error("Failed to build triangle pipeline:\n" + m_lastError);
     }
@@ -59,17 +60,17 @@ namespace walnut
         SetDebugName(m_rootSignature.Get(), L"TriangleRootSignature");
     }
 
-    void TrianglePass::CreateVertexBuffer()
+    void TrianglePass::CreateVertexBuffer(UploadContext& upload)
     {
-        // An upload-heap buffer is CPU-writable and GPU-readable. Fine for tiny static data;
-        // larger meshes should be copied into a DEFAULT heap.
+        // Static data lives in a DEFAULT heap (VRAM): fastest for the GPU to read every frame.
+        // The CPU can't write DEFAULT memory, so the vertices go through the UploadContext's staging copy.
         const uint64_t size = sizeof(kTriangleVertices);
         m_vertexBuffer = Buffer(m_device, BufferDesc{
             .size = size,
-            .heapType = D3D12_HEAP_TYPE_UPLOAD,
+            .heapType = D3D12_HEAP_TYPE_DEFAULT,
             .name = L"TriangleVertexBuffer",
         });
-        std::memcpy(m_vertexBuffer.GetMappedData(), kTriangleVertices, size);
+        upload.UploadBuffer(m_vertexBuffer, kTriangleVertices, size);
 
         m_vertexBufferView.BufferLocation = m_vertexBuffer.GetGpuAddress();
         m_vertexBufferView.SizeInBytes = static_cast<UINT>(size);
