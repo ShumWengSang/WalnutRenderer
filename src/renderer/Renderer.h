@@ -34,6 +34,7 @@ namespace walnut
         static constexpr uint32_t kFramesInFlight = 2;
         static constexpr uint32_t kSrvHeapCapacity = 256;
         static constexpr uint64_t kFrameAllocatorBytesPerFrame = 1024 * 1024;
+        static constexpr uint64_t kUploadRingBytes = 64 * 1024 * 1024;
 
         Renderer(Window& window, const RendererDesc& desc);
         ~Renderer();
