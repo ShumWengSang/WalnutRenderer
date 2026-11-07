@@ -2,6 +2,10 @@
     "cmake.useCMakePresets": "always",
     "cmake.configureOnOpen": true,
     "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    // Fallback for files CMake Tools doesn't know yet (e.g. a new file added before the next CMake: Configure).
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/x64-debug/compile_commands.json",
+    "C_Cpp.default.cppStandard": "c++20",
+    "C_Cpp.default.intelliSenseMode": "windows-msvc-x64",
     "files.associations": {
         "*.hlsl": "hlsl",
         "*.hlsli": "hlsl"
