@@ -49,11 +49,9 @@ namespace walnut
             MakeStaticSampler(2, D3D12_FILTER_MIN_MAG_MIP_POINT, D3D12_TEXTURE_ADDRESS_MODE_CLAMP),     // s2
         };
 
-        // CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED is what makes ResourceDescriptorHeap[] legal in shaders.
-        // ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT is only needed while the triangle still uses an input layout
-        // (removed in the vertex-pulling step).
-        const D3D12_ROOT_SIGNATURE_FLAGS flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED
-                                               | D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+        // CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED is what makes ResourceDescriptorHeap[] legal in shaders. There is no
+        // ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT: vertex shaders fetch their own vertices, so no PSO has an input layout.
+        const D3D12_ROOT_SIGNATURE_FLAGS flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED;
 
         CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC desc;
         desc.Init_1_1(_countof(parameters), parameters, _countof(samplers), samplers, flags);

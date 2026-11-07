@@ -2,6 +2,7 @@
 
 #include "gfx/Buffer.h"
 #include "gfx/D3D12Common.h"
+#include "gfx/DescriptorHeap.h"
 
 #include <DirectXMath.h>
 
@@ -25,14 +26,19 @@ namespace walnut
         float scale = 1.0f;
     };
 
-    // The classic first D3D12 draw: PSO, vertex buffer, DrawInstanced. Uses the shared bindless root signature.
+    // The classic first D3D12 draw, done the bindless way: the vertex shader pulls its vertices from a
+    // StructuredBuffer found through the descriptor heap (no input layout, no vertex buffer binding).
     class TrianglePass
     {
     public:
         // The vertex upload is only recorded here; the caller must Flush() the UploadContext before drawing.
-        TrianglePass(Device& device, UploadContext& upload, const ShaderCompiler& compiler,
+        TrianglePass(Device& device, UploadContext& upload, DescriptorHeap& srvHeap, const ShaderCompiler& compiler,
                      std::filesystem::path shaderPath, ID3D12RootSignature* rootSignature,
                      DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat);
+        ~TrianglePass();
+
+        TrianglePass(const TrianglePass&) = delete;
+        TrianglePass& operator=(const TrianglePass&) = delete;
 
         // Recompiles the shaders and rebuilds the PSO. On failure the previous PSO is kept.
         // The old PSO is released on success, so the GPU must be idle before calling this.
@@ -47,6 +53,7 @@ namespace walnut
         void CreateVertexBuffer(UploadContext& upload);
 
         ID3D12Device10* m_device = nullptr;
+        DescriptorHeap& m_srvHeap;
         const ShaderCompiler& m_compiler;
         std::filesystem::path m_shaderPath;
         ID3D12RootSignature* m_rootSignature = nullptr; // owned by the Renderer
@@ -56,7 +63,7 @@ namespace walnut
         ComPtr<ID3D12PipelineState> m_depthTestPipeline;
         ComPtr<ID3D12PipelineState> m_noDepthPipeline;
         Buffer m_vertexBuffer;
-        D3D12_VERTEX_BUFFER_VIEW m_vertexBufferView{};
+        DescriptorHandle m_vertexBufferSrv; // the vertex buffer's slot in the bindless heap
         std::string m_lastError;
     };
 }

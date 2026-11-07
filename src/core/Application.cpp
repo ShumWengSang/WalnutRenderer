@@ -113,7 +113,8 @@ namespace walnut
         constexpr bool kShaderDebugInfo = false;
 #endif
         m_shaderCompiler = std::make_unique<ShaderCompiler>(kShaderDebugInfo, m_exeDir / "shaders");
-        m_trianglePass = std::make_unique<TrianglePass>(m_renderer->GetDevice(), m_renderer->GetUploadContext(), *m_shaderCompiler,
+        m_trianglePass = std::make_unique<TrianglePass>(m_renderer->GetDevice(), m_renderer->GetUploadContext(),
+                                                        m_renderer->GetSrvHeap(), *m_shaderCompiler,
                                                         m_exeDir / "shaders" / "triangle.hlsl", m_renderer->GetRootSignature(),
                                                         SwapChain::kFormat, Renderer::kDepthFormat);
 

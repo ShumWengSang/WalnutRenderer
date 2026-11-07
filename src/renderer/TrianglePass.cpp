@@ -1,6 +1,7 @@
 #include "renderer/TrianglePass.h"
 
 #include "core/Log.h"
+#include "gfx/DescriptorHeap.h"
 #include "gfx/Device.h"
 #include "gfx/FrameAllocator.h"
 #include "gfx/GpuUtils.h"
@@ -10,18 +11,20 @@
 #include "gfx/UploadContext.h"
 
 #include <algorithm>
-#include <cstddef>
 #include <iterator>
 
 namespace walnut
 {
     namespace
     {
+        // Must match struct Vertex in triangle.hlsl (StructuredBuffer elements use plain C-like packing:
+        // 6 floats = 24 bytes, no 16-byte padding rules like cbuffers have).
         struct Vertex
         {
             float position[3];
             float color[3];
         };
+        static_assert(sizeof(Vertex) == 24);
 
         constexpr Vertex kTriangleVertices[] = {
             { {  0.0f,   0.5f, 0.0f }, { 1.0f, 0.0f, 0.0f } },
@@ -35,17 +38,29 @@ namespace walnut
             DirectX::XMFLOAT4X4 worldViewProjection;
             float tint[4];
         };
+
+        // Root constants for triangle.hlsl (b0). Must match DrawConstants there; at most kNumDrawConstants uints.
+        struct TriangleDrawConstants
+        {
+            uint32_t vertexBufferIndex; // descriptor heap index of the vertex buffer's SRV
+        };
+        static_assert(sizeof(TriangleDrawConstants) <= kNumDrawConstants * sizeof(uint32_t));
     }
 
-    TrianglePass::TrianglePass(Device& device, UploadContext& upload, const ShaderCompiler& compiler,
+    TrianglePass::TrianglePass(Device& device, UploadContext& upload, DescriptorHeap& srvHeap, const ShaderCompiler& compiler,
                                std::filesystem::path shaderPath, ID3D12RootSignature* rootSignature,
                                DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat)
-        : m_device(device.Get()), m_compiler(compiler), m_shaderPath(std::move(shaderPath)),
+        : m_device(device.Get()), m_srvHeap(srvHeap), m_compiler(compiler), m_shaderPath(std::move(shaderPath)),
           m_rootSignature(rootSignature), m_rtvFormat(rtvFormat), m_dsvFormat(dsvFormat)
     {
         CreateVertexBuffer(upload);
         if (!ReloadShaders())
             throw std::runtime_error("Failed to build triangle pipeline:\n" + m_lastError);
+    }
+
+    TrianglePass::~TrianglePass()
+    {
+        m_srvHeap.Free(m_vertexBufferSrv);
     }
 
     void TrianglePass::CreateVertexBuffer(UploadContext& upload)
@@ -60,9 +75,19 @@ namespace walnut
         });
         upload.UploadBuffer(m_vertexBuffer, kTriangleVertices, size);
 
-        m_vertexBufferView.BufferLocation = m_vertexBuffer.GetGpuAddress();
-        m_vertexBufferView.SizeInBytes = static_cast<UINT>(size);
-        m_vertexBufferView.StrideInBytes = sizeof(Vertex);
+        // Describe the buffer as a StructuredBuffer<Vertex> and write that description (the SRV) into a slot of
+        // the shared, shader-visible heap. The slot's index is all a shader needs to find the buffer.
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = DXGI_FORMAT_UNKNOWN; // structured buffers have no format; elements are 'StructureByteStride' bytes
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Buffer.FirstElement = 0;
+        srvDesc.Buffer.NumElements = static_cast<UINT>(std::size(kTriangleVertices));
+        srvDesc.Buffer.StructureByteStride = sizeof(Vertex);
+        srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+
+        m_vertexBufferSrv = m_srvHeap.Allocate();
+        m_device->CreateShaderResourceView(m_vertexBuffer.Get(), &srvDesc, m_vertexBufferSrv.cpu);
     }
 
     bool TrianglePass::ReloadShaders()
@@ -75,16 +100,11 @@ namespace walnut
             return false;
         }
 
-        const D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
-            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, position), D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-            { "COLOR",    0, DXGI_FORMAT_R32G32B32_FLOAT, 0, offsetof(Vertex, color),    D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-        };
-
         D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
         desc.pRootSignature = m_rootSignature;
         desc.VS = vs.GetBytecode();
         desc.PS = ps.GetBytecode();
-        desc.InputLayout = { inputLayout, _countof(inputLayout) };
+        desc.InputLayout = { nullptr, 0 }; // no input layout: the vertex shader fetches its own vertices
         desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
         desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
@@ -152,8 +172,14 @@ namespace walnut
 
         commandList->SetPipelineState(depthTest ? m_depthTestPipeline.Get() : m_noDepthPipeline.Get());
         commandList->SetGraphicsRootConstantBufferView(RootParam::DrawData, constantsAddress);
+
+        // b0: tell the shader where its vertices are. No IASetVertexBuffers: the shader reads them itself.
+        const TriangleDrawConstants drawConstants{ .vertexBufferIndex = m_vertexBufferSrv.index };
+        commandList->SetGraphicsRoot32BitConstants(RootParam::DrawConstants, sizeof(drawConstants) / sizeof(uint32_t),
+                                                   &drawConstants, 0);
+
+        // The topology is still needed: it tells the rasterizer how to group the 3 vertices into a triangle.
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        commandList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
-        commandList->DrawInstanced(3, 1, 0, 0);
+        commandList->DrawInstanced(3, 1, 0, 0); // runs the vertex shader with SV_VertexID = 0, 1, 2
     }
 }
