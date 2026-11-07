@@ -92,8 +92,8 @@ namespace walnut
 
     bool TrianglePass::ReloadShaders()
     {
-        const ShaderCompileResult vs = m_compiler.Compile({ m_shaderPath, L"VSMain", L"vs_6_0" });
-        const ShaderCompileResult ps = m_compiler.Compile({ m_shaderPath, L"PSMain", L"ps_6_0" });
+        const ShaderCompileResult vs = m_compiler.Compile({ m_shaderPath, L"VSMain", ShaderStage::Vertex });
+        const ShaderCompileResult ps = m_compiler.Compile({ m_shaderPath, L"PSMain", ShaderStage::Pixel });
         if (!vs.Succeeded() || !ps.Succeeded())
         {
             m_lastError = vs.errors + ps.errors;

@@ -12,6 +12,13 @@ namespace walnut
         bool enableGpuValidation = false; // much slower; implies enableDebugLayer
     };
 
+    // Minimum requirements, checked per adapter in SelectAdapterAndCreateDevice.
+    inline constexpr D3D_SHADER_MODEL kMinShaderModel = D3D_SHADER_MODEL_6_6;
+    inline constexpr D3D12_RESOURCE_BINDING_TIER kMinResourceBindingTier = D3D12_RESOURCE_BINDING_TIER_3;
+
+    // "6.6" etc.
+    std::string ToString(D3D_SHADER_MODEL model);
+
     // Owns the DXGI factory, the chosen adapter and the D3D12 device.
     class Device
     {
@@ -29,6 +36,8 @@ namespace walnut
         const std::wstring& GetAdapterName() const { return m_adapterName; }
         bool IsTearingSupported() const { return m_tearingSupported; }
         bool IsDebugLayerEnabled() const { return m_debugLayerEnabled; }
+        D3D_SHADER_MODEL GetShaderModel() const { return m_shaderModel; }
+        D3D12_RESOURCE_BINDING_TIER GetResourceBindingTier() const { return m_resourceBindingTier; }
 
         // Logs the device-removed reason and DRED breadcrumbs/page-fault info, if available.
         void LogDeviceRemoved() const;
@@ -43,6 +52,8 @@ namespace walnut
         ComPtr<IDXGIAdapter4> m_adapter;
         ComPtr<ID3D12Device10> m_device;
         std::wstring m_adapterName;
+        D3D_SHADER_MODEL m_shaderModel = D3D_SHADER_MODEL_5_1;
+        D3D12_RESOURCE_BINDING_TIER m_resourceBindingTier = D3D12_RESOURCE_BINDING_TIER_1;
         bool m_tearingSupported = false;
         bool m_debugLayerEnabled = false;
         DWORD m_infoQueueCallbackCookie = 0;

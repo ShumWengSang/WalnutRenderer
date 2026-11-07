@@ -112,7 +112,7 @@ namespace walnut
 #else
         constexpr bool kShaderDebugInfo = false;
 #endif
-        m_shaderCompiler = std::make_unique<ShaderCompiler>(kShaderDebugInfo);
+        m_shaderCompiler = std::make_unique<ShaderCompiler>(kShaderDebugInfo, m_exeDir / "shaders");
         m_trianglePass = std::make_unique<TrianglePass>(m_renderer->GetDevice(), m_renderer->GetUploadContext(), *m_shaderCompiler,
                                                         m_exeDir / "shaders" / "triangle.hlsl", SwapChain::kFormat,
                                                         Renderer::kDepthFormat);
@@ -295,6 +295,9 @@ namespace walnut
         ImGui::Text("Back buffer: %u x %u, frame %llu", swapChain.GetWidth(), swapChain.GetHeight(),
                     static_cast<unsigned long long>(m_renderer->GetFrameCount()));
         ImGui::Text("Debug layer: %s", device.IsDebugLayerEnabled() ? "on" : "off");
+        ImGui::Text("Shader Model %s (compiling for %ls), Resource Binding Tier %d",
+                    ToString(device.GetShaderModel()).c_str(), kShaderModelSuffix,
+                    static_cast<int>(device.GetResourceBindingTier()));
 
         if (ImGui::CollapsingHeader("Renderer", ImGuiTreeNodeFlags_DefaultOpen))
         {

@@ -13,8 +13,23 @@ namespace walnut
         return { bytecode->GetBufferPointer(), bytecode->GetBufferSize() };
     }
 
-    ShaderCompiler::ShaderCompiler(bool debugInfo)
-        : m_debugInfo(debugInfo)
+    namespace
+    {
+        std::wstring MakeTarget(ShaderStage stage)
+        {
+            const wchar_t* prefix = L"vs_";
+            switch (stage)
+            {
+            case ShaderStage::Vertex: prefix = L"vs_"; break;
+            case ShaderStage::Pixel: prefix = L"ps_"; break;
+            case ShaderStage::Compute: prefix = L"cs_"; break;
+            }
+            return std::wstring(prefix) + kShaderModelSuffix;
+        }
+    }
+
+    ShaderCompiler::ShaderCompiler(bool debugInfo, std::filesystem::path shaderRoot)
+        : m_debugInfo(debugInfo), m_shaderRoot(std::move(shaderRoot))
     {
         WR_CHECK(DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&m_utils)));
         WR_CHECK(DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&m_compiler)));
@@ -36,6 +51,8 @@ namespace walnut
         }
 
         const std::wstring includeDir = desc.path.parent_path().wstring();
+        const std::wstring rootIncludeDir = m_shaderRoot.wstring();
+        const std::wstring target = MakeTarget(desc.stage);
         std::vector<std::wstring> defineStrings;
         defineStrings.reserve(desc.defines.size());
         for (const auto& [name, value] : desc.defines)
@@ -44,8 +61,9 @@ namespace walnut
         std::vector<LPCWSTR> args = {
             pathString.c_str(), // file name, used in error messages and PIX
             L"-E", desc.entryPoint.c_str(),
-            L"-T", desc.target.c_str(),
+            L"-T", target.c_str(),
             L"-I", includeDir.c_str(),
+            L"-I", rootIncludeDir.c_str(),
             L"-HV", L"2021",
             DXC_ARG_WARNINGS_ARE_ERRORS,
         };
@@ -92,7 +110,7 @@ namespace walnut
         }
 
         WR_CHECK(compileResult->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&result.bytecode), nullptr));
-        log::Info("Compiled shader {} [{} {}]", desc.path.filename().string(), ToUtf8(desc.entryPoint), ToUtf8(desc.target));
+        log::Info("Compiled shader {} [{} {}]", desc.path.filename().string(), ToUtf8(desc.entryPoint), ToUtf8(target));
         return result;
     }
 }
