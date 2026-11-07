@@ -12,25 +12,31 @@
 
 #include <algorithm>
 #include <iterator>
+#include <span>
+#include <vector>
 
 namespace walnut
 {
     namespace
     {
         // Must match struct Vertex in triangle.hlsl (StructuredBuffer elements use plain C-like packing:
-        // 6 floats = 24 bytes, no 16-byte padding rules like cbuffers have).
+        // 8 floats = 32 bytes, no 16-byte padding rules like cbuffers have).
         struct Vertex
         {
             float position[3];
             float color[3];
+            float uv[2]; // texture coordinates: (0,0) = top-left of the texture, (1,1) = bottom-right
         };
-        static_assert(sizeof(Vertex) == 24);
+        static_assert(sizeof(Vertex) == 32);
 
         constexpr Vertex kTriangleVertices[] = {
-            { {  0.0f,   0.5f, 0.0f }, { 1.0f, 0.0f, 0.0f } },
-            { {  0.433f, -0.25f, 0.0f }, { 0.0f, 1.0f, 0.0f } },
-            { { -0.433f, -0.25f, 0.0f }, { 0.0f, 0.0f, 1.0f } },
+            { {  0.0f,   0.5f, 0.0f }, { 1.0f, 0.0f, 0.0f }, { 0.5f, 0.0f } },
+            { {  0.433f, -0.25f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 1.0f, 1.0f } },
+            { { -0.433f, -0.25f, 0.0f }, { 0.0f, 0.0f, 1.0f }, { 0.0f, 1.0f } },
         };
+
+        constexpr uint32_t kCheckerSize = 256;  // texels per side
+        constexpr uint32_t kCheckerSquare = 32; // texels per checker square -> 8x8 squares
 
         // Constant buffer data for triangle.hlsl. Must match the cbuffer layout there.
         struct TriangleGpuConstants
@@ -43,6 +49,7 @@ namespace walnut
         struct TriangleDrawConstants
         {
             uint32_t vertexBufferIndex; // descriptor heap index of the vertex buffer's SRV
+            uint32_t textureIndex;      // descriptor heap index of the checkerboard texture's SRV
         };
         static_assert(sizeof(TriangleDrawConstants) <= kNumDrawConstants * sizeof(uint32_t));
     }
@@ -54,6 +61,7 @@ namespace walnut
           m_rootSignature(rootSignature), m_rtvFormat(rtvFormat), m_dsvFormat(dsvFormat)
     {
         CreateVertexBuffer(upload);
+        CreateCheckerTexture(upload);
         if (!ReloadShaders())
             throw std::runtime_error("Failed to build triangle pipeline:\n" + m_lastError);
     }
@@ -61,6 +69,39 @@ namespace walnut
     TrianglePass::~TrianglePass()
     {
         m_srvHeap.Free(m_vertexBufferSrv);
+        m_srvHeap.Free(m_checkerSrv);
+    }
+
+    void TrianglePass::CreateCheckerTexture(UploadContext& upload)
+    {
+        // Generate the pixels on the CPU: 4 bytes per texel (R, G, B, A), rows tightly packed.
+        std::vector<uint8_t> pixels(kCheckerSize * kCheckerSize * 4);
+        for (uint32_t y = 0; y < kCheckerSize; ++y)
+        {
+            for (uint32_t x = 0; x < kCheckerSize; ++x)
+            {
+                const bool light = ((x / kCheckerSquare) + (y / kCheckerSquare)) % 2 == 0;
+                uint8_t* texel = &pixels[(y * kCheckerSize + x) * 4];
+                texel[0] = texel[1] = texel[2] = light ? 230 : 60;
+                texel[3] = 255;
+            }
+        }
+
+        // _SRGB: these byte values were picked by how they *look* (sRGB, like any image file). Sampling through an
+        // _SRGB format converts them back to linear light, which is what our lighting math expects.
+        m_checkerTexture = Texture(m_device, TextureDesc{
+            .width = kCheckerSize,
+            .height = kCheckerSize,
+            .mipLevels = 1,
+            .format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            .initialLayout = D3D12_BARRIER_LAYOUT_COPY_DEST,
+            .name = L"CheckerTexture",
+        });
+        const TextureSubresourceData mip0{ .data = pixels.data(), .rowPitch = kCheckerSize * 4 };
+        upload.UploadTexture(m_checkerTexture, std::span(&mip0, 1));
+
+        m_checkerSrv = m_srvHeap.Allocate();
+        m_checkerTexture.CreateSrv(m_device, m_checkerSrv.cpu);
     }
 
     void TrianglePass::CreateVertexBuffer(UploadContext& upload)
@@ -174,7 +215,10 @@ namespace walnut
         commandList->SetGraphicsRootConstantBufferView(RootParam::DrawData, constantsAddress);
 
         // b0: tell the shader where its vertices are. No IASetVertexBuffers: the shader reads them itself.
-        const TriangleDrawConstants drawConstants{ .vertexBufferIndex = m_vertexBufferSrv.index };
+        const TriangleDrawConstants drawConstants{
+            .vertexBufferIndex = m_vertexBufferSrv.index,
+            .textureIndex = m_checkerSrv.index,
+        };
         commandList->SetGraphicsRoot32BitConstants(RootParam::DrawConstants, sizeof(drawConstants) / sizeof(uint32_t),
                                                    &drawConstants, 0);
 

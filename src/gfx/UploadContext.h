@@ -5,11 +5,20 @@
 
 #include <cstdint>
 #include <deque>
+#include <span>
 #include <vector>
 
 namespace walnut
 {
     class CommandQueue;
+    class Texture;
+
+    // One subresource (e.g. one mip level) of source pixel data in CPU memory, rows tightly packed or not.
+    struct TextureSubresourceData
+    {
+        const void* data = nullptr;
+        uint64_t rowPitch = 0; // bytes from the start of one row to the next in 'data'
+    };
 
     // Gets data into DEFAULT-heap (GPU-only) resources, which the CPU can't write directly:
     //   1. copy the data into staging memory (UPLOAD heap, CPU memcpy),
@@ -40,6 +49,11 @@ namespace walnut
         // The data is copied to staging memory immediately, so 'data' may be freed after this returns.
         // The destination must not be used by the GPU until Flush() has returned.
         void UploadBuffer(const Buffer& destination, const void* data, uint64_t size, uint64_t destinationOffset = 0);
+
+        // Records copies of 'subresources' (mip 0, 1, ... in order) into 'destination', which must be in the
+        // COPY_DEST layout, then a barrier that leaves it in SHADER_RESOURCE, ready for shaders to sample.
+        // Same rules as UploadBuffer: the data is staged immediately; the texture is usable after Flush().
+        void UploadTexture(const Texture& destination, std::span<const TextureSubresourceData> subresources);
 
         // Submits all recorded copies and blocks until the GPU has finished them. No-op if nothing is pending.
         void Flush();

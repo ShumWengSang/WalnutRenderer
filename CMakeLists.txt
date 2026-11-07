@@ -46,6 +46,8 @@ set(WALNUT_SOURCES
     src/gfx/ShaderCompiler.h
     src/gfx/SwapChain.cpp
     src/gfx/SwapChain.h
+    src/gfx/Texture.cpp
+    src/gfx/Texture.h
     src/gfx/UploadContext.cpp
     src/gfx/UploadContext.h
 

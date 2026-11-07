@@ -3,6 +3,7 @@
 #include "gfx/Buffer.h"
 #include "gfx/D3D12Common.h"
 #include "gfx/DescriptorHeap.h"
+#include "gfx/Texture.h"
 
 #include <DirectXMath.h>
 
@@ -51,6 +52,7 @@ namespace walnut
 
     private:
         void CreateVertexBuffer(UploadContext& upload);
+        void CreateCheckerTexture(UploadContext& upload);
 
         ID3D12Device10* m_device = nullptr;
         DescriptorHeap& m_srvHeap;
@@ -64,6 +66,8 @@ namespace walnut
         ComPtr<ID3D12PipelineState> m_noDepthPipeline;
         Buffer m_vertexBuffer;
         DescriptorHandle m_vertexBufferSrv; // the vertex buffer's slot in the bindless heap
+        Texture m_checkerTexture;
+        DescriptorHandle m_checkerSrv;
         std::string m_lastError;
     };
 }

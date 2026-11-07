@@ -5,6 +5,7 @@
 #include "gfx/CommandQueue.h"
 #include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
+#include "gfx/Texture.h"
 
 #include <algorithm>
 #include <cstring>
@@ -14,8 +15,7 @@ namespace walnut
 {
     namespace
     {
-        // CopyBufferRegion has no alignment rule, but aligned staging keeps memcpy fast. Texture uploads
-        // will need 512 bytes (D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT).
+        // CopyBufferRegion has no alignment rule, but aligned staging keeps memcpy fast.
         constexpr uint64_t kBufferStagingAlignment = 16;
 
         constexpr uint64_t AlignUp(uint64_t value, uint64_t alignment)
@@ -202,6 +202,72 @@ namespace walnut
             ++m_statCopies;
         }
         m_statBytes += size;
+    }
+
+    void UploadContext::UploadTexture(const Texture& destination, std::span<const TextureSubresourceData> subresources)
+    {
+        if (subresources.empty())
+            return;
+        const D3D12_RESOURCE_DESC1& desc = destination.GetResourceDesc();
+        if (subresources.size() > desc.MipLevels)
+            throw std::out_of_range("UploadContext::UploadTexture: more subresources than the texture has");
+
+        auto* ring = static_cast<uint8_t*>(m_ring.GetMappedData());
+        for (UINT subresource = 0; subresource < subresources.size(); ++subresource)
+        {
+            // A GPU texture's memory layout is hardware-specific ("swizzled" or tiled for cache efficiency), so we
+            // can't write it directly. Instead we stage the pixels in a simple row-by-row layout that the copy
+            // engine understands. GetCopyableFootprints describes that layout for this subresource:
+            //  - RowPitch: bytes between rows in staging, rounded up to a multiple of 256
+            //    (D3D12_TEXTURE_DATA_PITCH_ALIGNMENT) even if a row of pixels is shorter,
+            //  - numRows / rowSizeInBytes: how many rows and how many real bytes per row to copy,
+            //  - totalBytes: how much staging memory the whole subresource needs.
+            D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+            UINT numRows = 0;
+            UINT64 rowSizeInBytes = 0;
+            UINT64 totalBytes = 0;
+            m_device->GetCopyableFootprints1(&desc, subresource, 1, 0, &footprint, &numRows, &rowSizeInBytes, &totalBytes);
+            if (totalBytes > m_ringCapacity)
+                throw std::runtime_error("UploadContext::UploadTexture: subresource larger than the staging ring");
+
+            // Each subresource's staging data must start on a 512-byte boundary (D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT).
+            const uint64_t ringOffset = AllocateStaging(totalBytes, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
+            BeginRecordingIfNeeded();
+
+            // CPU: copy row by row, because the source rows (rowPitch) and staging rows (footprint RowPitch) can be
+            // spaced differently.
+            const TextureSubresourceData& source = subresources[subresource];
+            const auto* sourceBytes = static_cast<const uint8_t*>(source.data);
+            for (UINT row = 0; row < numRows; ++row)
+            {
+                std::memcpy(ring + ringOffset + row * static_cast<uint64_t>(footprint.Footprint.RowPitch),
+                            sourceBytes + row * source.rowPitch, rowSizeInBytes);
+            }
+
+            // GPU: copy staging -> texture subresource. The source location is the ring buffer described by the
+            // footprint (moved to where we put the data); the destination is "subresource N of the texture".
+            footprint.Offset = ringOffset;
+            const CD3DX12_TEXTURE_COPY_LOCATION sourceLocation(m_ring.Get(), footprint);
+            const CD3DX12_TEXTURE_COPY_LOCATION destinationLocation(destination.Get(), subresource);
+            m_commandList->CopyTextureRegion(&destinationLocation, 0, 0, 0, &sourceLocation, nullptr);
+
+            m_statBytes += rowSizeInBytes * numRows;
+            ++m_statCopies;
+        }
+
+        // Unlike buffers, textures have a layout, so this one does need a barrier: COPY_DEST -> SHADER_RESOURCE.
+        //  - SyncBefore/AccessBefore = COPY/COPY_DEST: wait for the copies above and flush their writes.
+        //  - SyncAfter/AccessAfter = NONE/NO_ACCESS: nothing later in this command list reads it. The draws that
+        //    sample it run in a later ExecuteCommandLists, which the boundary already orders.
+        //  - SHADER_RESOURCE (not DIRECT_QUEUE_SHADER_RESOURCE): readable from any queue, so a future copy or
+        //    compute queue could use it too.
+        const CD3DX12_TEXTURE_BARRIER toShaderResource(
+            D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_SYNC_NONE,
+            D3D12_BARRIER_ACCESS_COPY_DEST, D3D12_BARRIER_ACCESS_NO_ACCESS,
+            D3D12_BARRIER_LAYOUT_COPY_DEST, D3D12_BARRIER_LAYOUT_SHADER_RESOURCE,
+            destination.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(0xffffffff));
+        const CD3DX12_BARRIER_GROUP group(1, &toShaderResource);
+        m_commandList->Barrier(1, &group);
     }
 
     void UploadContext::Flush()
