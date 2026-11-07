@@ -148,6 +148,15 @@ namespace walnut
         m_commandList->Barrier(1, &group);
 
         // No clear: the fullscreen pass writes every pixel. No depth buffer: 2D passes don't need one.
+        // The _SRGB view: the tonemap pass outputs linear colors, and the hardware encodes them to sRGB on write.
+        const D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_swapChain->GetSrgbRtv(m_backBufferIndex);
+        m_commandList->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    }
+
+    void Renderer::BeginUiPass()
+    {
+        // Same back buffer, plain UNORM view: ImGui's colors are already sRGB, so they must be written unchanged.
+        // Switching views of the same texture needs no barrier; the layout and contents don't change.
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_swapChain->GetRtv(m_backBufferIndex);
         m_commandList->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
     }

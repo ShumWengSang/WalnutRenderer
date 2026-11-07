@@ -10,7 +10,7 @@ namespace walnut
 {
     SwapChain::SwapChain(Device& device, CommandQueue& presentQueue, HWND hwnd, uint32_t width, uint32_t height)
         : m_device(device.Get()),
-          m_rtvHeap(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kBufferCount, false, L"SwapChainRtvHeap"),
+          m_rtvHeap(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kBufferCount * 2, false, L"SwapChainRtvHeap"),
           m_width(width),
           m_height(height),
           m_tearingSupported(device.IsTearingSupported())
@@ -63,12 +63,19 @@ namespace walnut
 
     void SwapChain::CreateRenderTargetViews()
     {
+        D3D12_RENDER_TARGET_VIEW_DESC srgbDesc{};
+        srgbDesc.Format = kSrgbFormat;
+        srgbDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+
         for (uint32_t i = 0; i < kBufferCount; ++i)
         {
             WR_CHECK(m_swapChain->GetBuffer(i, IID_PPV_ARGS(&m_backBuffers[i])));
             const std::wstring name = L"BackBuffer" + std::to_wstring(i);
             SetDebugName(m_backBuffers[i].Get(), name.c_str());
+            // Slots [0, kBufferCount): plain views (nullptr desc = the resource's own format, UNORM).
             m_device->CreateRenderTargetView(m_backBuffers[i].Get(), nullptr, m_rtvHeap.GetHandle(i).cpu);
+            // Slots [kBufferCount, 2 * kBufferCount): _SRGB views of the same buffers.
+            m_device->CreateRenderTargetView(m_backBuffers[i].Get(), &srgbDesc, m_rtvHeap.GetHandle(kBufferCount + i).cpu);
         }
     }
 

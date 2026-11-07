@@ -7,14 +7,19 @@
 #include "gfx/RootSignature.h"
 #include "gfx/ShaderCompiler.h"
 
+#include <cmath>
+
 namespace walnut
 {
     namespace
     {
-        // Root constants for tonemap.hlsl (b0). Must match DrawConstants there.
+        // Root constants for tonemap.hlsl (b0). Must match DrawConstants there. Root constants are just 32-bit
+        // values; the shader decides whether each one is a uint or a float.
         struct TonemapDrawConstants
         {
             uint32_t sceneColorIndex; // descriptor heap slot of the scene color texture's SRV
+            float exposure;           // linear multiplier, 2^stops
+            uint32_t op;              // TonemapOperator
         };
         static_assert(sizeof(TonemapDrawConstants) <= kNumDrawConstants * sizeof(uint32_t));
     }
@@ -68,11 +73,16 @@ namespace walnut
         return true;
     }
 
-    void TonemapPass::Render(ID3D12GraphicsCommandList* commandList, uint32_t sceneColorSrvIndex) const
+    void TonemapPass::Render(ID3D12GraphicsCommandList* commandList, uint32_t sceneColorSrvIndex,
+                             const TonemapSettings& settings) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"Tonemap");
 
-        const TonemapDrawConstants drawConstants{ .sceneColorIndex = sceneColorSrvIndex };
+        const TonemapDrawConstants drawConstants{
+            .sceneColorIndex = sceneColorSrvIndex,
+            .exposure = std::exp2(settings.exposureStops),
+            .op = static_cast<uint32_t>(settings.op),
+        };
         commandList->SetPipelineState(m_pipeline.Get());
         commandList->SetGraphicsRoot32BitConstants(RootParam::DrawConstants, sizeof(drawConstants) / sizeof(uint32_t),
                                                    &drawConstants, 0);

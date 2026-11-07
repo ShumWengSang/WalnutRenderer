@@ -120,7 +120,7 @@ namespace walnut
                                                         Renderer::kSceneColorFormat, Renderer::kDepthFormat);
         m_tonemapPass = std::make_unique<TonemapPass>(m_renderer->GetDevice(), *m_shaderCompiler,
                                                       m_exeDir / "shaders" / "tonemap.hlsl", m_renderer->GetRootSignature(),
-                                                      SwapChain::kFormat);
+                                                      SwapChain::kSrgbFormat);
 
         // Execute every upload recorded while loading, before the first frame reads that data.
         m_renderer->GetUploadContext().Flush();
@@ -199,12 +199,21 @@ namespace walnut
                 FrameAllocator& frameAllocator = m_renderer->GetFrameAllocator();
                 // Deliberately drawn near-to-far: the far triangle is drawn last. Without the depth test it
                 // paints over the near one; with it, its hidden pixels fail the GREATER test and are discarded.
-                m_trianglePass->Render(commandList, frameAllocator, m_triangle, viewProjection, m_depthTest);
-                m_trianglePass->Render(commandList, frameAllocator, m_backTriangle, viewProjection, m_depthTest);
+                // The brightness multiplier can push their colors above 1.0 (HDR) to show what tonemapping does.
+                TriangleParams front = m_triangle;
+                TriangleParams back = m_backTriangle;
+                for (int channel = 0; channel < 3; ++channel)
+                {
+                    front.tint[channel] *= m_triangleBrightness;
+                    back.tint[channel] *= m_triangleBrightness;
+                }
+                m_trianglePass->Render(commandList, frameAllocator, front, viewProjection, m_depthTest);
+                m_trianglePass->Render(commandList, frameAllocator, back, viewProjection, m_depthTest);
 
                 // The 3D scene is done; from here on we draw into the back buffer.
                 m_renderer->BeginBackBufferPass();
-                m_tonemapPass->Render(commandList, m_renderer->GetSceneColorSrvIndex());
+                m_tonemapPass->Render(commandList, m_renderer->GetSceneColorSrvIndex(), m_tonemapSettings);
+                m_renderer->BeginUiPass();
                 m_imgui->Render(commandList);
                 m_renderer->EndFrame();
             }
@@ -318,7 +327,8 @@ namespace walnut
                 m_renderer->SetVsync(vsync);
             ImGui::SameLine();
             ImGui::TextDisabled(swapChain.IsTearingSupported() ? "(tearing supported)" : "(tearing unsupported)");
-            ImGui::ColorEdit3("Clear color", m_clearColor);
+            // Float + HDR: scene colors are linear light and may go above 1.0.
+            ImGui::ColorEdit3("Clear color (linear)", m_clearColor, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 
             // Read before this frame's allocations, so this shows what the previous frame used.
             const FrameAllocator& frameAllocator = m_renderer->GetFrameAllocator();
@@ -327,6 +337,18 @@ namespace walnut
                         static_cast<unsigned long long>(frameAllocator.GetBytesPerFrame()));
             const DescriptorHeap& srvHeap = m_renderer->GetSrvHeap();
             ImGui::Text("Bindless descriptors: %u / %u used", srvHeap.GetAllocatedCount(), srvHeap.GetCapacity());
+        }
+
+        if (ImGui::CollapsingHeader("Tonemapping", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            const char* operators[] = { "Clamp (none)", "Reinhard", "ACES (fitted)" };
+            int op = static_cast<int>(m_tonemapSettings.op);
+            if (ImGui::Combo("Curve", &op, operators, IM_ARRAYSIZE(operators)))
+                m_tonemapSettings.op = static_cast<TonemapOperator>(op);
+            ImGui::SliderFloat("Exposure", &m_tonemapSettings.exposureStops, -6.0f, 6.0f, "%+.1f stops");
+            ImGui::SliderFloat("Triangle brightness", &m_triangleBrightness, 0.0f, 16.0f, "%.2fx",
+                               ImGuiSliderFlags_Logarithmic);
+            ImGui::TextDisabled("Output: back buffer _SRGB view (hardware linear -> sRGB)");
         }
 
         if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen))

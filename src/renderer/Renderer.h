@@ -26,8 +26,10 @@ namespace walnut
     //
     //   renderer.BeginFrame(clearColor);   // waits for this frame slot; scene color + depth cleared and bound
     //   ... draw the 3D scene ...          //   (into the HDR scene color target, not the back buffer)
-    //   renderer.BeginBackBufferPass();    // scene color becomes readable, back buffer becomes the target
-    //   ... tonemap pass, UI ...
+    //   renderer.BeginBackBufferPass();    // scene color becomes readable; back buffer (_SRGB view) is the target
+    //   ... tonemap pass ...
+    //   renderer.BeginUiPass();            // back buffer's plain (UNORM) view is the target
+    //   ... UI ...
     //   renderer.EndFrame();               // submits and presents
     class Renderer
     {
@@ -47,7 +49,8 @@ namespace walnut
         static constexpr float kDepthClearValue = 0.0f;
         // The 3D scene is rendered into this "HDR" format first; see CreateSceneColorTarget.
         static constexpr DXGI_FORMAT kSceneColorFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
-        static constexpr float kDefaultClearColor[4] = { 0.08f, 0.09f, 0.12f, 1.0f };
+        // In linear light, like every color in the scene target (it goes through tonemapping and sRGB encoding).
+        static constexpr float kDefaultClearColor[4] = { 0.02f, 0.025f, 0.04f, 1.0f };
 
         Renderer(Window& window, const RendererDesc& desc);
         ~Renderer();
@@ -57,6 +60,7 @@ namespace walnut
 
         void BeginFrame(const float clearColor[4]);
         void BeginBackBufferPass();
+        void BeginUiPass();
         void EndFrame();
         void Resize(uint32_t width, uint32_t height);
         void WaitForGpu();

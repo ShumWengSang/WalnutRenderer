@@ -64,6 +64,9 @@ namespace walnut
 
         // Demo state
         float m_clearColor[4] = {}; // starts as Renderer::kDefaultClearColor (the scene target's fast-clear color)
+        TonemapSettings m_tonemapSettings;
+        // Multiplies both triangles' colors, to push them into HDR (> 1.0) and see what the tonemap curve does.
+        float m_triangleBrightness = 1.0f;
         Camera m_camera;
         FlyCameraController m_cameraController;
         TriangleParams m_triangle;
