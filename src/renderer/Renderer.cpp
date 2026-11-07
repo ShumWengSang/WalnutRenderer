@@ -6,6 +6,8 @@
 #include "gfx/Pix.h"
 #include "gfx/RootSignature.h"
 
+#include <algorithm>
+#include <iterator>
 #include <string>
 
 namespace walnut
@@ -34,6 +36,11 @@ namespace walnut
         m_dsvHeap = std::make_unique<DescriptorHeap>(device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false, L"DsvHeap");
         m_dsv = m_dsvHeap->Allocate();
         CreateDepthBuffer(m_swapChain->GetWidth(), m_swapChain->GetHeight());
+
+        m_rtvHeap = std::make_unique<DescriptorHeap>(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false, L"SceneRtvHeap");
+        m_sceneRtv = m_rtvHeap->Allocate();
+        m_sceneSrv = m_srvHeap->Allocate();
+        CreateSceneColorTarget(m_swapChain->GetWidth(), m_swapChain->GetHeight());
 
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
@@ -81,28 +88,29 @@ namespace walnut
         PIXBeginEvent(m_commandList.Get(), pix::kColorFrame, L"Frame");
 
         m_backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
-        ID3D12Resource* backBuffer = m_swapChain->GetBackBuffer(m_backBufferIndex);
 
-        PIXScopedEvent(m_commandList.Get(), pix::kColorGpu, L"Clear back buffer");
-        // PRESENT -> RENDER_TARGET. Nothing earlier in this command list touched the back buffer, and
-        // ExecuteCommandLists boundaries already finish all prior GPU work (including the previous
-        // Present), so there is nothing to wait for: SyncBefore = NONE, AccessBefore = NO_ACCESS.
-        // SyncAfter/AccessAfter = RENDER_TARGET blocks the clear and draws until the layout change is done.
-        const CD3DX12_TEXTURE_BARRIER toRenderTarget(
+        PIXScopedEvent(m_commandList.Get(), pix::kColorGpu, L"Clear scene");
+        // The scene is rendered into the HDR scene color texture, not the back buffer.
+        //
+        // UNDEFINED -> RENDER_TARGET with DISCARD: we clear it right away, so its old contents don't matter.
+        // LayoutBefore = UNDEFINED is legal whatever layout it was left in, and DISCARD lets the driver skip
+        // preserving the old data and just (re)initialize its compression metadata. Last frame's reads of it
+        // (the tonemap pass) were in an earlier ExecuteCommandLists, so there's nothing to wait for:
+        // SyncBefore = NONE, AccessBefore = NO_ACCESS.
+        const CD3DX12_TEXTURE_BARRIER sceneToRenderTarget(
             D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_SYNC_RENDER_TARGET,
             D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_ACCESS_RENDER_TARGET,
-            D3D12_BARRIER_LAYOUT_PRESENT, D3D12_BARRIER_LAYOUT_RENDER_TARGET,
-            backBuffer, CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources));
-        const CD3DX12_BARRIER_GROUP toRenderTargetGroup(1, &toRenderTarget);
-        m_commandList->Barrier(1, &toRenderTargetGroup);
+            D3D12_BARRIER_LAYOUT_UNDEFINED, D3D12_BARRIER_LAYOUT_RENDER_TARGET,
+            m_sceneColor.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources), D3D12_TEXTURE_BARRIER_FLAG_DISCARD);
+        const CD3DX12_BARRIER_GROUP sceneGroup(1, &sceneToRenderTarget);
+        m_commandList->Barrier(1, &sceneGroup);
 
-        const D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_swapChain->GetRtv(m_backBufferIndex);
-        m_commandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
+        m_commandList->ClearRenderTargetView(m_sceneRtv.cpu, clearColor, 0, nullptr);
 
         // The depth buffer never leaves DEPTH_STENCIL_WRITE, so no barrier is needed: last frame's depth
         // writes and this clear are in different ExecuteCommandLists, and that boundary orders them.
         m_commandList->ClearDepthStencilView(m_dsv.cpu, D3D12_CLEAR_FLAG_DEPTH, kDepthClearValue, 0, 0, nullptr);
-        m_commandList->OMSetRenderTargets(1, &rtv, FALSE, &m_dsv.cpu);
+        m_commandList->OMSetRenderTargets(1, &m_sceneRtv.cpu, FALSE, &m_dsv.cpu);
 
         const CD3DX12_VIEWPORT viewport(0.0f, 0.0f, static_cast<float>(m_swapChain->GetWidth()),
                                         static_cast<float>(m_swapChain->GetHeight()));
@@ -112,6 +120,36 @@ namespace walnut
         m_commandList->RSSetScissorRects(1, &scissor);
 
         BindBindlessState(m_commandList.Get());
+    }
+
+    void Renderer::BeginBackBufferPass()
+    {
+        // Two transitions in one Barrier() call, so the driver can batch them:
+        D3D12_TEXTURE_BARRIER barriers[2] = {
+            // 1. Scene color: stop being a render target, become readable by pixel shaders. Waits for all scene
+            //    drawing (SyncBefore = RENDER_TARGET) and makes those writes visible to texture reads
+            //    (AccessAfter = SHADER_RESOURCE). DIRECT_QUEUE_SHADER_RESOURCE: only the direct queue reads it,
+            //    which can be faster than the generic SHADER_RESOURCE layout.
+            CD3DX12_TEXTURE_BARRIER(
+                D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_SYNC_PIXEL_SHADING,
+                D3D12_BARRIER_ACCESS_RENDER_TARGET, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
+                D3D12_BARRIER_LAYOUT_RENDER_TARGET, D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE,
+                m_sceneColor.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources)),
+            // 2. Back buffer: PRESENT -> RENDER_TARGET. Nothing earlier in this command list touched it, and
+            //    ExecuteCommandLists boundaries already finish all prior GPU work (including the previous
+            //    Present), so there is nothing to wait for: SyncBefore = NONE, AccessBefore = NO_ACCESS.
+            CD3DX12_TEXTURE_BARRIER(
+                D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_SYNC_RENDER_TARGET,
+                D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_ACCESS_RENDER_TARGET,
+                D3D12_BARRIER_LAYOUT_PRESENT, D3D12_BARRIER_LAYOUT_RENDER_TARGET,
+                m_swapChain->GetBackBuffer(m_backBufferIndex), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources)),
+        };
+        const CD3DX12_BARRIER_GROUP group(_countof(barriers), barriers);
+        m_commandList->Barrier(1, &group);
+
+        // No clear: the fullscreen pass writes every pixel. No depth buffer: 2D passes don't need one.
+        const D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_swapChain->GetRtv(m_backBufferIndex);
+        m_commandList->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
     }
 
     void Renderer::BindBindlessState(ID3D12GraphicsCommandList* commandList) const
@@ -128,7 +166,7 @@ namespace walnut
     {
         ID3D12Resource* backBuffer = m_swapChain->GetBackBuffer(m_backBufferIndex);
         // RENDER_TARGET -> PRESENT (= COMMON, the layout Present requires). Wait for every render-target
-        // write before it (clear, triangle, ImGui). Nothing later in this list uses the buffer, so
+        // write before it (tonemap, ImGui). Nothing later in this list uses the buffer, so
         // SyncAfter = NONE and AccessAfter = NO_ACCESS; Present runs after ExecuteCommandLists completes.
         const CD3DX12_TEXTURE_BARRIER toPresent(
             D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_SYNC_NONE,
@@ -165,8 +203,44 @@ namespace walnut
         PIXScopedEvent(pix::kColorWait, L"Resize swapchain");
         WaitForGpu();
         m_swapChain->Resize(width, height);
-        CreateDepthBuffer(width, height); // must always match the back buffer size
+        // Both must always match the back buffer size.
+        CreateDepthBuffer(width, height);
+        CreateSceneColorTarget(width, height);
         log::Info("Swapchain resized to {}x{}", width, height);
+    }
+
+    void Renderer::CreateSceneColorTarget(uint32_t width, uint32_t height)
+    {
+        m_sceneColor.Reset();
+
+        // 16-bit float per channel: values above 1.0 (bright lights, sun) are stored instead of clipped, so
+        // the tonemap pass can later decide how to squeeze them into the displayable 0..1 range.
+        const CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
+        const CD3DX12_RESOURCE_DESC1 desc = CD3DX12_RESOURCE_DESC1::Tex2D(
+            kSceneColorFormat, width, height, 1 /*array size*/, 1 /*mip levels*/, 1 /*samples*/, 0,
+            D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+
+        // The optimized clear value: clearing to exactly this color is a fast metadata-only clear on most GPUs.
+        // It's the default clear color; when the UI changes the clear color, clears still work but take the
+        // slower path (the debug layer's warning 820 about that is filtered in Device::ConfigureInfoQueue).
+        // InitialLayout UNDEFINED: every frame starts with an UNDEFINED -> RENDER_TARGET discard barrier anyway.
+        D3D12_CLEAR_VALUE clearValue{};
+        clearValue.Format = kSceneColorFormat;
+        std::copy(std::begin(kDefaultClearColor), std::end(kDefaultClearColor), clearValue.Color);
+        WR_CHECK(m_device->Get()->CreateCommittedResource3(&heapProps, D3D12_HEAP_FLAG_NONE, &desc,
+                                                           D3D12_BARRIER_LAYOUT_UNDEFINED, &clearValue,
+                                                           nullptr, 0, nullptr, IID_PPV_ARGS(&m_sceneColor)));
+        SetDebugName(m_sceneColor.Get(), L"SceneColor");
+
+        // Two views of the same texture: an RTV to draw into it, and an SRV (in the bindless heap) to read it.
+        m_device->Get()->CreateRenderTargetView(m_sceneColor.Get(), nullptr, m_sceneRtv.cpu);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = kSceneColorFormat;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2D.MipLevels = 1;
+        m_device->Get()->CreateShaderResourceView(m_sceneColor.Get(), &srvDesc, m_sceneSrv.cpu);
     }
 
     void Renderer::CreateDepthBuffer(uint32_t width, uint32_t height)

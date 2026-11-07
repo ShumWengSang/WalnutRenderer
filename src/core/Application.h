@@ -2,6 +2,7 @@
 
 #include "core/Input.h"
 #include "core/Timer.h"
+#include "renderer/TonemapPass.h"
 #include "renderer/TrianglePass.h"
 #include "scene/Camera.h"
 #include "scene/FlyCameraController.h"
@@ -57,11 +58,12 @@ namespace walnut
         std::unique_ptr<Renderer> m_renderer;
         std::unique_ptr<ShaderCompiler> m_shaderCompiler;
         std::unique_ptr<TrianglePass> m_trianglePass;
+        std::unique_ptr<TonemapPass> m_tonemapPass;
         std::unique_ptr<ImGuiLayer> m_imgui;
         Timer m_timer;
 
         // Demo state
-        float m_clearColor[4] = { 0.08f, 0.09f, 0.12f, 1.0f };
+        float m_clearColor[4] = {}; // starts as Renderer::kDefaultClearColor (the scene target's fast-clear color)
         Camera m_camera;
         FlyCameraController m_cameraController;
         TriangleParams m_triangle;

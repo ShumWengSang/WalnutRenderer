@@ -190,7 +190,17 @@ namespace walnut
             infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
         }
 
-        // Route debug-layer messages into our log (ID3D12InfoQueue1 ships with the Agility SDK).
+        // Hide messages that are known, harmless performance hints:
+        //  - 820: clearing a render target to a color other than its optimized clear value. The scene clear color
+        //    is editable in the UI, so this would fire every frame after any edit.
+        D3D12_MESSAGE_ID deniedIds[] = { D3D12_MESSAGE_ID_CLEARRENDERTARGETVIEW_MISMATCHINGCLEARVALUE };
+        D3D12_INFO_QUEUE_FILTER filter{};
+        filter.DenyList.NumIDs = _countof(deniedIds);
+        filter.DenyList.pIDList = deniedIds;
+        infoQueue->PushStorageFilter(&filter);
+
+        // Route debug-layer messages into our log (ID3D12InfoQueue1 ships with the Agility SDK). FLAG_NONE (rather
+        // than IGNORE_FILTERS) means the callback respects the filter above.
         ComPtr<ID3D12InfoQueue1> infoQueue1;
         if (SUCCEEDED(infoQueue.As(&infoQueue1)))
         {

@@ -106,6 +106,7 @@ namespace walnut
         rendererDesc.device.enableGpuValidation = options.gpuValidation;
         rendererDesc.vsync = true;
         m_renderer = std::make_unique<Renderer>(*m_window, rendererDesc);
+        std::copy(std::begin(Renderer::kDefaultClearColor), std::end(Renderer::kDefaultClearColor), m_clearColor);
 
 #ifdef _DEBUG
         constexpr bool kShaderDebugInfo = true;
@@ -116,7 +117,10 @@ namespace walnut
         m_trianglePass = std::make_unique<TrianglePass>(m_renderer->GetDevice(), m_renderer->GetUploadContext(),
                                                         m_renderer->GetSrvHeap(), *m_shaderCompiler,
                                                         m_exeDir / "shaders" / "triangle.hlsl", m_renderer->GetRootSignature(),
-                                                        SwapChain::kFormat, Renderer::kDepthFormat);
+                                                        Renderer::kSceneColorFormat, Renderer::kDepthFormat);
+        m_tonemapPass = std::make_unique<TonemapPass>(m_renderer->GetDevice(), *m_shaderCompiler,
+                                                      m_exeDir / "shaders" / "tonemap.hlsl", m_renderer->GetRootSignature(),
+                                                      SwapChain::kFormat);
 
         // Execute every upload recorded while loading, before the first frame reads that data.
         m_renderer->GetUploadContext().Flush();
@@ -132,6 +136,7 @@ namespace walnut
         // Tear down in dependency order: everything that holds GPU objects goes before the renderer.
         m_imgui.reset();
         m_trianglePass.reset();
+        m_tonemapPass.reset();
         m_shaderCompiler.reset();
         m_renderer.reset();
         m_window.reset();
@@ -196,6 +201,10 @@ namespace walnut
                 // paints over the near one; with it, its hidden pixels fail the GREATER test and are discarded.
                 m_trianglePass->Render(commandList, frameAllocator, m_triangle, viewProjection, m_depthTest);
                 m_trianglePass->Render(commandList, frameAllocator, m_backTriangle, viewProjection, m_depthTest);
+
+                // The 3D scene is done; from here on we draw into the back buffer.
+                m_renderer->BeginBackBufferPass();
+                m_tonemapPass->Render(commandList, m_renderer->GetSceneColorSrvIndex());
                 m_imgui->Render(commandList);
                 m_renderer->EndFrame();
             }
@@ -236,9 +245,11 @@ namespace walnut
 
     void Application::ReloadShaders()
     {
-        // The old PSO may still be referenced by in-flight frames.
+        // The old PSOs may still be referenced by in-flight frames.
         m_renderer->WaitForGpu();
-        if (m_trianglePass->ReloadShaders())
+        const bool triangleOk = m_trianglePass->ReloadShaders();
+        const bool tonemapOk = m_tonemapPass->ReloadShaders();
+        if (triangleOk && tonemapOk)
             log::Info("Shaders reloaded");
     }
 
@@ -345,10 +356,12 @@ namespace walnut
             ImGui::SliderFloat("Speed", &m_rotationSpeed, -6.0f, 6.0f, "%.1f rad/s");
             if (ImGui::Button("Reload shaders (F5)"))
                 ReloadShaders();
-            if (const std::string& error = m_trianglePass->GetLastError(); !error.empty())
+            for (const std::string* error : { &m_trianglePass->GetLastError(), &m_tonemapPass->GetLastError() })
             {
+                if (error->empty())
+                    continue;
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
-                ImGui::TextWrapped("%s", error.c_str());
+                ImGui::TextWrapped("%s", error->c_str());
                 ImGui::PopStyleColor();
             }
         }

@@ -24,9 +24,11 @@ namespace walnut
 
     // Owns the core D3D12 objects and drives the per-frame command list.
     //
-    //   renderer.BeginFrame(clearColor);  // waits for this frame slot, clears the back buffer
-    //   ... record draws into GetCommandList() ...
-    //   renderer.EndFrame();              // submits and presents
+    //   renderer.BeginFrame(clearColor);   // waits for this frame slot; scene color + depth cleared and bound
+    //   ... draw the 3D scene ...          //   (into the HDR scene color target, not the back buffer)
+    //   renderer.BeginBackBufferPass();    // scene color becomes readable, back buffer becomes the target
+    //   ... tonemap pass, UI ...
+    //   renderer.EndFrame();               // submits and presents
     class Renderer
     {
     public:
@@ -43,6 +45,9 @@ namespace walnut
         // Reversed-Z: 1 = near plane, 0 = infinitely far. "Empty" depth is therefore 0, and a pixel is closer
         // (and wins) when its depth is GREATER.
         static constexpr float kDepthClearValue = 0.0f;
+        // The 3D scene is rendered into this "HDR" format first; see CreateSceneColorTarget.
+        static constexpr DXGI_FORMAT kSceneColorFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        static constexpr float kDefaultClearColor[4] = { 0.08f, 0.09f, 0.12f, 1.0f };
 
         Renderer(Window& window, const RendererDesc& desc);
         ~Renderer();
@@ -51,6 +56,7 @@ namespace walnut
         Renderer& operator=(const Renderer&) = delete;
 
         void BeginFrame(const float clearColor[4]);
+        void BeginBackBufferPass();
         void EndFrame();
         void Resize(uint32_t width, uint32_t height);
         void WaitForGpu();
@@ -64,6 +70,8 @@ namespace walnut
         SwapChain& GetSwapChain() { return *m_swapChain; }
         DescriptorHeap& GetSrvHeap() { return *m_srvHeap; }
         ID3D12RootSignature* GetRootSignature() const { return m_rootSignature.Get(); }
+        // Bindless heap index of the scene color texture's SRV (readable after BeginBackBufferPass).
+        uint32_t GetSceneColorSrvIndex() const { return m_sceneSrv.index; }
 
         // Binds the shared descriptor heap and the bindless root signature. BeginFrame does this; call it again
         // after anything that changes the root signature (e.g. ImGui) before drawing with our passes.
@@ -81,6 +89,7 @@ namespace walnut
         };
 
         void CreateDepthBuffer(uint32_t width, uint32_t height);
+        void CreateSceneColorTarget(uint32_t width, uint32_t height);
 
         std::unique_ptr<Device> m_device;
         std::unique_ptr<CommandQueue> m_directQueue;
@@ -91,6 +100,10 @@ namespace walnut
         std::unique_ptr<DescriptorHeap> m_dsvHeap;
         DescriptorHandle m_dsv;
         ComPtr<ID3D12Resource> m_depthBuffer;
+        std::unique_ptr<DescriptorHeap> m_rtvHeap; // for the scene color target (the swapchain has its own)
+        DescriptorHandle m_sceneRtv;
+        DescriptorHandle m_sceneSrv;
+        ComPtr<ID3D12Resource> m_sceneColor;
         std::unique_ptr<FrameAllocator> m_frameAllocator;
         std::array<FrameContext, kFramesInFlight> m_frames;
         ComPtr<ID3D12GraphicsCommandList7> m_commandList;

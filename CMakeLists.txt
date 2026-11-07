@@ -51,6 +51,8 @@ set(WALNUT_SOURCES
 
     src/renderer/Renderer.cpp
     src/renderer/Renderer.h
+    src/renderer/TonemapPass.cpp
+    src/renderer/TonemapPass.h
     src/renderer/TrianglePass.cpp
     src/renderer/TrianglePass.h
 
