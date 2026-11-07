@@ -180,14 +180,16 @@ namespace walnut
                 DrawUI(deltaSeconds);
             }
 
+            // The aspect ratio comes from the back buffer, so the image doesn't stretch when the window resizes.
             const SwapChain& swapChain = m_renderer->GetSwapChain();
-            m_triangle.aspect = static_cast<float>(swapChain.GetWidth()) / static_cast<float>(swapChain.GetHeight());
+            const float aspect = static_cast<float>(swapChain.GetWidth()) / static_cast<float>(swapChain.GetHeight());
+            const DirectX::XMMATRIX viewProjection = m_camera.GetViewProjectionMatrix(aspect);
 
             {
                 PIXScopedEvent(pix::kColorCpu, L"Render");
                 m_renderer->BeginFrame(m_clearColor);
                 ID3D12GraphicsCommandList* commandList = m_renderer->GetCommandList();
-                m_trianglePass->Render(commandList, m_renderer->GetFrameAllocator(), m_triangle);
+                m_trianglePass->Render(commandList, m_renderer->GetFrameAllocator(), m_triangle, viewProjection);
                 m_imgui->Render(commandList);
                 m_renderer->EndFrame();
             }
@@ -323,6 +325,17 @@ namespace walnut
             ImGui::Text("Frame upload memory: %llu / %llu bytes",
                         static_cast<unsigned long long>(frameAllocator.GetUsedBytes()),
                         static_cast<unsigned long long>(frameAllocator.GetBytesPerFrame()));
+        }
+
+        if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::DragFloat3("Position", &m_camera.position.x, 0.01f);
+            ImGui::SliderAngle("Yaw", &m_camera.yaw, -180.0f, 180.0f);
+            ImGui::SliderAngle("Pitch", &m_camera.pitch, -89.0f, 89.0f);
+            ImGui::SliderAngle("Vertical FOV", &m_camera.verticalFov, 10.0f, 120.0f);
+            ImGui::SliderFloat("Near plane", &m_camera.nearZ, 0.01f, 2.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+            if (ImGui::Button("Reset camera"))
+                m_camera = Camera{};
         }
 
         if (ImGui::CollapsingHeader("Triangle", ImGuiTreeNodeFlags_DefaultOpen))

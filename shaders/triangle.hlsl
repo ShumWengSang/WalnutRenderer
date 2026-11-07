@@ -1,14 +1,14 @@
 // Hello-triangle shaders. Compiled at runtime by DXC (see TrianglePass.cpp).
 
-// Constant buffer at b0, bound as a root CBV (root parameter 0). Layout must match TriangleConstants in
-// TrianglePass.h. The shader doesn't care whether b0 is fed by root constants or a CBV.
+// Constant buffer at b0, bound as a root CBV (root parameter 0). Layout must match TriangleGpuConstants in
+// TrianglePass.cpp. The shader doesn't care whether b0 is fed by root constants or a CBV.
 cbuffer TriangleConstants : register(b0)
 {
+    // row_major: DirectXMath stores matrices row by row and multiplies row vectors (p * M). HLSL's default
+    // packing is column_major, which would effectively transpose the matrix. Declaring row_major makes the
+    // memory layouts match, so the CPU can upload the matrix as-is and the shader multiplies the same way.
+    row_major float4x4 g_worldViewProjection;
     float4 g_tint;
-    float2 g_offset;  // NDC translation
-    float  g_angle;   // radians
-    float  g_scale;
-    float  g_aspect;  // width / height, keeps the triangle from stretching
 };
 
 struct VSInput
@@ -25,15 +25,9 @@ struct PSInput
 
 PSInput VSMain(VSInput input)
 {
-    float s, c;
-    sincos(g_angle, s, c);
-    float2 p = input.position.xy * g_scale;
-    p = float2(p.x * c - p.y * s, p.x * s + p.y * c);
-    p.x /= g_aspect;
-    p += g_offset;
-
     PSInput output;
-    output.position = float4(p, input.position.z, 1.0f);
+    // Object space -> clip space in one multiply. The rasterizer then divides by w (perspective).
+    output.position = mul(float4(input.position, 1.0f), g_worldViewProjection);
     output.color = input.color;
     return output;
 }

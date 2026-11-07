@@ -52,6 +52,9 @@ set(WALNUT_SOURCES
     src/renderer/TrianglePass.cpp
     src/renderer/TrianglePass.h
 
+    src/scene/Camera.cpp
+    src/scene/Camera.h
+
     src/ui/ImGuiLayer.cpp
     src/ui/ImGuiLayer.h
 )

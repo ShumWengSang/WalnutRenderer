@@ -8,7 +8,9 @@
 #include "gfx/ShaderCompiler.h"
 #include "gfx/UploadContext.h"
 
+#include <algorithm>
 #include <cstddef>
+#include <iterator>
 
 namespace walnut
 {
@@ -24,6 +26,13 @@ namespace walnut
             { {  0.0f,   0.5f, 0.0f }, { 1.0f, 0.0f, 0.0f } },
             { {  0.433f, -0.25f, 0.0f }, { 0.0f, 1.0f, 0.0f } },
             { { -0.433f, -0.25f, 0.0f }, { 0.0f, 0.0f, 1.0f } },
+        };
+
+        // Constant buffer data for triangle.hlsl. Must match the cbuffer layout there.
+        struct TriangleGpuConstants
+        {
+            DirectX::XMFLOAT4X4 worldViewProjection;
+            float tint[4];
         };
     }
 
@@ -127,9 +136,19 @@ namespace walnut
     }
 
     void TrianglePass::Render(ID3D12GraphicsCommandList* commandList, FrameAllocator& frameAllocator,
-                              const TriangleConstants& constants) const
+                              const TriangleParams& params, DirectX::FXMMATRIX viewProjection) const
     {
+        using namespace DirectX;
         PIXScopedEvent(commandList, pix::kColorGpu, L"TrianglePass");
+
+        // Object -> world: scale, then rotate, then move (row vectors apply left to right).
+        const XMMATRIX world = XMMatrixScaling(params.scale, params.scale, params.scale)
+                             * XMMatrixRotationZ(params.angle)
+                             * XMMatrixTranslation(params.offset[0], params.offset[1], 0.0f);
+
+        TriangleGpuConstants constants{};
+        XMStoreFloat4x4(&constants.worldViewProjection, world * viewProjection);
+        std::copy(std::begin(params.tint), std::end(params.tint), constants.tint);
 
         // Copy this frame's constants into this frame's region of upload memory, then point b0 at them.
         const D3D12_GPU_VIRTUAL_ADDRESS constantsAddress = frameAllocator.AllocateConstants(constants);

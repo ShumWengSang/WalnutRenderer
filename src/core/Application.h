@@ -3,6 +3,7 @@
 #include "core/Input.h"
 #include "core/Timer.h"
 #include "renderer/TrianglePass.h"
+#include "scene/Camera.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -60,10 +61,11 @@ namespace walnut
 
         // Demo state
         float m_clearColor[4] = { 0.08f, 0.09f, 0.12f, 1.0f };
-        TriangleConstants m_triangle;
+        Camera m_camera;
+        TriangleParams m_triangle;
         bool m_autoRotate = true;
         float m_rotationSpeed = 1.0f; // radians per second
-        float m_moveSpeed = 1.0f;     // NDC units per second
+        float m_moveSpeed = 1.0f;     // world units per second
         bool m_showDemoWindow = false;
         float m_smoothedFrameMs = 0.0f;
         std::filesystem::path m_lastCapturePath;

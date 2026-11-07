@@ -3,6 +3,8 @@
 #include "gfx/Buffer.h"
 #include "gfx/D3D12Common.h"
 
+#include <DirectXMath.h>
+
 #include <filesystem>
 #include <string>
 
@@ -13,16 +15,15 @@ namespace walnut
     class ShaderCompiler;
     class UploadContext;
 
-    // Constant buffer data for triangle.hlsl. Must match the cbuffer layout there.
-    struct TriangleConstants
+    // How the triangle is placed in the world (edited by the UI and input). TrianglePass turns this into
+    // a world matrix and combines it with the camera's view-projection.
+    struct TriangleParams
     {
         float tint[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-        float offset[2] = { 0.0f, 0.0f };
-        float angle = 0.0f;
+        float offset[2] = { 0.0f, 0.0f }; // world units, in the XY plane
+        float angle = 0.0f;               // radians around +Z
         float scale = 1.0f;
-        float aspect = 1.0f;
     };
-    static_assert(sizeof(TriangleConstants) % 4 == 0);
 
     // The classic first D3D12 draw: root signature, PSO, vertex buffer, DrawInstanced.
     class TrianglePass
@@ -38,7 +39,7 @@ namespace walnut
         const std::string& GetLastError() const { return m_lastError; }
 
         void Render(ID3D12GraphicsCommandList* commandList, FrameAllocator& frameAllocator,
-                    const TriangleConstants& constants) const;
+                    const TriangleParams& params, DirectX::FXMMATRIX viewProjection) const;
 
     private:
         void CreateRootSignature();
