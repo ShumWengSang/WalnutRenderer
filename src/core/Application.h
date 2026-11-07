@@ -4,6 +4,7 @@
 #include "core/Timer.h"
 #include "renderer/TrianglePass.h"
 #include "scene/Camera.h"
+#include "scene/FlyCameraController.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -62,10 +63,10 @@ namespace walnut
         // Demo state
         float m_clearColor[4] = { 0.08f, 0.09f, 0.12f, 1.0f };
         Camera m_camera;
+        FlyCameraController m_cameraController;
         TriangleParams m_triangle;
         bool m_autoRotate = true;
         float m_rotationSpeed = 1.0f; // radians per second
-        float m_moveSpeed = 1.0f;     // world units per second
         bool m_showDemoWindow = false;
         float m_smoothedFrameMs = 0.0f;
         std::filesystem::path m_lastCapturePath;

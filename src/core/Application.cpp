@@ -221,31 +221,11 @@ namespace walnut
         if (m_input.WasKeyPressed(VK_SPACE))
             m_autoRotate = !m_autoRotate;
 
-        float moveX = 0.0f;
-        float moveY = 0.0f;
-        if (m_input.IsKeyDown('A') || m_input.IsKeyDown(VK_LEFT)) moveX -= 1.0f;
-        if (m_input.IsKeyDown('D') || m_input.IsKeyDown(VK_RIGHT)) moveX += 1.0f;
-        if (m_input.IsKeyDown('W') || m_input.IsKeyDown(VK_UP)) moveY += 1.0f;
-        if (m_input.IsKeyDown('S') || m_input.IsKeyDown(VK_DOWN)) moveY -= 1.0f;
-        m_triangle.offset[0] = std::clamp(m_triangle.offset[0] + moveX * m_moveSpeed * deltaSeconds, -1.0f, 1.0f);
-        m_triangle.offset[1] = std::clamp(m_triangle.offset[1] + moveY * m_moveSpeed * deltaSeconds, -1.0f, 1.0f);
+        m_cameraController.Update(m_camera, m_input, deltaSeconds);
 
-        if (const float wheel = m_input.GetMouseWheel(); wheel != 0.0f)
-            m_triangle.scale = std::clamp(m_triangle.scale * std::pow(1.1f, wheel), 0.1f, 4.0f);
-
-        // Right-drag rotates using raw mouse deltas; otherwise optionally auto-rotate.
-        if (m_input.IsMouseDown(MouseButton::Right))
-            m_triangle.angle -= static_cast<float>(m_input.GetMouseDeltaX()) * 0.01f;
-        else if (m_autoRotate)
+        if (m_autoRotate)
             m_triangle.angle += m_rotationSpeed * deltaSeconds;
         m_triangle.angle = std::remainder(m_triangle.angle, 2.0f * std::numbers::pi_v<float>);
-
-        if (m_input.WasMousePressed(MouseButton::Middle))
-        {
-            m_triangle.offset[0] = m_triangle.offset[1] = 0.0f;
-            m_triangle.angle = 0.0f;
-            m_triangle.scale = 1.0f;
-        }
     }
 
     void Application::ReloadShaders()
@@ -334,6 +314,7 @@ namespace walnut
             ImGui::SliderAngle("Pitch", &m_camera.pitch, -89.0f, 89.0f);
             ImGui::SliderAngle("Vertical FOV", &m_camera.verticalFov, 10.0f, 120.0f);
             ImGui::SliderFloat("Near plane", &m_camera.nearZ, 0.01f, 2.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+            ImGui::SliderFloat("Move speed", &m_cameraController.moveSpeed, 0.05f, 500.0f, "%.2f m/s", ImGuiSliderFlags_Logarithmic);
             if (ImGui::Button("Reset camera"))
                 m_camera = Camera{};
         }
@@ -385,8 +366,8 @@ namespace walnut
             ImGui::TextWrapped("Keys held: %s", held.empty() ? "-" : held.c_str());
 
             ImGui::Separator();
-            ImGui::TextDisabled("WASD/arrows: move   wheel: scale   right-drag: rotate");
-            ImGui::TextDisabled("Space: toggle auto-rotate   middle-click: reset   Esc: quit");
+            ImGui::TextDisabled("Hold right mouse: look   WASD: move   Q/E: down/up");
+            ImGui::TextDisabled("Shift: fast   wheel: speed   Space: auto-rotate   Esc: quit");
         }
 
         DrawPixUI();

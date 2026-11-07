@@ -54,6 +54,8 @@ set(WALNUT_SOURCES
 
     src/scene/Camera.cpp
     src/scene/Camera.h
+    src/scene/FlyCameraController.cpp
+    src/scene/FlyCameraController.h
 
     src/ui/ImGuiLayer.cpp
     src/ui/ImGuiLayer.h
