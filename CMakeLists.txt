@@ -40,6 +40,8 @@ set(WALNUT_SOURCES
     src/gfx/GpuUtils.h
     src/gfx/Pix.cpp
     src/gfx/Pix.h
+    src/gfx/RootSignature.cpp
+    src/gfx/RootSignature.h
     src/gfx/ShaderCompiler.cpp
     src/gfx/ShaderCompiler.h
     src/gfx/SwapChain.cpp

@@ -25,33 +25,34 @@ namespace walnut
         float scale = 1.0f;
     };
 
-    // The classic first D3D12 draw: root signature, PSO, vertex buffer, DrawInstanced.
+    // The classic first D3D12 draw: PSO, vertex buffer, DrawInstanced. Uses the shared bindless root signature.
     class TrianglePass
     {
     public:
         // The vertex upload is only recorded here; the caller must Flush() the UploadContext before drawing.
         TrianglePass(Device& device, UploadContext& upload, const ShaderCompiler& compiler,
-                     std::filesystem::path shaderPath, DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat);
+                     std::filesystem::path shaderPath, ID3D12RootSignature* rootSignature,
+                     DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat);
 
         // Recompiles the shaders and rebuilds the PSO. On failure the previous PSO is kept.
         // The old PSO is released on success, so the GPU must be idle before calling this.
         bool ReloadShaders();
         const std::string& GetLastError() const { return m_lastError; }
 
+        // Expects the bindless state (descriptor heap + root signature) to be bound already.
         void Render(ID3D12GraphicsCommandList* commandList, FrameAllocator& frameAllocator,
                     const TriangleParams& params, DirectX::FXMMATRIX viewProjection, bool depthTest) const;
 
     private:
-        void CreateRootSignature();
         void CreateVertexBuffer(UploadContext& upload);
 
         ID3D12Device10* m_device = nullptr;
         const ShaderCompiler& m_compiler;
         std::filesystem::path m_shaderPath;
+        ID3D12RootSignature* m_rootSignature = nullptr; // owned by the Renderer
         DXGI_FORMAT m_rtvFormat;
         DXGI_FORMAT m_dsvFormat;
 
-        ComPtr<ID3D12RootSignature> m_rootSignature;
         ComPtr<ID3D12PipelineState> m_depthTestPipeline;
         ComPtr<ID3D12PipelineState> m_noDepthPipeline;
         Buffer m_vertexBuffer;

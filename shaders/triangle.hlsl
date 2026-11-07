@@ -1,8 +1,10 @@
 // Hello-triangle shaders. Compiled at runtime by DXC (see TrianglePass.cpp).
 
-// Constant buffer at b0, bound as a root CBV (root parameter 0). Layout must match TriangleGpuConstants in
-// TrianglePass.cpp. The shader doesn't care whether b0 is fed by root constants or a CBV.
-cbuffer TriangleConstants : register(b0)
+#include "common/Bindless.hlsli"
+
+// Per-draw constant buffer at b1 (root parameter DrawData of the bindless root signature). Layout must match
+// TriangleGpuConstants in TrianglePass.cpp.
+cbuffer TriangleConstants : register(b1)
 {
     // row_major: DirectXMath stores matrices row by row and multiplies row vectors (p * M). HLSL's default
     // packing is column_major, which would effectively transpose the matrix. Declaring row_major makes the

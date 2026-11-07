@@ -4,6 +4,7 @@
 #include "core/Window.h"
 #include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
+#include "gfx/RootSignature.h"
 
 #include <string>
 
@@ -26,6 +27,7 @@ namespace walnut
         m_uploadContext = std::make_unique<UploadContext>(device, *m_directQueue, kUploadRingBytes);
         m_swapChain = std::make_unique<SwapChain>(*m_device, *m_directQueue, window.GetHandle(), window.GetWidth(), window.GetHeight());
         m_srvHeap = std::make_unique<DescriptorHeap>(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kSrvHeapCapacity, true, L"SrvHeap");
+        m_rootSignature = CreateBindlessRootSignature(device);
         m_frameAllocator = std::make_unique<FrameAllocator>(device, kFramesInFlight, kFrameAllocatorBytesPerFrame);
 
         // Depth-stencil views, like RTVs, live in a CPU-only (non-shader-visible) heap.
@@ -108,6 +110,18 @@ namespace walnut
                                    static_cast<LONG>(m_swapChain->GetHeight()));
         m_commandList->RSSetViewports(1, &viewport);
         m_commandList->RSSetScissorRects(1, &scissor);
+
+        BindBindlessState(m_commandList.Get());
+    }
+
+    void Renderer::BindBindlessState(ID3D12GraphicsCommandList* commandList) const
+    {
+        // Order matters: with CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED, the descriptor heap must already be set when the
+        // root signature is set. Setting a root signature also clears all root arguments, so passes set their
+        // root constants and CBVs afterwards.
+        ID3D12DescriptorHeap* heaps[] = { m_srvHeap->Get() };
+        commandList->SetDescriptorHeaps(_countof(heaps), heaps);
+        commandList->SetGraphicsRootSignature(m_rootSignature.Get());
     }
 
     void Renderer::EndFrame()

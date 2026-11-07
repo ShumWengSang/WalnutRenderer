@@ -114,8 +114,8 @@ namespace walnut
 #endif
         m_shaderCompiler = std::make_unique<ShaderCompiler>(kShaderDebugInfo, m_exeDir / "shaders");
         m_trianglePass = std::make_unique<TrianglePass>(m_renderer->GetDevice(), m_renderer->GetUploadContext(), *m_shaderCompiler,
-                                                        m_exeDir / "shaders" / "triangle.hlsl", SwapChain::kFormat,
-                                                        Renderer::kDepthFormat);
+                                                        m_exeDir / "shaders" / "triangle.hlsl", m_renderer->GetRootSignature(),
+                                                        SwapChain::kFormat, Renderer::kDepthFormat);
 
         // Execute every upload recorded while loading, before the first frame reads that data.
         m_renderer->GetUploadContext().Flush();
@@ -313,6 +313,8 @@ namespace walnut
             ImGui::Text("Frame upload memory: %llu / %llu bytes",
                         static_cast<unsigned long long>(frameAllocator.GetUsedBytes()),
                         static_cast<unsigned long long>(frameAllocator.GetBytesPerFrame()));
+            const DescriptorHeap& srvHeap = m_renderer->GetSrvHeap();
+            ImGui::Text("Bindless descriptors: %u / %u used", srvHeap.GetAllocatedCount(), srvHeap.GetCapacity());
         }
 
         if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen))

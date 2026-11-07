@@ -32,7 +32,9 @@ namespace walnut
     public:
         // Frames the CPU may record ahead of the GPU. Independent of the swapchain buffer count.
         static constexpr uint32_t kFramesInFlight = 2;
-        static constexpr uint32_t kSrvHeapCapacity = 256;
+        // The one shader-visible CBV/SRV/UAV heap. Bindless shaders can index any slot, and only one heap of this
+        // type can be bound at a time, so everything (scene textures, buffers, ImGui) shares it.
+        static constexpr uint32_t kSrvHeapCapacity = 65536;
         static constexpr uint64_t kFrameAllocatorBytesPerFrame = 1024 * 1024;
         static constexpr uint64_t kUploadRingBytes = 64 * 1024 * 1024;
 
@@ -61,6 +63,11 @@ namespace walnut
         FrameAllocator& GetFrameAllocator() { return *m_frameAllocator; }
         SwapChain& GetSwapChain() { return *m_swapChain; }
         DescriptorHeap& GetSrvHeap() { return *m_srvHeap; }
+        ID3D12RootSignature* GetRootSignature() const { return m_rootSignature.Get(); }
+
+        // Binds the shared descriptor heap and the bindless root signature. BeginFrame does this; call it again
+        // after anything that changes the root signature (e.g. ImGui) before drawing with our passes.
+        void BindBindlessState(ID3D12GraphicsCommandList* commandList) const;
 
         bool GetVsync() const { return m_vsync; }
         void SetVsync(bool vsync) { m_vsync = vsync; }
@@ -80,6 +87,7 @@ namespace walnut
         std::unique_ptr<UploadContext> m_uploadContext; // after the queue: destroyed before it
         std::unique_ptr<SwapChain> m_swapChain;
         std::unique_ptr<DescriptorHeap> m_srvHeap;
+        ComPtr<ID3D12RootSignature> m_rootSignature;
         std::unique_ptr<DescriptorHeap> m_dsvHeap;
         DescriptorHandle m_dsv;
         ComPtr<ID3D12Resource> m_depthBuffer;

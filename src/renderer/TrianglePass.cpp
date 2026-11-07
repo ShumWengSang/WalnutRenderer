@@ -5,6 +5,7 @@
 #include "gfx/FrameAllocator.h"
 #include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
+#include "gfx/RootSignature.h"
 #include "gfx/ShaderCompiler.h"
 #include "gfx/UploadContext.h"
 
@@ -37,40 +38,14 @@ namespace walnut
     }
 
     TrianglePass::TrianglePass(Device& device, UploadContext& upload, const ShaderCompiler& compiler,
-                               std::filesystem::path shaderPath, DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat)
+                               std::filesystem::path shaderPath, ID3D12RootSignature* rootSignature,
+                               DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat)
         : m_device(device.Get()), m_compiler(compiler), m_shaderPath(std::move(shaderPath)),
-          m_rtvFormat(rtvFormat), m_dsvFormat(dsvFormat)
+          m_rootSignature(rootSignature), m_rtvFormat(rtvFormat), m_dsvFormat(dsvFormat)
     {
-        CreateRootSignature();
         CreateVertexBuffer(upload);
         if (!ReloadShaders())
             throw std::runtime_error("Failed to build triangle pipeline:\n" + m_lastError);
-    }
-
-    void TrianglePass::CreateRootSignature()
-    {
-        // One root parameter: a root CBV for b0. Unlike root constants (the data itself, copied into the
-        // command list), a root CBV is just a 64-bit GPU address; the shader reads the data from memory.
-        // DATA_STATIC_WHILE_SET_AT_EXECUTE promises the data won't change while the GPU may read it, which
-        // lets the driver optimize. The FrameAllocator keeps that promise: one region per frame in flight.
-        CD3DX12_ROOT_PARAMETER1 parameters[1];
-        parameters[0].InitAsConstantBufferView(0, 0, D3D12_ROOT_DESCRIPTOR_FLAG_DATA_STATIC_WHILE_SET_AT_EXECUTE,
-                                               D3D12_SHADER_VISIBILITY_ALL);
-
-        CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC desc;
-        desc.Init_1_1(_countof(parameters), parameters, 0, nullptr,
-                      D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
-
-        ComPtr<ID3DBlob> serialized;
-        ComPtr<ID3DBlob> errors;
-        const HRESULT hr = D3DX12SerializeVersionedRootSignature(&desc, D3D_ROOT_SIGNATURE_VERSION_1_1, &serialized, &errors);
-        if (FAILED(hr) && errors)
-            log::Error("Root signature serialization failed: {}", static_cast<const char*>(errors->GetBufferPointer()));
-        WR_CHECK(hr);
-
-        WR_CHECK(m_device->CreateRootSignature(0, serialized->GetBufferPointer(), serialized->GetBufferSize(),
-                                               IID_PPV_ARGS(&m_rootSignature)));
-        SetDebugName(m_rootSignature.Get(), L"TriangleRootSignature");
     }
 
     void TrianglePass::CreateVertexBuffer(UploadContext& upload)
@@ -106,7 +81,7 @@ namespace walnut
         };
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
-        desc.pRootSignature = m_rootSignature.Get();
+        desc.pRootSignature = m_rootSignature;
         desc.VS = vs.GetBytecode();
         desc.PS = ps.GetBytecode();
         desc.InputLayout = { inputLayout, _countof(inputLayout) };
@@ -170,12 +145,13 @@ namespace walnut
         XMStoreFloat4x4(&constants.worldViewProjection, world * viewProjection);
         std::copy(std::begin(params.tint), std::end(params.tint), constants.tint);
 
-        // Copy this frame's constants into this frame's region of upload memory, then point b0 at them.
+        // Copy this frame's constants into this frame's region of upload memory, then point b1 (the per-draw
+        // root CBV of the shared root signature) at them. The root signature and descriptor heap are already
+        // bound by Renderer::BindBindlessState.
         const D3D12_GPU_VIRTUAL_ADDRESS constantsAddress = frameAllocator.AllocateConstants(constants);
 
-        commandList->SetGraphicsRootSignature(m_rootSignature.Get());
         commandList->SetPipelineState(depthTest ? m_depthTestPipeline.Get() : m_noDepthPipeline.Get());
-        commandList->SetGraphicsRootConstantBufferView(0, constantsAddress);
+        commandList->SetGraphicsRootConstantBufferView(RootParam::DrawData, constantsAddress);
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         commandList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
         commandList->DrawInstanced(3, 1, 0, 0);
