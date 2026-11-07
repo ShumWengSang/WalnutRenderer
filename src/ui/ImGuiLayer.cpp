@@ -39,7 +39,7 @@ namespace walnut
         info.CommandQueue = renderer.GetDirectQueue().Get();
         info.NumFramesInFlight = static_cast<int>(Renderer::kFramesInFlight);
         info.RTVFormat = SwapChain::kFormat;
-        info.DSVFormat = DXGI_FORMAT_UNKNOWN;
+        info.DSVFormat = DXGI_FORMAT_UNKNOWN; // ImGui doesn't use depth, so its PSO ignores the bound depth buffer
         info.UserData = &renderer.GetSrvHeap();
         info.SrvDescriptorHeap = renderer.GetSrvHeap().Get();
         // ImGui asks us for SRV slots (font atlas and other textures) via these callbacks.

@@ -28,6 +28,11 @@ namespace walnut
         m_srvHeap = std::make_unique<DescriptorHeap>(device, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, kSrvHeapCapacity, true, L"SrvHeap");
         m_frameAllocator = std::make_unique<FrameAllocator>(device, kFramesInFlight, kFrameAllocatorBytesPerFrame);
 
+        // Depth-stencil views, like RTVs, live in a CPU-only (non-shader-visible) heap.
+        m_dsvHeap = std::make_unique<DescriptorHeap>(device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false, L"DsvHeap");
+        m_dsv = m_dsvHeap->Allocate();
+        CreateDepthBuffer(m_swapChain->GetWidth(), m_swapChain->GetHeight());
+
         for (uint32_t i = 0; i < kFramesInFlight; ++i)
         {
             WR_CHECK(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_frames[i].allocator)));
@@ -91,7 +96,11 @@ namespace walnut
 
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_swapChain->GetRtv(m_backBufferIndex);
         m_commandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
-        m_commandList->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+
+        // The depth buffer never leaves DEPTH_STENCIL_WRITE, so no barrier is needed: last frame's depth
+        // writes and this clear are in different ExecuteCommandLists, and that boundary orders them.
+        m_commandList->ClearDepthStencilView(m_dsv.cpu, D3D12_CLEAR_FLAG_DEPTH, kDepthClearValue, 0, 0, nullptr);
+        m_commandList->OMSetRenderTargets(1, &rtv, FALSE, &m_dsv.cpu);
 
         const CD3DX12_VIEWPORT viewport(0.0f, 0.0f, static_cast<float>(m_swapChain->GetWidth()),
                                         static_cast<float>(m_swapChain->GetHeight()));
@@ -142,6 +151,36 @@ namespace walnut
         PIXScopedEvent(pix::kColorWait, L"Resize swapchain");
         WaitForGpu();
         m_swapChain->Resize(width, height);
+        CreateDepthBuffer(width, height); // must always match the back buffer size
         log::Info("Swapchain resized to {}x{}", width, height);
+    }
+
+    void Renderer::CreateDepthBuffer(uint32_t width, uint32_t height)
+    {
+        m_depthBuffer.Reset();
+
+        // DENY_SHADER_RESOURCE: we never sample this texture, which lets the driver pick its most compact
+        // depth-only compression. (Shadow maps, which ARE sampled, will leave this flag off.)
+        const CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
+        const CD3DX12_RESOURCE_DESC1 desc = CD3DX12_RESOURCE_DESC1::Tex2D(
+            kDepthFormat, width, height, 1 /*array size*/, 1 /*mip levels*/, 1 /*samples*/, 0,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL | D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE);
+
+        // The "optimized clear value": clearing to exactly this value is a fast metadata-only operation on
+        // most GPUs. Clearing to anything else still works, but the debug layer warns that it's slower.
+        D3D12_CLEAR_VALUE clearValue{};
+        clearValue.Format = kDepthFormat;
+        clearValue.DepthStencil.Depth = kDepthClearValue;
+
+        // Created directly in the layout it will always be used in, so it never needs a barrier.
+        WR_CHECK(m_device->Get()->CreateCommittedResource3(&heapProps, D3D12_HEAP_FLAG_NONE, &desc,
+                                                           D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE, &clearValue,
+                                                           nullptr, 0, nullptr, IID_PPV_ARGS(&m_depthBuffer)));
+        SetDebugName(m_depthBuffer.Get(), L"DepthBuffer");
+
+        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+        dsvDesc.Format = kDepthFormat;
+        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        m_device->Get()->CreateDepthStencilView(m_depthBuffer.Get(), &dsvDesc, m_dsv.cpu);
     }
 }

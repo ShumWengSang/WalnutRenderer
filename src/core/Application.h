@@ -65,6 +65,9 @@ namespace walnut
         Camera m_camera;
         FlyCameraController m_cameraController;
         TriangleParams m_triangle;
+        // A bigger, darker (gray-tinted) triangle half a unit behind the main one.
+        TriangleParams m_backTriangle{ .tint = { 0.55f, 0.55f, 0.6f, 1.0f }, .offset = { 0.25f, 0.1f, 0.5f }, .angle = 0.4f, .scale = 1.8f };
+        bool m_depthTest = true;
         bool m_autoRotate = true;
         float m_rotationSpeed = 1.0f; // radians per second
         bool m_showDemoWindow = false;

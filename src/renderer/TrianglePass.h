@@ -20,8 +20,8 @@ namespace walnut
     struct TriangleParams
     {
         float tint[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
-        float offset[2] = { 0.0f, 0.0f }; // world units, in the XY plane
-        float angle = 0.0f;               // radians around +Z
+        float offset[3] = { 0.0f, 0.0f, 0.0f }; // world units
+        float angle = 0.0f;                     // radians around +Z
         float scale = 1.0f;
     };
 
@@ -31,7 +31,7 @@ namespace walnut
     public:
         // The vertex upload is only recorded here; the caller must Flush() the UploadContext before drawing.
         TrianglePass(Device& device, UploadContext& upload, const ShaderCompiler& compiler,
-                     std::filesystem::path shaderPath, DXGI_FORMAT rtvFormat);
+                     std::filesystem::path shaderPath, DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat);
 
         // Recompiles the shaders and rebuilds the PSO. On failure the previous PSO is kept.
         // The old PSO is released on success, so the GPU must be idle before calling this.
@@ -39,7 +39,7 @@ namespace walnut
         const std::string& GetLastError() const { return m_lastError; }
 
         void Render(ID3D12GraphicsCommandList* commandList, FrameAllocator& frameAllocator,
-                    const TriangleParams& params, DirectX::FXMMATRIX viewProjection) const;
+                    const TriangleParams& params, DirectX::FXMMATRIX viewProjection, bool depthTest) const;
 
     private:
         void CreateRootSignature();
@@ -49,9 +49,11 @@ namespace walnut
         const ShaderCompiler& m_compiler;
         std::filesystem::path m_shaderPath;
         DXGI_FORMAT m_rtvFormat;
+        DXGI_FORMAT m_dsvFormat;
 
         ComPtr<ID3D12RootSignature> m_rootSignature;
-        ComPtr<ID3D12PipelineState> m_pipelineState;
+        ComPtr<ID3D12PipelineState> m_depthTestPipeline;
+        ComPtr<ID3D12PipelineState> m_noDepthPipeline;
         Buffer m_vertexBuffer;
         D3D12_VERTEX_BUFFER_VIEW m_vertexBufferView{};
         std::string m_lastError;

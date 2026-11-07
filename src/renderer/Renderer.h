@@ -36,6 +36,12 @@ namespace walnut
         static constexpr uint64_t kFrameAllocatorBytesPerFrame = 1024 * 1024;
         static constexpr uint64_t kUploadRingBytes = 64 * 1024 * 1024;
 
+        // 32-bit float depth: required for reversed-Z to pay off (see Camera.cpp).
+        static constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
+        // Reversed-Z: 1 = near plane, 0 = infinitely far. "Empty" depth is therefore 0, and a pixel is closer
+        // (and wins) when its depth is GREATER.
+        static constexpr float kDepthClearValue = 0.0f;
+
         Renderer(Window& window, const RendererDesc& desc);
         ~Renderer();
 
@@ -67,11 +73,16 @@ namespace walnut
             uint64_t fenceValue = 0;
         };
 
+        void CreateDepthBuffer(uint32_t width, uint32_t height);
+
         std::unique_ptr<Device> m_device;
         std::unique_ptr<CommandQueue> m_directQueue;
         std::unique_ptr<UploadContext> m_uploadContext; // after the queue: destroyed before it
         std::unique_ptr<SwapChain> m_swapChain;
         std::unique_ptr<DescriptorHeap> m_srvHeap;
+        std::unique_ptr<DescriptorHeap> m_dsvHeap;
+        DescriptorHandle m_dsv;
+        ComPtr<ID3D12Resource> m_depthBuffer;
         std::unique_ptr<FrameAllocator> m_frameAllocator;
         std::array<FrameContext, kFramesInFlight> m_frames;
         ComPtr<ID3D12GraphicsCommandList7> m_commandList;

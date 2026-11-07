@@ -37,8 +37,9 @@ namespace walnut
     }
 
     TrianglePass::TrianglePass(Device& device, UploadContext& upload, const ShaderCompiler& compiler,
-                               std::filesystem::path shaderPath, DXGI_FORMAT rtvFormat)
-        : m_device(device.Get()), m_compiler(compiler), m_shaderPath(std::move(shaderPath)), m_rtvFormat(rtvFormat)
+                               std::filesystem::path shaderPath, DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat)
+        : m_device(device.Get()), m_compiler(compiler), m_shaderPath(std::move(shaderPath)),
+          m_rtvFormat(rtvFormat), m_dsvFormat(dsvFormat)
     {
         CreateRootSignature();
         CreateVertexBuffer(upload);
@@ -113,30 +114,49 @@ namespace walnut
         desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
         desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
         desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
-        desc.DepthStencilState.DepthEnable = FALSE;
-        desc.DepthStencilState.StencilEnable = FALSE;
         desc.SampleMask = UINT_MAX;
         desc.NumRenderTargets = 1;
         desc.RTVFormats[0] = m_rtvFormat;
+        desc.DSVFormat = m_dsvFormat; // must match the bound depth buffer
         desc.SampleDesc.Count = 1;
 
-        ComPtr<ID3D12PipelineState> pipelineState;
-        const HRESULT hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipelineState));
+        // Depth test: a pixel is drawn only if its depth is GREATER than what's in the depth buffer (reversed-Z:
+        // greater = closer), and then its depth is written so later, farther pixels behind it are rejected.
+        desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+        desc.DepthStencilState.DepthEnable = TRUE;
+        desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER;
+        desc.DepthStencilState.StencilEnable = FALSE;
+
+        ComPtr<ID3D12PipelineState> depthTestPipeline;
+        HRESULT hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&depthTestPipeline));
+
+        // Same pipeline without the depth test, so the UI can show what depth testing changes. Depth is part
+        // of the PSO, so switching it at runtime means switching PSOs. A PSO that doesn't use depth declares
+        // DSVFormat UNKNOWN (the debug layer warns otherwise); it then ignores whatever depth buffer is bound.
+        desc.DepthStencilState.DepthEnable = FALSE;
+        desc.DSVFormat = DXGI_FORMAT_UNKNOWN;
+        ComPtr<ID3D12PipelineState> noDepthPipeline;
+        if (SUCCEEDED(hr))
+            hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&noDepthPipeline));
+
         if (FAILED(hr))
         {
             m_lastError = std::format("CreateGraphicsPipelineState failed (0x{:08X})", static_cast<uint32_t>(hr));
             log::Error("{}", m_lastError);
             return false;
         }
-        SetDebugName(pipelineState.Get(), L"TrianglePSO");
+        SetDebugName(depthTestPipeline.Get(), L"TrianglePSO_DepthTest");
+        SetDebugName(noDepthPipeline.Get(), L"TrianglePSO_NoDepth");
 
-        m_pipelineState = std::move(pipelineState);
+        m_depthTestPipeline = std::move(depthTestPipeline);
+        m_noDepthPipeline = std::move(noDepthPipeline);
         m_lastError.clear();
         return true;
     }
 
     void TrianglePass::Render(ID3D12GraphicsCommandList* commandList, FrameAllocator& frameAllocator,
-                              const TriangleParams& params, DirectX::FXMMATRIX viewProjection) const
+                              const TriangleParams& params, DirectX::FXMMATRIX viewProjection, bool depthTest) const
     {
         using namespace DirectX;
         PIXScopedEvent(commandList, pix::kColorGpu, L"TrianglePass");
@@ -144,7 +164,7 @@ namespace walnut
         // Object -> world: scale, then rotate, then move (row vectors apply left to right).
         const XMMATRIX world = XMMatrixScaling(params.scale, params.scale, params.scale)
                              * XMMatrixRotationZ(params.angle)
-                             * XMMatrixTranslation(params.offset[0], params.offset[1], 0.0f);
+                             * XMMatrixTranslation(params.offset[0], params.offset[1], params.offset[2]);
 
         TriangleGpuConstants constants{};
         XMStoreFloat4x4(&constants.worldViewProjection, world * viewProjection);
@@ -154,7 +174,7 @@ namespace walnut
         const D3D12_GPU_VIRTUAL_ADDRESS constantsAddress = frameAllocator.AllocateConstants(constants);
 
         commandList->SetGraphicsRootSignature(m_rootSignature.Get());
-        commandList->SetPipelineState(m_pipelineState.Get());
+        commandList->SetPipelineState(depthTest ? m_depthTestPipeline.Get() : m_noDepthPipeline.Get());
         commandList->SetGraphicsRootConstantBufferView(0, constantsAddress);
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         commandList->IASetVertexBuffers(0, 1, &m_vertexBufferView);

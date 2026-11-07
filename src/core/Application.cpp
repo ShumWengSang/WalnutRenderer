@@ -114,7 +114,8 @@ namespace walnut
 #endif
         m_shaderCompiler = std::make_unique<ShaderCompiler>(kShaderDebugInfo);
         m_trianglePass = std::make_unique<TrianglePass>(m_renderer->GetDevice(), m_renderer->GetUploadContext(), *m_shaderCompiler,
-                                                        m_exeDir / "shaders" / "triangle.hlsl", SwapChain::kFormat);
+                                                        m_exeDir / "shaders" / "triangle.hlsl", SwapChain::kFormat,
+                                                        Renderer::kDepthFormat);
 
         // Execute every upload recorded while loading, before the first frame reads that data.
         m_renderer->GetUploadContext().Flush();
@@ -189,7 +190,11 @@ namespace walnut
                 PIXScopedEvent(pix::kColorCpu, L"Render");
                 m_renderer->BeginFrame(m_clearColor);
                 ID3D12GraphicsCommandList* commandList = m_renderer->GetCommandList();
-                m_trianglePass->Render(commandList, m_renderer->GetFrameAllocator(), m_triangle, viewProjection);
+                FrameAllocator& frameAllocator = m_renderer->GetFrameAllocator();
+                // Deliberately drawn near-to-far: the far triangle is drawn last. Without the depth test it
+                // paints over the near one; with it, its hidden pixels fail the GREATER test and are discarded.
+                m_trianglePass->Render(commandList, frameAllocator, m_triangle, viewProjection, m_depthTest);
+                m_trianglePass->Render(commandList, frameAllocator, m_backTriangle, viewProjection, m_depthTest);
                 m_imgui->Render(commandList);
                 m_renderer->EndFrame();
             }
@@ -321,8 +326,11 @@ namespace walnut
 
         if (ImGui::CollapsingHeader("Triangle", ImGuiTreeNodeFlags_DefaultOpen))
         {
+            ImGui::Checkbox("Depth test", &m_depthTest);
+            ImGui::SameLine();
+            ImGui::TextDisabled("(darker triangle is behind, but drawn last)");
             ImGui::ColorEdit4("Tint", m_triangle.tint);
-            ImGui::SliderFloat2("Offset", m_triangle.offset, -1.0f, 1.0f);
+            ImGui::SliderFloat3("Offset", m_triangle.offset, -1.0f, 1.0f);
             ImGui::SliderAngle("Angle", &m_triangle.angle, -180.0f, 180.0f);
             ImGui::SliderFloat("Scale", &m_triangle.scale, 0.1f, 4.0f);
             ImGui::Checkbox("Auto-rotate", &m_autoRotate);
