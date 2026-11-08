@@ -9,6 +9,11 @@ namespace walnut
         constexpr double kMB = 1024.0 * 1024.0;
         log::Info("  {} instances of {} primitives{}", scene.instances.size(), scene.primitives.size(),
                   scene.skippedPrimitives ? std::format(" ({} skipped)", scene.skippedPrimitives) : "");
+        size_t blend = 0;
+        for (const SceneMaterial& material : scene.materials)
+            blend += material.alphaMode == AlphaMode::Blend;
+        if (blend)
+            log::Warn("  {} alpha-blend materials are drawn as opaque (no transparency pass yet)", blend);
         log::Info("  Merged geometry: {} vertices ({:.1f} MB), {} indices ({:.1f} MB, 32-bit)",
                   scene.vertices.size(), static_cast<double>(scene.vertices.size() * sizeof(SceneVertex)) / kMB,
                   scene.indices.size(), static_cast<double>(scene.indices.size() * sizeof(uint32_t)) / kMB);

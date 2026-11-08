@@ -148,7 +148,7 @@ namespace walnut
             out.indexCount = static_cast<uint32_t>(indexCount);
             out.firstVertex = firstVertex;
             out.vertexCount = static_cast<uint32_t>(vertexCount);
-            out.materialIndex = primitive.material ? static_cast<uint32_t>(cgltf_material_index(&data, primitive.material)) : kNoMaterial;
+            out.materialIndex = primitive.material ? static_cast<uint32_t>(cgltf_material_index(&data, primitive.material)) : UINT32_MAX;
 
             using namespace DirectX;
             XMVECTOR lo = g_XMFltMax, hi = -g_XMFltMax;
@@ -168,6 +168,26 @@ namespace walnut
         using namespace DirectX;
         Scene scene;
 
+        // 0. Materials: copy the factors. glTF stores colors as linear values already (only images are sRGB).
+        for (size_t i = 0; i < data.materials_count; ++i)
+        {
+            const cgltf_material& source = data.materials[i];
+            SceneMaterial& material = scene.materials.emplace_back();
+            if (source.has_pbr_metallic_roughness)
+            {
+                const cgltf_pbr_metallic_roughness& pbr = source.pbr_metallic_roughness;
+                material.baseColorFactor = { pbr.base_color_factor[0], pbr.base_color_factor[1], pbr.base_color_factor[2], pbr.base_color_factor[3] };
+                material.metallicFactor = pbr.metallic_factor;
+                material.roughnessFactor = pbr.roughness_factor;
+            }
+            material.emissiveFactor = { source.emissive_factor[0], source.emissive_factor[1], source.emissive_factor[2] };
+            material.alphaMode = source.alpha_mode == cgltf_alpha_mode_mask    ? AlphaMode::Mask
+                               : source.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend
+                                                                              : AlphaMode::Opaque;
+            material.alphaCutoff = source.alpha_cutoff;
+            material.doubleSided = source.double_sided;
+        }
+
         // 1. Geometry. Each mesh's primitives are appended once, however many nodes use that mesh.
         std::vector<std::vector<uint32_t>> primitivesOfMesh(data.meshes_count);
         std::vector<float> scratch;
@@ -184,6 +204,17 @@ namespace walnut
                     log::Warn("Skipping primitive {} of mesh '{}': not a triangle list, or no positions", p,
                               mesh.name ? mesh.name : "");
                 }
+            }
+        }
+
+        // Primitives without a material use glTF's default material (white, fully metallic and rough).
+        for (ScenePrimitive& primitive : scene.primitives)
+        {
+            if (primitive.materialIndex == UINT32_MAX)
+            {
+                if (scene.materials.size() == data.materials_count)
+                    scene.materials.emplace_back();
+                primitive.materialIndex = static_cast<uint32_t>(scene.materials.size() - 1);
             }
         }
 

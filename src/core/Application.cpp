@@ -377,7 +377,11 @@ namespace walnut
                 const GltfSummary& s = *m_sceneSummary;
                 ImGui::Text("%s (parsed in %.1f ms, built in %.1f ms)", fileName.c_str(), m_sceneLoadMs, m_sceneBuildMs);
                 ImGui::SetItemTooltip("%s", ToUtf8(m_scenePath.wstring()).c_str());
-                ImGui::Text("%zu nodes, %zu meshes, %zu materials, %zu images", s.nodes, s.meshes, s.materials, s.images);
+                ImGui::Text("%zu nodes, %zu meshes, %zu images", s.nodes, s.meshes, s.images);
+                ImGui::Text("%zu materials (%zu alpha-mask, %zu alpha-blend, %zu double-sided)", m_scene.materials.size(),
+                            static_cast<size_t>(std::ranges::count(m_scene.materials, AlphaMode::Mask, &SceneMaterial::alphaMode)),
+                            static_cast<size_t>(std::ranges::count(m_scene.materials, AlphaMode::Blend, &SceneMaterial::alphaMode)),
+                            static_cast<size_t>(std::ranges::count(m_scene.materials, true, &SceneMaterial::doubleSided)));
                 ImGui::Text("%zu instances of %zu primitives", m_scene.instances.size(), m_scene.primitives.size());
                 ImGui::Text("%zu vertices, %zu triangles", m_scene.vertices.size(), m_scene.indices.size() / 3);
                 const DirectX::XMFLOAT3& lo = m_scene.boundsMin;
@@ -388,7 +392,8 @@ namespace walnut
                 {
                     ImGui::Text("GPU: %u draws per frame, %.1f MB of buffers", m_scenePass->GetDrawCount(),
                                 static_cast<double>(m_scenePass->GetGpuBytes()) / (1024.0 * 1024.0));
-                    const char* views[] = { "Normals (world)", "Texture coordinates", "Instance colors" };
+                    const char* views[] = { "Normals (world)", "Texture coordinates", "Instance colors",
+                                            "Material colors", "Base color factor", "Alpha mode / back faces" };
                     int view = static_cast<int>(m_sceneView.debugView);
                     if (ImGui::Combo("Show", &view, views, IM_ARRAYSIZE(views)))
                         m_sceneView.debugView = static_cast<SceneDebugView>(view);

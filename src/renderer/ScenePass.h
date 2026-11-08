@@ -19,18 +19,21 @@ namespace walnut
     class UploadContext;
     struct Scene;
 
-    // What the scene shader outputs until materials and lighting exist. Values must match scene.hlsl.
+    // What the scene shader outputs until textures and lighting exist. Values must match scene.hlsl.
     enum class SceneDebugView : uint32_t
     {
-        Normals = 0,   // world-space normal, mapped from -1..1 to 0..1 colors
-        Texcoords = 1, // UV as red/green
-        Instances = 2, // a random color per instance (= per draw)
+        Normals = 0,         // world-space normal, mapped from -1..1 to 0..1 colors
+        Texcoords = 1,       // UV as red/green
+        Instances = 2,       // a random color per instance (= per draw)
+        Materials = 3,       // a random color per material
+        BaseColorFactor = 4, // the material's constant base color
+        AlphaMode = 5,       // opaque gray, mask yellow, blend red; back faces of double-sided materials darker
     };
 
     struct SceneViewSettings
     {
         SceneDebugView debugView = SceneDebugView::Normals;
-        bool backfaceCulling = true;
+        bool backfaceCulling = true; // for single-sided materials; double-sided ones are never culled
     };
 
     // Draws a Scene: uploads its merged vertex/index arrays and an instance buffer once, then issues one
@@ -66,6 +69,7 @@ namespace walnut
             uint32_t indexCount;
             uint32_t firstIndex;
             uint32_t instanceIndex;
+            bool doubleSided; // drawn without back-face culling
         };
 
         Buffer CreateStructuredBuffer(UploadContext& upload, const void* data, uint32_t count, uint32_t stride,
@@ -81,9 +85,11 @@ namespace walnut
 
         Buffer m_vertexBuffer;   // StructuredBuffer<SceneVertex>, read by the vertex shader through m_vertexSrv
         Buffer m_instanceBuffer; // StructuredBuffer<Instance>, read through m_instanceSrv
+        Buffer m_materialBuffer; // StructuredBuffer<Material>, read by the pixel shader through m_materialSrv
         Buffer m_indexBuffer;    // 32-bit indices, bound the classic way (IASetIndexBuffer)
         DescriptorHandle m_vertexSrv;    // their slots in the bindless heap
         DescriptorHandle m_instanceSrv;
+        DescriptorHandle m_materialSrv;
         std::vector<DrawItem> m_draws;
 
         ComPtr<ID3D12PipelineState> m_cullBackPipeline;

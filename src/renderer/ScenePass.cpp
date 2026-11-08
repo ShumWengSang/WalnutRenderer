@@ -10,6 +10,8 @@
 #include "gfx/UploadContext.h"
 #include "scene/Scene.h"
 
+#include <algorithm>
+
 namespace walnut
 {
     namespace
@@ -21,8 +23,23 @@ namespace walnut
             // Normals can't use 'world' when it scales unevenly (they'd lean towards the stretched axis); they need
             // the inverse-transpose of it. Computed once here instead of per vertex.
             DirectX::XMFLOAT4X4 normalMatrix;
+            uint32_t materialIndex;
+            uint32_t padding[3]; // keeps the stride a multiple of 16 bytes, which GPUs read most efficiently
         };
-        static_assert(sizeof(InstanceGpuData) == 128);
+        static_assert(sizeof(InstanceGpuData) == 144);
+
+        // One element of the material buffer. Must match struct Material in scene.hlsl.
+        struct MaterialGpuData
+        {
+            DirectX::XMFLOAT4 baseColorFactor;
+            DirectX::XMFLOAT3 emissiveFactor;
+            float metallicFactor;
+            float roughnessFactor;
+            float alphaCutoff;
+            uint32_t alphaMode; // AlphaMode
+            uint32_t doubleSided;
+        };
+        static_assert(sizeof(MaterialGpuData) == 48);
 
         // Per-pass constants (b1). Must match the cbuffer in scene.hlsl.
         struct ScenePassConstants
@@ -35,6 +52,7 @@ namespace walnut
         {
             uint32_t vertexBufferIndex;
             uint32_t instanceBufferIndex;
+            uint32_t materialBufferIndex;
             uint32_t debugView;
             uint32_t instanceIndex; // the only value that changes between draws
         };
@@ -61,7 +79,26 @@ namespace walnut
             XMStoreFloat4x4(&gpu.normalMatrix, XMMatrixTranspose(XMMatrixInverse(nullptr, world)));
 
             const ScenePrimitive& primitive = scene.primitives[instance.primitiveIndex];
-            m_draws.push_back({ primitive.indexCount, primitive.firstIndex, static_cast<uint32_t>(m_draws.size()) });
+            gpu.materialIndex = primitive.materialIndex;
+            m_draws.push_back({ primitive.indexCount, primitive.firstIndex, static_cast<uint32_t>(m_draws.size()),
+                                scene.materials[primitive.materialIndex].doubleSided });
+        }
+        // Single-sided draws first, then double-sided ones: culling is part of the PSO, so grouping them means
+        // switching PSOs once per frame instead of whenever two neighbouring draws differ.
+        std::ranges::stable_partition(m_draws, [](const DrawItem& draw) { return !draw.doubleSided; });
+
+        std::vector<MaterialGpuData> materials;
+        for (const SceneMaterial& material : scene.materials)
+        {
+            materials.push_back({
+                .baseColorFactor = material.baseColorFactor,
+                .emissiveFactor = material.emissiveFactor,
+                .metallicFactor = material.metallicFactor,
+                .roughnessFactor = material.roughnessFactor,
+                .alphaCutoff = material.alphaCutoff,
+                .alphaMode = static_cast<uint32_t>(material.alphaMode),
+                .doubleSided = material.doubleSided ? 1u : 0u,
+            });
         }
 
         // Static geometry: DEFAULT heap, filled once through the staging ring.
@@ -69,6 +106,8 @@ namespace walnut
                                                 sizeof(SceneVertex), L"SceneVertices", m_vertexSrv);
         m_instanceBuffer = CreateStructuredBuffer(upload, instances.data(), static_cast<uint32_t>(instances.size()),
                                                   sizeof(InstanceGpuData), L"SceneInstances", m_instanceSrv);
+        m_materialBuffer = CreateStructuredBuffer(upload, materials.data(), static_cast<uint32_t>(materials.size()),
+                                                  sizeof(MaterialGpuData), L"SceneMaterials", m_materialSrv);
 
         // Indices stay a real index buffer instead of being pulled by the shader too: the input assembler reads
         // them, and the GPU can then reuse the vertex shader result of an index it has just seen (the
@@ -79,7 +118,8 @@ namespace walnut
 
         if (!ReloadShaders())
             throw std::runtime_error("Failed to build scene pipeline:\n" + m_lastError);
-        log::Info("ScenePass: {} draws, {:.1f} MB of geometry and instance data on the GPU", m_draws.size(),
+        log::Info("ScenePass: {} draws ({} double-sided), {} materials, {:.1f} MB of buffers on the GPU", m_draws.size(),
+                  std::ranges::count_if(m_draws, [](const DrawItem& draw) { return draw.doubleSided; }), materials.size(),
                   static_cast<double>(GetGpuBytes()) / (1024.0 * 1024.0));
     }
 
@@ -87,11 +127,12 @@ namespace walnut
     {
         m_srvHeap.Free(m_vertexSrv);
         m_srvHeap.Free(m_instanceSrv);
+        m_srvHeap.Free(m_materialSrv);
     }
 
     uint64_t ScenePass::GetGpuBytes() const
     {
-        return m_vertexBuffer.GetSize() + m_indexBuffer.GetSize() + m_instanceBuffer.GetSize();
+        return m_vertexBuffer.GetSize() + m_indexBuffer.GetSize() + m_instanceBuffer.GetSize() + m_materialBuffer.GetSize();
     }
 
     Buffer ScenePass::CreateStructuredBuffer(UploadContext& upload, const void* data, uint32_t count, uint32_t stride,
@@ -172,11 +213,11 @@ namespace walnut
         ScenePassConstants passConstants{};
         DirectX::XMStoreFloat4x4(&passConstants.viewProjection, viewProjection);
         commandList->SetGraphicsRootConstantBufferView(RootParam::DrawData, frameAllocator.AllocateConstants(passConstants));
-        commandList->SetPipelineState(settings.backfaceCulling ? m_cullBackPipeline.Get() : m_cullNonePipeline.Get());
 
         const SceneDrawConstants drawConstants{
             .vertexBufferIndex = m_vertexSrv.index,
             .instanceBufferIndex = m_instanceSrv.index,
+            .materialBufferIndex = m_materialSrv.index,
             .debugView = static_cast<uint32_t>(settings.debugView),
             .instanceIndex = 0,
         };
@@ -193,8 +234,17 @@ namespace walnut
 
         // Per draw, only one 32-bit root constant changes. SV_InstanceID can't carry the instance index instead:
         // in D3D12 it always counts from 0 within a draw, ignoring StartInstanceLocation.
+        ID3D12PipelineState* currentPipeline = nullptr;
         for (const DrawItem& draw : m_draws)
         {
+            // Double-sided materials are never culled. The draws are sorted so this switches at most once.
+            ID3D12PipelineState* pipeline = settings.backfaceCulling && !draw.doubleSided ? m_cullBackPipeline.Get()
+                                                                                          : m_cullNonePipeline.Get();
+            if (pipeline != currentPipeline)
+            {
+                commandList->SetPipelineState(pipeline);
+                currentPipeline = pipeline;
+            }
             commandList->SetGraphicsRoot32BitConstant(RootParam::DrawConstants, draw.instanceIndex, kInstanceIndexConstant);
             // BaseVertexLocation = 0: the loader already added each primitive's first vertex to its indices.
             commandList->DrawIndexedInstanced(draw.indexCount, 1, draw.firstIndex, 0, 0);

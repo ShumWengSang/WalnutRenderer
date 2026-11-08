@@ -17,7 +17,25 @@ namespace walnut
     };
     static_assert(sizeof(SceneVertex) == 48);
 
-    inline constexpr uint32_t kNoMaterial = UINT32_MAX;
+    // How a material's alpha is used (glTF alphaMode). Values must match scene.hlsl.
+    enum class AlphaMode : uint32_t
+    {
+        Opaque = 0, // alpha ignored
+        Mask = 1,   // pixels with alpha < alphaCutoff are discarded (leaves, chains, fences)
+        Blend = 2,  // see-through; needs sorted, blended drawing (drawn as opaque for now)
+    };
+
+    // A glTF metallic-roughness material: the constant factors for now (textures come next).
+    struct SceneMaterial
+    {
+        DirectX::XMFLOAT4 baseColorFactor = { 1.0f, 1.0f, 1.0f, 1.0f }; // linear RGB + alpha
+        DirectX::XMFLOAT3 emissiveFactor = { 0.0f, 0.0f, 0.0f };
+        float metallicFactor = 1.0f;  // glTF defaults: fully metallic and fully rough
+        float roughnessFactor = 1.0f;
+        AlphaMode alphaMode = AlphaMode::Opaque;
+        float alphaCutoff = 0.5f;
+        bool doubleSided = false; // draw back faces too (not culled), with their normal flipped
+    };
 
     // One glTF primitive: a range of the merged index array, drawn with one material.
     struct ScenePrimitive
@@ -26,7 +44,7 @@ namespace walnut
         uint32_t indexCount = 0;
         uint32_t firstVertex = 0; // the vertices its indices point at; the indices already include this offset
         uint32_t vertexCount = 0;
-        uint32_t materialIndex = kNoMaterial; // into the glTF materials array
+        uint32_t materialIndex = 0; // into Scene::materials; always valid
         DirectX::XMFLOAT3 boundsMin{}, boundsMax{}; // object space
     };
 
@@ -42,6 +60,7 @@ namespace walnut
     {
         std::vector<SceneVertex> vertices;
         std::vector<uint32_t> indices;
+        std::vector<SceneMaterial> materials; // the file's materials, plus a default one if some primitive had none
         std::vector<ScenePrimitive> primitives;
         std::vector<SceneInstance> instances;
         DirectX::XMFLOAT3 boundsMin{}, boundsMax{}; // world space, over every instance

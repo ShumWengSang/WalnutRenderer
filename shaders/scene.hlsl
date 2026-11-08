@@ -7,14 +7,22 @@ struct DrawConstants
 {
     uint vertexBufferIndex;   // descriptor heap slot of StructuredBuffer<Vertex>
     uint instanceBufferIndex; // descriptor heap slot of StructuredBuffer<Instance>
+    uint materialBufferIndex; // descriptor heap slot of StructuredBuffer<Material>
     uint debugView;           // SceneDebugView in ScenePass.h
     uint instanceIndex;       // which instance this draw is
 };
 ConstantBuffer<DrawConstants> g_draw : register(b0);
 
-static const uint kViewNormals   = 0;
-static const uint kViewTexcoords = 1;
-static const uint kViewInstances = 2;
+static const uint kViewNormals         = 0;
+static const uint kViewTexcoords       = 1;
+static const uint kViewInstances       = 2;
+static const uint kViewMaterials       = 3;
+static const uint kViewBaseColorFactor = 4;
+static const uint kViewAlphaMode       = 5;
+
+static const uint kAlphaOpaque = 0; // AlphaMode in Scene.h
+static const uint kAlphaMask   = 1;
+static const uint kAlphaBlend  = 2;
 
 // Set once per pass at b1. Must match ScenePassConstants in ScenePass.cpp.
 cbuffer PassConstants : register(b1)
@@ -31,11 +39,25 @@ struct Vertex
     float2 uv;
 };
 
-// Must match InstanceGpuData in ScenePass.cpp (128 bytes).
+// Must match InstanceGpuData in ScenePass.cpp (144 bytes).
 struct Instance
 {
     row_major float4x4 world;
     row_major float4x4 normalMatrix;
+    uint materialIndex;
+    uint3 padding;
+};
+
+// Must match MaterialGpuData in ScenePass.cpp (48 bytes).
+struct Material
+{
+    float4 baseColorFactor; // linear
+    float3 emissiveFactor;
+    float metallicFactor;
+    float roughnessFactor;
+    float alphaCutoff;
+    uint alphaMode;
+    uint doubleSided;
 };
 
 struct PSInput
@@ -63,8 +85,8 @@ PSInput VSMain(uint vertexId : SV_VertexID)
     return output;
 }
 
-// Cheap integer hash -> a stable, distinct color per instance.
-float3 InstanceColor(uint index)
+// Cheap integer hash -> a stable, distinct color per index.
+float3 HashColor(uint index)
 {
     uint h = index * 747796405u + 2891336453u;
     h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u;
@@ -72,14 +94,40 @@ float3 InstanceColor(uint index)
     return float3(h & 0xFF, (h >> 8) & 0xFF, (h >> 16) & 0xFF) / 255.0f;
 }
 
-float4 PSMain(PSInput input) : SV_Target
+// SV_IsFrontFace: whether the rasterizer saw this triangle's front (counter-clockwise on screen, per the PSO).
+// Only visible for double-sided materials (or with culling turned off).
+float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
 {
+    // The material is the same for the whole draw, so every pixel reads the same two elements (cheap: cached).
+    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
+    StructuredBuffer<Material> materials = ResourceDescriptorHeap[g_draw.materialBufferIndex];
+    const uint materialIndex = instances[g_draw.instanceIndex].materialIndex;
+    const Material material = materials[materialIndex];
+
+    // The normal points out of the front face. Seen from behind (a leaf's underside), the surface faces the other
+    // way, so glTF says to flip it for double-sided materials.
+    float3 normal = normalize(input.normal); // interpolation shortens normals, so normalize again
+    if (!isFrontFace)
+        normal = -normal;
+
     float3 color;
     if (g_draw.debugView == kViewNormals)
-        color = normalize(input.normal) * 0.5f + 0.5f; // interpolation shortens normals, so normalize again
+        color = normal * 0.5f + 0.5f;
     else if (g_draw.debugView == kViewTexcoords)
         color = float3(frac(input.uv), 0.0f); // frac: glTF UVs may go beyond 0..1 (repeating textures)
+    else if (g_draw.debugView == kViewInstances)
+        color = HashColor(g_draw.instanceIndex);
+    else if (g_draw.debugView == kViewMaterials)
+        color = HashColor(materialIndex);
+    else if (g_draw.debugView == kViewBaseColorFactor)
+        color = material.baseColorFactor.rgb;
     else
-        color = InstanceColor(g_draw.instanceIndex);
+    {
+        color = material.alphaMode == kAlphaMask  ? float3(1.0f, 0.85f, 0.1f)
+              : material.alphaMode == kAlphaBlend ? float3(1.0f, 0.2f, 0.1f)
+                                                  : float3(0.4f, 0.4f, 0.4f);
+        if (!isFrontFace)
+            color *= 0.4f; // back faces darker, to show which surfaces are drawn from both sides
+    }
     return float4(color, 1.0f);
 }
