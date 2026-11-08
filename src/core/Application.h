@@ -7,10 +7,13 @@
 #include "scene/Assets.h"
 #include "scene/Camera.h"
 #include "scene/FlyCameraController.h"
+#include "scene/GltfLoader.h"
 
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
+#include <string>
 
 namespace walnut
 {
@@ -55,7 +58,9 @@ namespace walnut
         AppOptions m_options;
         std::filesystem::path m_exeDir;
         std::filesystem::path m_scenePath; // m_options.scene resolved against the asset directory
-        bool m_sceneFound = false;
+        std::optional<GltfSummary> m_sceneSummary; // set when the scene parsed successfully
+        std::string m_sceneError;                  // why it didn't, otherwise
+        double m_sceneLoadMs = 0.0;
 
         std::unique_ptr<Window> m_window;
         Input m_input;

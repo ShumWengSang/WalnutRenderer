@@ -66,6 +66,8 @@ set(WALNUT_SOURCES
     src/scene/Camera.h
     src/scene/FlyCameraController.cpp
     src/scene/FlyCameraController.h
+    src/scene/GltfLoader.cpp
+    src/scene/GltfLoader.h
 
     src/ui/ImGuiLayer.cpp
     src/ui/ImGuiLayer.h
@@ -85,6 +87,7 @@ target_link_libraries(WalnutRenderer PRIVATE
     Microsoft::DirectX-Headers
     walnut_dxc
     walnut_pix
+    walnut_cgltf
     d3d12
     dxgi
     dxguid

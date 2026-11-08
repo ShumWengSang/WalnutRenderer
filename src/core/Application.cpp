@@ -13,6 +13,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <numbers>
 #include <string>
@@ -95,13 +96,27 @@ namespace walnut
         if (options.pixGpuCapturer)
             pix::LoadGpuCapturer();
 
-        // Only located for now; loading comes in the next steps.
+        // Parsed and summarized only; nothing reaches the GPU yet, so the document is freed again right away.
         m_scenePath = ResolveAssetPath(options.scene);
-        m_sceneFound = std::filesystem::is_regular_file(m_scenePath);
-        if (m_sceneFound)
-            log::Info("Scene: {}", ToUtf8(m_scenePath.wstring()));
-        else
+        if (!std::filesystem::is_regular_file(m_scenePath))
+        {
+            m_sceneError = "not found: run tools\\fetch-assets.ps1";
             log::Warn("Scene not found: {} (run tools\\fetch-assets.ps1 to download Sponza)", ToUtf8(m_scenePath.wstring()));
+        }
+        else
+        {
+            const auto loadStart = std::chrono::steady_clock::now();
+            const std::unique_ptr<GltfDocument> document = GltfDocument::Load(m_scenePath, m_sceneError);
+            m_sceneLoadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - loadStart).count();
+            if (document)
+            {
+                m_sceneSummary = SummarizeGltf(document->GetData());
+                log::Info("Scene: {} (parsed in {:.1f} ms)", ToUtf8(m_scenePath.wstring()), m_sceneLoadMs);
+                LogGltfSummary(*m_sceneSummary);
+            }
+            else
+                log::Error("Scene {} failed to load: {}", ToUtf8(m_scenePath.wstring()), m_sceneError);
+        }
 
         m_window = std::make_unique<Window>(WindowDesc{ L"WalnutRenderer", 1280, 720 });
 
@@ -353,11 +368,21 @@ namespace walnut
         if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen))
         {
             const std::string fileName = ToUtf8(m_scenePath.filename().wstring());
-            if (m_sceneFound)
-                ImGui::Text("%s (found, not loaded yet)", fileName.c_str());
+            if (m_sceneSummary)
+            {
+                const GltfSummary& s = *m_sceneSummary;
+                ImGui::Text("%s (parsed in %.1f ms, not on the GPU yet)", fileName.c_str(), m_sceneLoadMs);
+                ImGui::SetItemTooltip("%s", ToUtf8(m_scenePath.wstring()).c_str());
+                ImGui::Text("%zu nodes, %zu meshes, %zu primitives", s.nodes, s.meshes, s.primitives);
+                ImGui::Text("%llu vertices, %llu triangles", static_cast<unsigned long long>(s.vertices),
+                            static_cast<unsigned long long>(s.indices / 3));
+                ImGui::Text("%zu materials, %zu textures, %zu images", s.materials, s.textures, s.images);
+            }
             else
-                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s not found: run tools\\fetch-assets.ps1", fileName.c_str());
-            ImGui::SetItemTooltip("%s", ToUtf8(m_scenePath.wstring()).c_str());
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s %s", fileName.c_str(), m_sceneError.c_str());
+                ImGui::SetItemTooltip("%s", ToUtf8(m_scenePath.wstring()).c_str());
+            }
         }
 
         if (ImGui::CollapsingHeader("Tonemapping", ImGuiTreeNodeFlags_DefaultOpen))

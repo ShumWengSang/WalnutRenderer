@@ -5,6 +5,7 @@ set(WALNUT_AGILITY_SDK_VERSION "1.620.1")
 set(WALNUT_DXC_VERSION "1.9.2609.5")
 set(WALNUT_IMGUI_TAG "v1.93.0-docking")
 set(WALNUT_PIX_EVENT_RUNTIME_VERSION "1.0.240308001")
+set(WALNUT_CGLTF_TAG "v1.15")
 
 # The Agility SDK "minor" number is what the exe exports as D3D12SDKVersion (e.g. 1.620.1 -> 620).
 string(REGEX MATCH "^1\\.([0-9]+)" _ "${WALNUT_AGILITY_SDK_VERSION}")
@@ -49,7 +50,14 @@ FetchContent_Declare(winpixeventruntime
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 
-FetchContent_MakeAvailable(directx_headers agility_sdk dxc imgui winpixeventruntime)
+# Single-header glTF 2.0 parser.
+FetchContent_Declare(cgltf
+    GIT_REPOSITORY https://github.com/jkuhlmann/cgltf.git
+    GIT_TAG        ${WALNUT_CGLTF_TAG}
+    GIT_SHALLOW    TRUE
+)
+
+FetchContent_MakeAvailable(directx_headers agility_sdk dxc imgui winpixeventruntime cgltf)
 
 # --- Agility SDK -------------------------------------------------------------
 set(WALNUT_AGILITY_BIN_DIR "${agility_sdk_SOURCE_DIR}/build/native/bin/x64")
@@ -68,6 +76,14 @@ add_library(walnut_pix INTERFACE)
 target_include_directories(walnut_pix INTERFACE "${winpixeventruntime_SOURCE_DIR}/Include")
 target_link_libraries(walnut_pix INTERFACE "${WALNUT_PIX_BIN_DIR}/WinPixEventRuntime.lib")
 target_compile_definitions(walnut_pix INTERFACE USE_PIX)
+
+# --- cgltf -------------------------------------------------------------------
+# Header-only: exactly one translation unit defines CGLTF_IMPLEMENTATION. Doing that in a separate library
+# keeps cgltf's own warnings out of the engine's /W4 build.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/cgltf_impl.c" "#define CGLTF_IMPLEMENTATION\n#include <cgltf.h>\n")
+add_library(walnut_cgltf STATIC "${CMAKE_CURRENT_BINARY_DIR}/cgltf_impl.c")
+target_include_directories(walnut_cgltf SYSTEM PUBLIC "${cgltf_SOURCE_DIR}")
+target_compile_definitions(walnut_cgltf PRIVATE _CRT_SECURE_NO_WARNINGS)
 
 # --- Dear ImGui (Win32 + DX12 backends) --------------------------------------
 add_library(imgui STATIC

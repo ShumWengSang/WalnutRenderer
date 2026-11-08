@@ -75,7 +75,7 @@ Logs go to the debugger output and to `WalnutRenderer.log` next to the exe. When
 ## Layout
 
 ```
-cmake/Dependencies.cmake  FetchContent: DirectX-Headers, Agility SDK, DXC, Dear ImGui, WinPixEventRuntime (all pinned)
+cmake/Dependencies.cmake  FetchContent: DirectX-Headers, Agility SDK, DXC, Dear ImGui, WinPixEventRuntime, cgltf (all pinned)
 shaders/                  HLSL sources, copied next to the exe and compiled at runtime
 src/core/                 Application loop, Win32 Window, Input, Timer, Log
 src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, ShaderCompiler, Pix
@@ -151,5 +151,6 @@ The **Agility SDK** is enabled through the `D3D12SDKVersion` and `D3D12SDKPath` 
 | DXC | 1.9.2609.5 |
 | Dear ImGui | v1.93.0-docking |
 | WinPixEventRuntime | 1.0.240308001 |
+| cgltf | v1.15 |
 
 Versions are set at the top of `cmake/Dependencies.cmake`. Keep the Agility SDK and DirectX-Headers on the same version.
