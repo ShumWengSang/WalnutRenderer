@@ -68,6 +68,8 @@ set(WALNUT_SOURCES
     src/scene/FlyCameraController.h
     src/scene/GltfLoader.cpp
     src/scene/GltfLoader.h
+    src/scene/Scene.cpp
+    src/scene/Scene.h
 
     src/ui/ImGuiLayer.cpp
     src/ui/ImGuiLayer.h

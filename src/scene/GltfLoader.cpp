@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <format>
 #include <fstream>
+#include <numeric>
+#include <span>
 
 namespace walnut
 {
@@ -68,6 +70,170 @@ namespace walnut
             std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             return lower;
         }
+
+        // Calls fn(node) for each root node of the default scene, or for every parentless node if the file has no scenes.
+        template <typename Fn>
+        void ForEachRootNode(const cgltf_data& data, Fn&& fn)
+        {
+            const cgltf_scene* scene = data.scene ? data.scene : (data.scenes_count > 0 ? &data.scenes[0] : nullptr);
+            if (scene)
+            {
+                for (size_t i = 0; i < scene->nodes_count; ++i)
+                    fn(*scene->nodes[i]);
+            }
+            else
+            {
+                for (size_t i = 0; i < data.nodes_count; ++i)
+                    if (!data.nodes[i].parent)
+                        fn(data.nodes[i]);
+            }
+        }
+
+        // Reads one vertex attribute (converted to floats, whatever its stored type) and hands each vertex's values
+        // to 'store'. Returns false if the primitive doesn't have it in the expected shape.
+        template <typename Store>
+        bool ReadAttribute(const cgltf_primitive& primitive, cgltf_attribute_type type, size_t components,
+                           std::span<SceneVertex> vertices, std::vector<float>& scratch, Store&& store)
+        {
+            const cgltf_accessor* accessor = cgltf_find_accessor(&primitive, type, 0);
+            if (!accessor || accessor->count != vertices.size() || cgltf_num_components(accessor->type) != components)
+                return false;
+            scratch.resize(vertices.size() * components);
+            cgltf_accessor_unpack_floats(accessor, scratch.data(), scratch.size());
+            for (size_t i = 0; i < vertices.size(); ++i)
+                store(vertices[i], &scratch[i * components]);
+            return true;
+        }
+
+        // Appends one primitive's vertices and indices to the merged arrays. Returns false if it can't be drawn.
+        bool AppendPrimitive(const cgltf_data& data, const cgltf_primitive& primitive, Scene& scene, std::vector<float>& scratch)
+        {
+            const cgltf_accessor* positions = cgltf_find_accessor(&primitive, cgltf_attribute_type_position, 0);
+            if (primitive.type != cgltf_primitive_type_triangles || !positions)
+                return false;
+
+            const auto firstVertex = static_cast<uint32_t>(scene.vertices.size());
+            const size_t vertexCount = positions->count;
+            scene.vertices.resize(firstVertex + vertexCount); // value-initialized: missing attributes stay zero
+            const std::span<SceneVertex> vertices(scene.vertices.data() + firstVertex, vertexCount);
+
+            // glTF is right-handed (+Z points out of the screen); the engine is left-handed (+Z into the screen).
+            // Negating Z converts between them. It mirrors the geometry, which also flips which side the bitangent
+            // is on (so tangent.w flips) and turns glTF's counter-clockwise front faces into clockwise ones,
+            // which is D3D12's default front face.
+            ReadAttribute(primitive, cgltf_attribute_type_position, 3, vertices, scratch,
+                          [](SceneVertex& v, const float* f) { v.position = { f[0], f[1], -f[2] }; });
+            ReadAttribute(primitive, cgltf_attribute_type_normal, 3, vertices, scratch,
+                          [](SceneVertex& v, const float* f) { v.normal = { f[0], f[1], -f[2] }; });
+            ReadAttribute(primitive, cgltf_attribute_type_tangent, 4, vertices, scratch,
+                          [](SceneVertex& v, const float* f) { v.tangent = { f[0], f[1], -f[2], -f[3] }; });
+            ReadAttribute(primitive, cgltf_attribute_type_texcoord, 2, vertices, scratch,
+                          [](SceneVertex& v, const float* f) { v.uv = { f[0], f[1] }; });
+
+            // Indices become 32-bit and global: each one gets the primitive's first vertex added, so a single index
+            // buffer can address the whole merged vertex array (Sponza has 192k vertices, more than 16 bits can reach).
+            const auto firstIndex = static_cast<uint32_t>(scene.indices.size());
+            const size_t indexCount = primitive.indices ? primitive.indices->count : vertexCount;
+            scene.indices.resize(firstIndex + indexCount);
+            uint32_t* indices = scene.indices.data() + firstIndex;
+            if (primitive.indices)
+                cgltf_accessor_unpack_indices(primitive.indices, indices, sizeof(uint32_t), indexCount);
+            else
+                std::iota(indices, indices + indexCount, 0u); // unindexed: every 3 vertices form a triangle
+            for (size_t i = 0; i < indexCount; ++i)
+                indices[i] += firstVertex;
+
+            ScenePrimitive& out = scene.primitives.emplace_back();
+            out.firstIndex = firstIndex;
+            out.indexCount = static_cast<uint32_t>(indexCount);
+            out.firstVertex = firstVertex;
+            out.vertexCount = static_cast<uint32_t>(vertexCount);
+            out.materialIndex = primitive.material ? static_cast<uint32_t>(cgltf_material_index(&data, primitive.material)) : kNoMaterial;
+
+            using namespace DirectX;
+            XMVECTOR lo = g_XMFltMax, hi = -g_XMFltMax;
+            for (const SceneVertex& v : vertices)
+            {
+                lo = XMVectorMin(lo, XMLoadFloat3(&v.position));
+                hi = XMVectorMax(hi, XMLoadFloat3(&v.position));
+            }
+            XMStoreFloat3(&out.boundsMin, lo);
+            XMStoreFloat3(&out.boundsMax, hi);
+            return true;
+        }
+    }
+
+    Scene BuildSceneFromGltf(const cgltf_data& data)
+    {
+        using namespace DirectX;
+        Scene scene;
+
+        // 1. Geometry. Each mesh's primitives are appended once, however many nodes use that mesh.
+        std::vector<std::vector<uint32_t>> primitivesOfMesh(data.meshes_count);
+        std::vector<float> scratch;
+        for (size_t m = 0; m < data.meshes_count; ++m)
+        {
+            const cgltf_mesh& mesh = data.meshes[m];
+            for (size_t p = 0; p < mesh.primitives_count; ++p)
+            {
+                if (AppendPrimitive(data, mesh.primitives[p], scene, scratch))
+                    primitivesOfMesh[m].push_back(static_cast<uint32_t>(scene.primitives.size() - 1));
+                else
+                {
+                    ++scene.skippedPrimitives;
+                    log::Warn("Skipping primitive {} of mesh '{}': not a triangle list, or no positions", p,
+                              mesh.name ? mesh.name : "");
+                }
+            }
+        }
+
+        // 2. Instances. Walk the node tree, multiplying each node's local transform with its parent's world
+        //    transform. glTF stores matrices column-major for column vectors (p' = M * p); reading those 16 floats as
+        //    rows gives the transpose, which is exactly the row-vector form DirectXMath uses (p' = p * M).
+        const XMMATRIX flipZ = XMMatrixScaling(1.0f, 1.0f, -1.0f);
+        XMVECTOR sceneMin = g_XMFltMax, sceneMax = -g_XMFltMax;
+        auto visit = [&](auto& self, const cgltf_node& node, FXMMATRIX parentWorld) -> void {
+            XMFLOAT4X4 local;
+            cgltf_node_transform_local(&node, &local.m[0][0]);
+            const XMMATRIX world = XMLoadFloat4x4(&local) * parentWorld; // row vectors: own transform first, then the parent's
+
+            if (node.mesh)
+            {
+                // The vertices were converted to left-handed space (z negated), so the transform is converted to
+                // match: un-flip into glTF space, apply the glTF transform, flip back.
+                const XMMATRIX worldLH = flipZ * world * flipZ;
+                const bool mirrored = XMVectorGetX(XMMatrixDeterminant(worldLH)) < 0.0f;
+                for (const uint32_t primitiveIndex : primitivesOfMesh[cgltf_mesh_index(&data, node.mesh)])
+                {
+                    SceneInstance& instance = scene.instances.emplace_back();
+                    XMStoreFloat4x4(&instance.world, worldLH);
+                    instance.primitiveIndex = primitiveIndex;
+                    scene.mirroredInstances += mirrored;
+
+                    // World bounds: transform the 8 corners of the primitive's object-space box.
+                    const ScenePrimitive& primitive = scene.primitives[primitiveIndex];
+                    for (int corner = 0; corner < 8; ++corner)
+                    {
+                        const XMVECTOR p = XMVectorSet(corner & 1 ? primitive.boundsMax.x : primitive.boundsMin.x,
+                                                       corner & 2 ? primitive.boundsMax.y : primitive.boundsMin.y,
+                                                       corner & 4 ? primitive.boundsMax.z : primitive.boundsMin.z, 1.0f);
+                        const XMVECTOR worldPoint = XMVector3Transform(p, worldLH);
+                        sceneMin = XMVectorMin(sceneMin, worldPoint);
+                        sceneMax = XMVectorMax(sceneMax, worldPoint);
+                    }
+                }
+            }
+            for (size_t i = 0; i < node.children_count; ++i)
+                self(self, *node.children[i], world);
+        };
+        ForEachRootNode(data, [&](const cgltf_node& root) { visit(visit, root, XMMatrixIdentity()); });
+
+        if (!scene.instances.empty())
+        {
+            XMStoreFloat3(&scene.boundsMin, sceneMin);
+            XMStoreFloat3(&scene.boundsMax, sceneMax);
+        }
+        return scene;
     }
 
     std::unique_ptr<GltfDocument> GltfDocument::Load(const std::filesystem::path& path, std::string& error)
@@ -124,7 +290,7 @@ namespace walnut
         for (size_t i = 0; i < data.buffers_count; ++i)
             s.bufferBytes += data.buffers[i].size;
 
-        // Walk the node tree from the default scene's roots (or every parentless node if there are no scenes).
+        // Walk the node tree from the default scene's roots.
         auto visit = [&](auto& self, const cgltf_node& node, size_t depth) -> void {
             s.maxDepth = std::max(s.maxDepth, depth);
             if (node.mesh)
@@ -132,22 +298,10 @@ namespace walnut
             for (size_t i = 0; i < node.children_count; ++i)
                 self(self, *node.children[i], depth + 1);
         };
-        const cgltf_scene* scene = data.scene ? data.scene : (data.scenes_count > 0 ? &data.scenes[0] : nullptr);
-        if (scene)
-        {
-            s.rootNodes = scene->nodes_count;
-            for (size_t i = 0; i < scene->nodes_count; ++i)
-                visit(visit, *scene->nodes[i], 1);
-        }
-        else
-        {
-            for (size_t i = 0; i < data.nodes_count; ++i)
-                if (!data.nodes[i].parent)
-                {
-                    ++s.rootNodes;
-                    visit(visit, data.nodes[i], 1);
-                }
-        }
+        ForEachRootNode(data, [&](const cgltf_node& root) {
+            ++s.rootNodes;
+            visit(visit, root, 1);
+        });
 
         for (size_t m = 0; m < data.meshes_count; ++m)
         {

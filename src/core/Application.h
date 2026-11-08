@@ -61,6 +61,8 @@ namespace walnut
         std::optional<GltfSummary> m_sceneSummary; // set when the scene parsed successfully
         std::string m_sceneError;                  // why it didn't, otherwise
         double m_sceneLoadMs = 0.0;
+        Scene m_scene; // CPU copy of the scene's geometry and instances (uploaded to the GPU in a later step)
+        double m_sceneBuildMs = 0.0;
 
         std::unique_ptr<Window> m_window;
         Input m_input;

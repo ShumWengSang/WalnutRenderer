@@ -96,7 +96,8 @@ namespace walnut
         if (options.pixGpuCapturer)
             pix::LoadGpuCapturer();
 
-        // Parsed and summarized only; nothing reaches the GPU yet, so the document is freed again right away.
+        // Converted into the engine's Scene and kept on the CPU; the GPU doesn't see it yet. The glTF document is
+        // freed right after, since everything needed was copied out of it.
         m_scenePath = ResolveAssetPath(options.scene);
         if (!std::filesystem::is_regular_file(m_scenePath))
         {
@@ -113,6 +114,12 @@ namespace walnut
                 m_sceneSummary = SummarizeGltf(document->GetData());
                 log::Info("Scene: {} (parsed in {:.1f} ms)", ToUtf8(m_scenePath.wstring()), m_sceneLoadMs);
                 LogGltfSummary(*m_sceneSummary);
+
+                const auto buildStart = std::chrono::steady_clock::now();
+                m_scene = BuildSceneFromGltf(document->GetData());
+                m_sceneBuildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - buildStart).count();
+                log::Info("Scene built in {:.1f} ms:", m_sceneBuildMs);
+                LogSceneStats(m_scene);
             }
             else
                 log::Error("Scene {} failed to load: {}", ToUtf8(m_scenePath.wstring()), m_sceneError);
@@ -371,12 +378,16 @@ namespace walnut
             if (m_sceneSummary)
             {
                 const GltfSummary& s = *m_sceneSummary;
-                ImGui::Text("%s (parsed in %.1f ms, not on the GPU yet)", fileName.c_str(), m_sceneLoadMs);
+                ImGui::Text("%s (parsed in %.1f ms, built in %.1f ms)", fileName.c_str(), m_sceneLoadMs, m_sceneBuildMs);
                 ImGui::SetItemTooltip("%s", ToUtf8(m_scenePath.wstring()).c_str());
-                ImGui::Text("%zu nodes, %zu meshes, %zu primitives", s.nodes, s.meshes, s.primitives);
-                ImGui::Text("%llu vertices, %llu triangles", static_cast<unsigned long long>(s.vertices),
-                            static_cast<unsigned long long>(s.indices / 3));
-                ImGui::Text("%zu materials, %zu textures, %zu images", s.materials, s.textures, s.images);
+                ImGui::Text("%zu nodes, %zu meshes, %zu materials, %zu images", s.nodes, s.meshes, s.materials, s.images);
+                ImGui::Text("%zu instances of %zu primitives", m_scene.instances.size(), m_scene.primitives.size());
+                ImGui::Text("%zu vertices, %zu triangles", m_scene.vertices.size(), m_scene.indices.size() / 3);
+                const DirectX::XMFLOAT3& lo = m_scene.boundsMin;
+                const DirectX::XMFLOAT3& hi = m_scene.boundsMax;
+                ImGui::Text("Size %.1f x %.1f x %.1f", hi.x - lo.x, hi.y - lo.y, hi.z - lo.z);
+                ImGui::SetItemTooltip("World bounds (%.2f, %.2f, %.2f) to (%.2f, %.2f, %.2f)", lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
+                ImGui::TextDisabled("CPU only: not on the GPU yet");
             }
             else
             {

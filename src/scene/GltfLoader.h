@@ -1,5 +1,7 @@
 #pragma once
 
+#include "scene/Scene.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -60,4 +62,8 @@ namespace walnut
 
     GltfSummary SummarizeGltf(const cgltf_data& data);
     void LogGltfSummary(const GltfSummary& summary);
+
+    // Converts a glTF file into the engine's Scene: merged vertex/index arrays, one ScenePrimitive per glTF
+    // primitive and one SceneInstance per (node, primitive) pair, all in the engine's left-handed space.
+    Scene BuildSceneFromGltf(const cgltf_data& data);
 }
