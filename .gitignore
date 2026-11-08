@@ -13,3 +13,6 @@ imgui.ini
 # PIX captures and MCP analysis output
 captures/
 *.wpix
+
+# Downloaded by tools/fetch-assets.ps1
+assets/

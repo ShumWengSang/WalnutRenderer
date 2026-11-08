@@ -58,6 +58,7 @@ namespace walnut
         constexpr std::wstring_view kExitAfterFrames = L"--exit-after-frames=";
         constexpr std::wstring_view kExitAfterSeconds = L"--exit-after-seconds=";
         constexpr std::wstring_view kPixCaptureFrame = L"--pix-capture-frame=";
+        constexpr std::wstring_view kScene = L"--scene=";
         for (int i = 1; i < argc; ++i)
         {
             const std::wstring_view arg = argv[i];
@@ -78,6 +79,8 @@ namespace walnut
                 options.exitAfterFrames = std::wcstoull(std::wstring(arg.substr(kExitAfterFrames.size())).c_str(), nullptr, 10);
             else if (arg.starts_with(kExitAfterSeconds))
                 options.exitAfterSeconds = std::wcstod(std::wstring(arg.substr(kExitAfterSeconds.size())).c_str(), nullptr);
+            else if (arg.starts_with(kScene))
+                options.scene = arg.substr(kScene.size());
             else
                 log::Warn("Unknown command-line argument: {}", ToUtf8(arg));
         }
@@ -91,6 +94,14 @@ namespace walnut
         // The GPU capturer hooks D3D12 creation, so it has to be in the process before the device exists.
         if (options.pixGpuCapturer)
             pix::LoadGpuCapturer();
+
+        // Only located for now; loading comes in the next steps.
+        m_scenePath = ResolveAssetPath(options.scene);
+        m_sceneFound = std::filesystem::is_regular_file(m_scenePath);
+        if (m_sceneFound)
+            log::Info("Scene: {}", ToUtf8(m_scenePath.wstring()));
+        else
+            log::Warn("Scene not found: {} (run tools\\fetch-assets.ps1 to download Sponza)", ToUtf8(m_scenePath.wstring()));
 
         m_window = std::make_unique<Window>(WindowDesc{ L"WalnutRenderer", 1280, 720 });
 
@@ -337,6 +348,16 @@ namespace walnut
                         static_cast<unsigned long long>(frameAllocator.GetBytesPerFrame()));
             const DescriptorHeap& srvHeap = m_renderer->GetSrvHeap();
             ImGui::Text("Bindless descriptors: %u / %u used", srvHeap.GetAllocatedCount(), srvHeap.GetCapacity());
+        }
+
+        if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            const std::string fileName = ToUtf8(m_scenePath.filename().wstring());
+            if (m_sceneFound)
+                ImGui::Text("%s (found, not loaded yet)", fileName.c_str());
+            else
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s not found: run tools\\fetch-assets.ps1", fileName.c_str());
+            ImGui::SetItemTooltip("%s", ToUtf8(m_scenePath.wstring()).c_str());
         }
 
         if (ImGui::CollapsingHeader("Tonemapping", ImGuiTreeNodeFlags_DefaultOpen))

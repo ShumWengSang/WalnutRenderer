@@ -4,6 +4,7 @@
 #include "core/Timer.h"
 #include "renderer/TonemapPass.h"
 #include "renderer/TrianglePass.h"
+#include "scene/Assets.h"
 #include "scene/Camera.h"
 #include "scene/FlyCameraController.h"
 
@@ -26,10 +27,11 @@ namespace walnut
         uint64_t pixCaptureFrame = 0;  // take a GPU capture at this frame (implies pixGpuCapturer)
         uint64_t exitAfterFrames = 0; // 0 = run until closed (useful for automated smoke tests)
         double exitAfterSeconds = 0.0; // 0 = run until closed
+        std::filesystem::path scene = kDefaultScene; // relative to the asset directory, or absolute
     };
 
     // Parses --debug-layer, --no-debug-layer, --gpu-validation, --pix, --pix-capture-frame=N,
-    // --exit-after-frames=N and --exit-after-seconds=S.
+    // --exit-after-frames=N, --exit-after-seconds=S and --scene=PATH.
     AppOptions ParseCommandLine();
 
     class Application
@@ -52,6 +54,8 @@ namespace walnut
 
         AppOptions m_options;
         std::filesystem::path m_exeDir;
+        std::filesystem::path m_scenePath; // m_options.scene resolved against the asset directory
+        bool m_sceneFound = false;
 
         std::unique_ptr<Window> m_window;
         Input m_input;

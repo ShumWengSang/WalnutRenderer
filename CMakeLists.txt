@@ -60,6 +60,8 @@ set(WALNUT_SOURCES
     src/renderer/TrianglePass.cpp
     src/renderer/TrianglePass.h
 
+    src/scene/Assets.cpp
+    src/scene/Assets.h
     src/scene/Camera.cpp
     src/scene/Camera.h
     src/scene/FlyCameraController.cpp
@@ -74,6 +76,8 @@ target_include_directories(WalnutRenderer PRIVATE src)
 target_compile_definitions(WalnutRenderer PRIVATE
     UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
     WALNUT_AGILITY_SDK_VERSION=${WALNUT_AGILITY_SDK_EXPORT_VERSION}
+    # Where tools/fetch-assets.ps1 puts models. Absolute, so the exe finds them from any build folder.
+    WALNUT_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets"
 )
 target_compile_options(WalnutRenderer PRIVATE /W4 /permissive- /Zc:__cplusplus /utf-8)
 target_link_libraries(WalnutRenderer PRIVATE

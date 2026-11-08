@@ -36,6 +36,16 @@ cmake --build --preset x64-debug
 
 The presets are `x64-debug` and `x64-release` (RelWithDebInfo).
 
+### Assets
+Models aren't in the repository. Download them into the git-ignored `assets/` folder with:
+
+```powershell
+.\tools\fetch-assets.ps1                               # Sponza (~50 MB)
+.\tools\fetch-assets.ps1 -Models Sponza,DamagedHelmet  # any model folder from glTF-Sample-Assets
+```
+
+The script does a sparse, shallow fetch of [KhronosGroup/glTF-Sample-Assets](https://github.com/KhronosGroup/glTF-Sample-Assets) at a pinned commit, downloading only each model's `glTF/` folder (plus its README and LICENSE) into `assets/<Model>/`. CMake bakes the absolute path of `assets/` into the exe (`WALNUT_ASSET_DIR`), so every build folder finds the same models.
+
 ## Command-line options
 
 | Option | Effect |
@@ -46,6 +56,7 @@ The presets are `x64-debug` and `x64-release` (RelWithDebInfo).
 | `--exit-after-seconds=S` | Quit after S seconds. Used by `tools/pix-capture.ps1`. |
 | `--pix` | Load PIX's GPU capturer (`WinPixGpuCapturer.dll`) at startup, so you can attach PIX or take captures from inside the app. |
 | `--pix-capture-frame=N` | Take a GPU capture of frame N into `bin/captures/`. Implies `--pix`. |
+| `--scene=PATH` | glTF scene to use. Relative paths start at `assets/`. The default is `Sponza/Sponza.gltf`. |
 
 Logs go to the debugger output and to `WalnutRenderer.log` next to the exe. When the debug layer is active, its messages also go to the log.
 
@@ -70,7 +81,7 @@ src/core/                 Application loop, Win32 Window, Input, Timer, Log
 src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, ShaderCompiler, Pix
 src/renderer/             Renderer (frames in flight, begin/end frame), TrianglePass
 src/ui/                   ImGuiLayer (Win32 + DX12 backends)
-tools/                    pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher)
+tools/                    fetch-assets.ps1 (download glTF models), pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher)
 ```
 
 ## Profiling and debugging with PIX
