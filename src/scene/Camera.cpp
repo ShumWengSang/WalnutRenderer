@@ -1,5 +1,6 @@
 #include "scene/Camera.h"
 
+#include <algorithm>
 #include <cmath>
 
 using namespace DirectX;
@@ -50,5 +51,41 @@ namespace walnut
             0.0f,       f,    0.0f,  0.0f,
             0.0f,       0.0f, 0.0f,  1.0f,
             0.0f,       0.0f, nearZ, 0.0f);
+    }
+
+    void FrameBounds(Camera& camera, const XMFLOAT3& boundsMin, const XMFLOAT3& boundsMax)
+    {
+        const XMVECTOR lo = XMLoadFloat3(&boundsMin);
+        const XMVECTOR hi = XMLoadFloat3(&boundsMax);
+        const XMVECTOR center = (lo + hi) * 0.5f;
+        const float radius = std::max(XMVectorGetX(XMVector3Length(hi - lo)) * 0.5f, 0.01f);
+
+        camera.yaw = 0.0f;
+        camera.pitch = XMConvertToRadians(-25.0f);
+        // A sphere of radius r just fits a cone with half-angle a at distance r / sin(a).
+        const float distance = radius / std::sin(camera.verticalFov * 0.5f);
+        XMStoreFloat3(&camera.position, center - camera.GetForward() * distance);
+    }
+
+    void PlaceStartCamera(Camera& camera, const XMFLOAT3& boundsMin, const XMFLOAT3& boundsMax)
+    {
+        const XMFLOAT3 size = { boundsMax.x - boundsMin.x, boundsMax.y - boundsMin.y, boundsMax.z - boundsMin.z };
+        const float radius = 0.5f * std::sqrt(size.x * size.x + size.y * size.y + size.z * size.z);
+        constexpr float kWalkInRadius = 5.0f; // meters; bigger than any single object, smaller than a room
+        if (radius < kWalkInRadius)
+        {
+            FrameBounds(camera, boundsMin, boundsMax);
+            return;
+        }
+
+        // Stand a fifth of the way in from one end (right at the end is often behind a wall), a quarter of the way up, looking down the longest horizontal axis.
+        const bool alongX = size.x >= size.z;
+        camera.position = { (boundsMin.x + boundsMax.x) * 0.5f, boundsMin.y + 0.25f * size.y, (boundsMin.z + boundsMax.z) * 0.5f };
+        if (alongX)
+            camera.position.x = boundsMin.x + 0.2f * size.x;
+        else
+            camera.position.z = boundsMin.z + 0.2f * size.z;
+        camera.yaw = alongX ? XMConvertToRadians(90.0f) : 0.0f; // yaw 90 = looking down +X
+        camera.pitch = XMConvertToRadians(5.0f);
     }
 }

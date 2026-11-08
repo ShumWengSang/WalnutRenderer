@@ -2,8 +2,8 @@
 
 #include "core/Input.h"
 #include "core/Timer.h"
+#include "renderer/ScenePass.h"
 #include "renderer/TonemapPass.h"
-#include "renderer/TrianglePass.h"
 #include "scene/Assets.h"
 #include "scene/Camera.h"
 #include "scene/FlyCameraController.h"
@@ -57,18 +57,19 @@ namespace walnut
 
         AppOptions m_options;
         std::filesystem::path m_exeDir;
+        std::filesystem::path m_shaderDir; // where .hlsl files are compiled from (source tree, or next to the exe)
         std::filesystem::path m_scenePath; // m_options.scene resolved against the asset directory
         std::optional<GltfSummary> m_sceneSummary; // set when the scene parsed successfully
         std::string m_sceneError;                  // why it didn't, otherwise
         double m_sceneLoadMs = 0.0;
-        Scene m_scene; // CPU copy of the scene's geometry and instances (uploaded to the GPU in a later step)
+        Scene m_scene; // CPU copy of the scene; ScenePass uploads it
         double m_sceneBuildMs = 0.0;
 
         std::unique_ptr<Window> m_window;
         Input m_input;
         std::unique_ptr<Renderer> m_renderer;
         std::unique_ptr<ShaderCompiler> m_shaderCompiler;
-        std::unique_ptr<TrianglePass> m_trianglePass;
+        std::unique_ptr<ScenePass> m_scenePass; // null when no scene loaded
         std::unique_ptr<TonemapPass> m_tonemapPass;
         std::unique_ptr<ImGuiLayer> m_imgui;
         Timer m_timer;
@@ -76,17 +77,10 @@ namespace walnut
         // Demo state
         float m_clearColor[4] = {}; // starts as Renderer::kDefaultClearColor (the scene target's fast-clear color)
         TonemapSettings m_tonemapSettings;
-        // Multiplies both triangles' colors, to push them into HDR (> 1.0) and see what the tonemap curve does.
-        float m_triangleBrightness = 1.0f;
+        SceneViewSettings m_sceneView;
         Camera m_camera;
+        Camera m_homeCamera; // where "Reset camera" goes: framing the loaded scene
         FlyCameraController m_cameraController;
-        TriangleParams m_triangle;
-        // A bigger, darker (gray-tinted) triangle half a unit behind the main one.
-        TriangleParams m_backTriangle{ .tint = { 0.55f, 0.55f, 0.6f, 1.0f }, .offset = { 0.25f, 0.1f, 0.5f }, .angle = 0.4f, .scale = 1.8f };
-        bool m_depthTest = true;
-        TextureViewSettings m_textureView;
-        bool m_autoRotate = true;
-        float m_rotationSpeed = 1.0f; // radians per second
         bool m_showDemoWindow = false;
         float m_smoothedFrameMs = 0.0f;
         std::filesystem::path m_lastCapturePath;

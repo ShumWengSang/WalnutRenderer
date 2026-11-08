@@ -64,22 +64,25 @@ Logs go to the debugger output and to `WalnutRenderer.log` next to the exe. When
 
 | Input | Action |
 |---|---|
-| WASD / arrow keys | Move the triangle |
-| Mouse wheel | Scale |
-| Right mouse drag | Rotate (raw mouse deltas) |
-| Space | Toggle auto-rotate |
-| Middle click | Reset the transform |
-| F5 | Recompile shaders. Edit `build/<preset>/bin/shaders/triangle.hlsl` to try it live. |
+| Right mouse + move | Look around (raw mouse deltas) |
+| W/S, A/D | Move forward/back, strafe left/right |
+| Q/E | Move down/up |
+| Shift | Move faster |
+| Mouse wheel | Change move speed |
+| F5 | Recompile shaders. Edit `shaders/scene.hlsl` in the repo and press F5 to see the change live. |
 | Esc | Quit |
+
+The camera starts inside large scenes like Sponza, or framing small ones from outside. **Camera → Reset camera** goes back there.
 
 ## Layout
 
 ```
 cmake/Dependencies.cmake  FetchContent: DirectX-Headers, Agility SDK, DXC, Dear ImGui, WinPixEventRuntime, cgltf (all pinned)
-shaders/                  HLSL sources, copied next to the exe and compiled at runtime
+shaders/                  HLSL sources, compiled at runtime straight from here (a copy next to the exe is the fallback)
 src/core/                 Application loop, Win32 Window, Input, Timer, Log
 src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, ShaderCompiler, Pix
-src/renderer/             Renderer (frames in flight, begin/end frame), TrianglePass
+src/renderer/             Renderer (frames in flight, begin/end frame), ScenePass, TonemapPass
+src/scene/                Camera, fly controller, glTF loading (cgltf) into a flat Scene
 src/ui/                   ImGuiLayer (Win32 + DX12 backends)
 tools/                    fetch-assets.ps1 (download glTF models), pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher)
 ```
@@ -96,7 +99,7 @@ The code uses WinPixEventRuntime (`src/gfx/Pix.h`). `USE_PIX` is defined in ever
 | Timeline | Events |
 |---|---|
 | CPU | `Frame` › `PumpMessages`, `Update + UI`, `Render` › `Wait for frame fence`, `ImGui::Render`, `Present` |
-| GPU (command list) | `Frame` › `Clear back buffer`, `TrianglePass`, `ImGui` |
+| GPU (command list) | `Frame` › `Clear back buffer`, `ScenePass`, `ImGui` |
 | Counter | `Frame time (ms)`, recorded with `PIXReportCounter` every frame |
 
 Keep event names constant, with no frame numbers formatted into them. PIX groups executions by name, so a name that changes every frame creates a separate event each frame and breaks per-event statistics.
@@ -129,7 +132,7 @@ Example prompt: *"Survey captures\WalnutRenderer_timing_….wpix with PixMcp: fr
 2. If the window was resized, the renderer flushes the GPU and calls `ResizeBuffers` on the swapchain.
 3. ImGui starts a new frame. `Input` is told whether ImGui is using the keyboard or mouse, and ignores that device for game input while it is.
 4. `Renderer::BeginFrame()` waits on this frame slot's fence and resets its command allocator. It then records an Enhanced Barrier that changes the back buffer's layout from PRESENT to RENDER_TARGET (`SyncBefore = NONE`, `SyncAfter = RENDER_TARGET`), clears it, and sets the viewport and scissor.
-5. The triangle and the ImGui overlay are recorded into the command list.
+5. The scene (one draw per instance) and the ImGui overlay are recorded into the command list.
 6. `Renderer::EndFrame()` records an Enhanced Barrier from RENDER_TARGET back to PRESENT (`SyncBefore = RENDER_TARGET`, `SyncAfter = NONE`) and executes the command list. It then presents and signals the frame fence.
 
 ### Barriers

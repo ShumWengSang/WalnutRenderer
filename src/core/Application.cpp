@@ -15,7 +15,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <numbers>
 #include <string>
 
 namespace walnut
@@ -146,13 +145,28 @@ namespace walnut
 #else
         constexpr bool kShaderDebugInfo = false;
 #endif
-        m_shaderCompiler = std::make_unique<ShaderCompiler>(kShaderDebugInfo, m_exeDir / "shaders");
-        m_trianglePass = std::make_unique<TrianglePass>(m_renderer->GetDevice(), m_renderer->GetUploadContext(),
-                                                        m_renderer->GetSrvHeap(), *m_shaderCompiler,
-                                                        m_exeDir / "shaders" / "triangle.hlsl", m_renderer->GetRootSignature(),
-                                                        Renderer::kSceneColorFormat, Renderer::kDepthFormat);
+        // Prefer the source tree's shaders, so edits there are picked up by Reload (F5) without rebuilding.
+        // Fall back to the copy CMake puts next to the exe.
+        m_shaderDir = std::filesystem::path(u8"" WALNUT_SHADER_SOURCE_DIR).lexically_normal();
+        if (!std::filesystem::is_directory(m_shaderDir))
+            m_shaderDir = m_exeDir / "shaders";
+        log::Info("Compiling shaders from {}", ToUtf8(m_shaderDir.wstring()));
+        m_shaderCompiler = std::make_unique<ShaderCompiler>(kShaderDebugInfo, m_shaderDir);
+        if (!m_scene.instances.empty())
+        {
+            m_scenePass = std::make_unique<ScenePass>(m_renderer->GetDevice(), m_renderer->GetUploadContext(),
+                                                      m_renderer->GetSrvHeap(), *m_shaderCompiler,
+                                                      m_shaderDir / "scene.hlsl", m_renderer->GetRootSignature(),
+                                                      Renderer::kSceneColorFormat, Renderer::kDepthFormat, m_scene);
+            PlaceStartCamera(m_homeCamera, m_scene.boundsMin, m_scene.boundsMax);
+            m_camera = m_homeCamera;
+            // Cross the scene's bounding sphere in about 8 seconds.
+            const float diameter = DirectX::XMVectorGetX(DirectX::XMVector3Length(
+                DirectX::XMVectorSubtract(DirectX::XMLoadFloat3(&m_scene.boundsMax), DirectX::XMLoadFloat3(&m_scene.boundsMin))));
+            m_cameraController.moveSpeed = std::clamp(diameter / 8.0f, 0.1f, 100.0f);
+        }
         m_tonemapPass = std::make_unique<TonemapPass>(m_renderer->GetDevice(), *m_shaderCompiler,
-                                                      m_exeDir / "shaders" / "tonemap.hlsl", m_renderer->GetRootSignature(),
+                                                      m_shaderDir / "tonemap.hlsl", m_renderer->GetRootSignature(),
                                                       SwapChain::kSrgbFormat);
 
         // Execute every upload recorded while loading, before the first frame reads that data.
@@ -168,7 +182,7 @@ namespace walnut
 
         // Tear down in dependency order: everything that holds GPU objects goes before the renderer.
         m_imgui.reset();
-        m_trianglePass.reset();
+        m_scenePass.reset();
         m_tonemapPass.reset();
         m_shaderCompiler.reset();
         m_renderer.reset();
@@ -229,19 +243,8 @@ namespace walnut
                 PIXScopedEvent(pix::kColorCpu, L"Render");
                 m_renderer->BeginFrame(m_clearColor);
                 ID3D12GraphicsCommandList* commandList = m_renderer->GetCommandList();
-                FrameAllocator& frameAllocator = m_renderer->GetFrameAllocator();
-                // Deliberately drawn near-to-far: the far triangle is drawn last. Without the depth test it
-                // paints over the near one; with it, its hidden pixels fail the GREATER test and are discarded.
-                // The brightness multiplier can push their colors above 1.0 (HDR) to show what tonemapping does.
-                TriangleParams front = m_triangle;
-                TriangleParams back = m_backTriangle;
-                for (int channel = 0; channel < 3; ++channel)
-                {
-                    front.tint[channel] *= m_triangleBrightness;
-                    back.tint[channel] *= m_triangleBrightness;
-                }
-                m_trianglePass->Render(commandList, frameAllocator, front, viewProjection, m_depthTest, m_textureView);
-                m_trianglePass->Render(commandList, frameAllocator, back, viewProjection, m_depthTest, m_textureView);
+                if (m_scenePass)
+                    m_scenePass->Render(commandList, m_renderer->GetFrameAllocator(), viewProjection, m_sceneView);
 
                 // The 3D scene is done; from here on we draw into the back buffer.
                 m_renderer->BeginBackBufferPass();
@@ -275,23 +278,17 @@ namespace walnut
             PostMessageW(m_window->GetHandle(), WM_CLOSE, 0, 0);
         if (m_input.WasKeyPressed(VK_F5))
             ReloadShaders();
-        if (m_input.WasKeyPressed(VK_SPACE))
-            m_autoRotate = !m_autoRotate;
 
         m_cameraController.Update(m_camera, m_input, deltaSeconds);
-
-        if (m_autoRotate)
-            m_triangle.angle += m_rotationSpeed * deltaSeconds;
-        m_triangle.angle = std::remainder(m_triangle.angle, 2.0f * std::numbers::pi_v<float>);
     }
 
     void Application::ReloadShaders()
     {
         // The old PSOs may still be referenced by in-flight frames.
         m_renderer->WaitForGpu();
-        const bool triangleOk = m_trianglePass->ReloadShaders();
+        const bool sceneOk = !m_scenePass || m_scenePass->ReloadShaders();
         const bool tonemapOk = m_tonemapPass->ReloadShaders();
-        if (triangleOk && tonemapOk)
+        if (sceneOk && tonemapOk)
             log::Info("Shaders reloaded");
     }
 
@@ -387,7 +384,16 @@ namespace walnut
                 const DirectX::XMFLOAT3& hi = m_scene.boundsMax;
                 ImGui::Text("Size %.1f x %.1f x %.1f", hi.x - lo.x, hi.y - lo.y, hi.z - lo.z);
                 ImGui::SetItemTooltip("World bounds (%.2f, %.2f, %.2f) to (%.2f, %.2f, %.2f)", lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
-                ImGui::TextDisabled("CPU only: not on the GPU yet");
+                if (m_scenePass)
+                {
+                    ImGui::Text("GPU: %u draws per frame, %.1f MB of buffers", m_scenePass->GetDrawCount(),
+                                static_cast<double>(m_scenePass->GetGpuBytes()) / (1024.0 * 1024.0));
+                    const char* views[] = { "Normals (world)", "Texture coordinates", "Instance colors" };
+                    int view = static_cast<int>(m_sceneView.debugView);
+                    if (ImGui::Combo("Show", &view, views, IM_ARRAYSIZE(views)))
+                        m_sceneView.debugView = static_cast<SceneDebugView>(view);
+                    ImGui::Checkbox("Back-face culling", &m_sceneView.backfaceCulling);
+                }
             }
             else
             {
@@ -403,8 +409,6 @@ namespace walnut
             if (ImGui::Combo("Curve", &op, operators, IM_ARRAYSIZE(operators)))
                 m_tonemapSettings.op = static_cast<TonemapOperator>(op);
             ImGui::SliderFloat("Exposure", &m_tonemapSettings.exposureStops, -6.0f, 6.0f, "%+.1f stops");
-            ImGui::SliderFloat("Triangle brightness", &m_triangleBrightness, 0.0f, 16.0f, "%.2fx",
-                               ImGuiSliderFlags_Logarithmic);
             ImGui::TextDisabled("Output: back buffer _SRGB view (hardware linear -> sRGB)");
         }
 
@@ -417,31 +421,17 @@ namespace walnut
             ImGui::SliderFloat("Near plane", &m_camera.nearZ, 0.01f, 2.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
             ImGui::SliderFloat("Move speed", &m_cameraController.moveSpeed, 0.05f, 500.0f, "%.2f m/s", ImGuiSliderFlags_Logarithmic);
             if (ImGui::Button("Reset camera"))
-                m_camera = Camera{};
+                m_camera = m_homeCamera;
         }
 
-        if (ImGui::CollapsingHeader("Triangle", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader("Shaders", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            ImGui::Checkbox("Depth test", &m_depthTest);
-            ImGui::SameLine();
-            ImGui::TextDisabled("(darker triangle is behind, but drawn last)");
-            const char* filterModes[] = { "Point, no mips", "Bilinear, no mips", "Trilinear (mips)",
-                                          "Anisotropic 16x (mips)", "Show mip level" };
-            int filterMode = static_cast<int>(m_textureView.filterMode);
-            if (ImGui::Combo("Texture filter", &filterMode, filterModes, IM_ARRAYSIZE(filterModes)))
-                m_textureView.filterMode = static_cast<TextureFilterMode>(filterMode);
-            ImGui::SliderFloat("UV tiling", &m_textureView.uvScale, 1.0f, 64.0f, "%.1fx", ImGuiSliderFlags_Logarithmic);
-            ImGui::ColorEdit4("Tint", m_triangle.tint);
-            ImGui::SliderFloat3("Offset", m_triangle.offset, -1.0f, 1.0f);
-            ImGui::SliderAngle("Angle", &m_triangle.angle, -180.0f, 180.0f);
-            ImGui::SliderFloat("Scale", &m_triangle.scale, 0.1f, 4.0f);
-            ImGui::Checkbox("Auto-rotate", &m_autoRotate);
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(120.0f);
-            ImGui::SliderFloat("Speed", &m_rotationSpeed, -6.0f, 6.0f, "%.1f rad/s");
             if (ImGui::Button("Reload shaders (F5)"))
                 ReloadShaders();
-            for (const std::string* error : { &m_trianglePass->GetLastError(), &m_tonemapPass->GetLastError() })
+            ImGui::SameLine();
+            ImGui::TextDisabled("from %s", ToUtf8(m_shaderDir.wstring()).c_str());
+            const std::string noError;
+            for (const std::string* error : { m_scenePass ? &m_scenePass->GetLastError() : &noError, &m_tonemapPass->GetLastError() })
             {
                 if (error->empty())
                     continue;
@@ -479,7 +469,7 @@ namespace walnut
 
             ImGui::Separator();
             ImGui::TextDisabled("Hold right mouse: look   WASD: move   Q/E: down/up");
-            ImGui::TextDisabled("Shift: fast   wheel: speed   Space: auto-rotate   Esc: quit");
+            ImGui::TextDisabled("Shift: fast   wheel: speed   F5: reload shaders   Esc: quit");
         }
 
         DrawPixUI();

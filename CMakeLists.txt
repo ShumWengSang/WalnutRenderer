@@ -55,10 +55,10 @@ set(WALNUT_SOURCES
 
     src/renderer/Renderer.cpp
     src/renderer/Renderer.h
+    src/renderer/ScenePass.cpp
+    src/renderer/ScenePass.h
     src/renderer/TonemapPass.cpp
     src/renderer/TonemapPass.h
-    src/renderer/TrianglePass.cpp
-    src/renderer/TrianglePass.h
 
     src/scene/Assets.cpp
     src/scene/Assets.h
@@ -82,6 +82,8 @@ target_compile_definitions(WalnutRenderer PRIVATE
     WALNUT_AGILITY_SDK_VERSION=${WALNUT_AGILITY_SDK_EXPORT_VERSION}
     # Where tools/fetch-assets.ps1 puts models. Absolute, so the exe finds them from any build folder.
     WALNUT_ASSET_DIR="${PROJECT_SOURCE_DIR}/assets"
+    # Shaders are compiled from here when it exists, so editing shaders/*.hlsl + F5 reloads them live.
+    WALNUT_SHADER_SOURCE_DIR="${PROJECT_SOURCE_DIR}/shaders"
 )
 target_compile_options(WalnutRenderer PRIVATE /W4 /permissive- /Zc:__cplusplus /utf-8)
 target_link_libraries(WalnutRenderer PRIVATE
@@ -96,7 +98,8 @@ target_link_libraries(WalnutRenderer PRIVATE
 )
 walnut_copy_runtime_dlls(WalnutRenderer)
 
-# Shaders are compiled at runtime, so ship the HLSL sources next to the exe.
+# Shaders are compiled at runtime from the source tree (WALNUT_SHADER_SOURCE_DIR). The copy next to the exe is the
+# fallback for when the exe runs somewhere the source tree doesn't exist.
 add_custom_target(WalnutShaders ALL
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
         "${CMAKE_SOURCE_DIR}/shaders" "$<TARGET_FILE_DIR:WalnutRenderer>/shaders"

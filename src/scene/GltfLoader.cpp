@@ -118,9 +118,9 @@ namespace walnut
             const std::span<SceneVertex> vertices(scene.vertices.data() + firstVertex, vertexCount);
 
             // glTF is right-handed (+Z points out of the screen); the engine is left-handed (+Z into the screen).
-            // Negating Z converts between them. It mirrors the geometry, which also flips which side the bitangent
-            // is on (so tangent.w flips) and turns glTF's counter-clockwise front faces into clockwise ones,
-            // which is D3D12's default front face.
+            // Negating Z converts between them. The data is mirrored, which flips which side the bitangent is on
+            // (so tangent.w flips). The rendered image is not mirrored, though: the left-handed projection mirrors
+            // it back, so triangles keep glTF's counter-clockwise front faces on screen (see ScenePass's PSO).
             ReadAttribute(primitive, cgltf_attribute_type_position, 3, vertices, scratch,
                           [](SceneVertex& v, const float* f) { v.position = { f[0], f[1], -f[2] }; });
             ReadAttribute(primitive, cgltf_attribute_type_normal, 3, vertices, scratch,

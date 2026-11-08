@@ -33,4 +33,14 @@ namespace walnut
             return DirectX::XMMatrixMultiply(GetViewMatrix(), GetProjectionMatrix(aspect));
         }
     };
+
+    // Places the camera so a whole box is in view: looking slightly down at its center, backed off far enough
+    // that the box's bounding sphere fits in the vertical field of view.
+    void FrameBounds(Camera& camera, const DirectX::XMFLOAT3& boundsMin, const DirectX::XMFLOAT3& boundsMax);
+
+    // Where to start in a freshly loaded scene. Objects (small bounds) are framed from outside with FrameBounds;
+    // environments (bounds bigger than a room) are entered: the camera stands near one end, a quarter of the way
+    // up, looking along the longest horizontal axis. A heuristic, since a glTF file has no "start here" marker
+    // unless it includes a camera.
+    void PlaceStartCamera(Camera& camera, const DirectX::XMFLOAT3& boundsMin, const DirectX::XMFLOAT3& boundsMax);
 }
