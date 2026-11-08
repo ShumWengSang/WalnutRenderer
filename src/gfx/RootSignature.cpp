@@ -47,6 +47,8 @@ namespace walnut
             MakeStaticSampler(0, D3D12_FILTER_ANISOTROPIC, D3D12_TEXTURE_ADDRESS_MODE_WRAP),            // s0
             MakeStaticSampler(1, D3D12_FILTER_MIN_MAG_MIP_LINEAR, D3D12_TEXTURE_ADDRESS_MODE_CLAMP),    // s1
             MakeStaticSampler(2, D3D12_FILTER_MIN_MAG_MIP_POINT, D3D12_TEXTURE_ADDRESS_MODE_CLAMP),     // s2
+            MakeStaticSampler(3, D3D12_FILTER_MIN_MAG_MIP_LINEAR, D3D12_TEXTURE_ADDRESS_MODE_WRAP),     // s3 trilinear
+            MakeStaticSampler(4, D3D12_FILTER_MIN_MAG_MIP_POINT, D3D12_TEXTURE_ADDRESS_MODE_WRAP),      // s4
         };
 
         // CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED is what makes ResourceDescriptorHeap[] legal in shaders. There is no

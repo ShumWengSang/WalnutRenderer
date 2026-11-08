@@ -4,7 +4,7 @@
 //                       ConstantBuffer<T> at b0 with up to 8 uints
 //   b1  root CBV        per-draw data, e.g. a world matrix
 //   b2  root CBV        per-frame data, e.g. camera and lights
-//   s0..s2              static samplers declared below
+//   s0..s4              static samplers declared below
 //
 // Textures and buffers are not bound at all: shaders index the descriptor heap directly with
 // ResourceDescriptorHeap[index] (Shader Model 6.6).
@@ -15,5 +15,7 @@
 SamplerState g_samplerAnisotropicWrap : register(s0);
 SamplerState g_samplerLinearClamp     : register(s1);
 SamplerState g_samplerPointClamp      : register(s2);
+SamplerState g_samplerLinearWrap      : register(s3); // trilinear: linear within a mip and between mips
+SamplerState g_samplerPointWrap       : register(s4);
 
 #endif

@@ -37,6 +37,8 @@ set(WALNUT_SOURCES
     src/gfx/Device.h
     src/gfx/FrameAllocator.cpp
     src/gfx/FrameAllocator.h
+    src/gfx/MipChain.cpp
+    src/gfx/MipChain.h
     src/gfx/GpuUtils.h
     src/gfx/Pix.cpp
     src/gfx/Pix.h

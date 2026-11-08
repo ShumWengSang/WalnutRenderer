@@ -7,6 +7,7 @@
 
 #include <DirectXMath.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -25,6 +26,22 @@ namespace walnut
         float offset[3] = { 0.0f, 0.0f, 0.0f }; // world units
         float angle = 0.0f;                     // radians around +Z
         float scale = 1.0f;
+    };
+
+    // How the triangle's checkerboard is sampled, to compare filtering. Values must match triangle.hlsl.
+    enum class TextureFilterMode : uint32_t
+    {
+        PointNoMips = 0,    // nearest texel of mip 0 only: blocky up close, shimmering when far
+        BilinearNoMips = 1, // 4 texels of mip 0 blended: smooth up close, still shimmering when far
+        Trilinear = 2,      // bilinear in the two nearest mips, blended: no shimmer, but blurry at grazing angles
+        Anisotropic = 3,    // up to 16 trilinear samples along the stretched direction: sharp at grazing angles
+        ShowMipLevel = 4,   // debug: color each pixel by the mip level the hardware picks
+    };
+
+    struct TextureViewSettings
+    {
+        TextureFilterMode filterMode = TextureFilterMode::Anisotropic;
+        float uvScale = 2.0f; // how many times the texture repeats across the triangle
     };
 
     // The classic first D3D12 draw, done the bindless way: the vertex shader pulls its vertices from a
@@ -48,7 +65,8 @@ namespace walnut
 
         // Expects the bindless state (descriptor heap + root signature) to be bound already.
         void Render(ID3D12GraphicsCommandList* commandList, FrameAllocator& frameAllocator,
-                    const TriangleParams& params, DirectX::FXMMATRIX viewProjection, bool depthTest) const;
+                    const TriangleParams& params, DirectX::FXMMATRIX viewProjection, bool depthTest,
+                    const TextureViewSettings& textureView) const;
 
     private:
         void CreateVertexBuffer(UploadContext& upload);

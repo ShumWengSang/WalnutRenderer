@@ -207,8 +207,8 @@ namespace walnut
                     front.tint[channel] *= m_triangleBrightness;
                     back.tint[channel] *= m_triangleBrightness;
                 }
-                m_trianglePass->Render(commandList, frameAllocator, front, viewProjection, m_depthTest);
-                m_trianglePass->Render(commandList, frameAllocator, back, viewProjection, m_depthTest);
+                m_trianglePass->Render(commandList, frameAllocator, front, viewProjection, m_depthTest, m_textureView);
+                m_trianglePass->Render(commandList, frameAllocator, back, viewProjection, m_depthTest, m_textureView);
 
                 // The 3D scene is done; from here on we draw into the back buffer.
                 m_renderer->BeginBackBufferPass();
@@ -368,6 +368,12 @@ namespace walnut
             ImGui::Checkbox("Depth test", &m_depthTest);
             ImGui::SameLine();
             ImGui::TextDisabled("(darker triangle is behind, but drawn last)");
+            const char* filterModes[] = { "Point, no mips", "Bilinear, no mips", "Trilinear (mips)",
+                                          "Anisotropic 16x (mips)", "Show mip level" };
+            int filterMode = static_cast<int>(m_textureView.filterMode);
+            if (ImGui::Combo("Texture filter", &filterMode, filterModes, IM_ARRAYSIZE(filterModes)))
+                m_textureView.filterMode = static_cast<TextureFilterMode>(filterMode);
+            ImGui::SliderFloat("UV tiling", &m_textureView.uvScale, 1.0f, 64.0f, "%.1fx", ImGuiSliderFlags_Logarithmic);
             ImGui::ColorEdit4("Tint", m_triangle.tint);
             ImGui::SliderFloat3("Offset", m_triangle.offset, -1.0f, 1.0f);
             ImGui::SliderAngle("Angle", &m_triangle.angle, -180.0f, 180.0f);

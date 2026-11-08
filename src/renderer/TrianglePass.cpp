@@ -5,6 +5,7 @@
 #include "gfx/Device.h"
 #include "gfx/FrameAllocator.h"
 #include "gfx/GpuUtils.h"
+#include "gfx/MipChain.h"
 #include "gfx/Pix.h"
 #include "gfx/RootSignature.h"
 #include "gfx/ShaderCompiler.h"
@@ -50,6 +51,8 @@ namespace walnut
         {
             uint32_t vertexBufferIndex; // descriptor heap index of the vertex buffer's SRV
             uint32_t textureIndex;      // descriptor heap index of the checkerboard texture's SRV
+            uint32_t filterMode;        // TextureFilterMode
+            float uvScale;              // how many times the texture repeats across the triangle
         };
         static_assert(sizeof(TriangleDrawConstants) <= kNumDrawConstants * sizeof(uint32_t));
     }
@@ -75,33 +78,42 @@ namespace walnut
     void TrianglePass::CreateCheckerTexture(UploadContext& upload)
     {
         // Generate the pixels on the CPU: 4 bytes per texel (R, G, B, A), rows tightly packed.
-        std::vector<uint8_t> pixels(kCheckerSize * kCheckerSize * 4);
+        ImageRgba8 image{ .width = kCheckerSize, .height = kCheckerSize };
+        image.pixels.resize(kCheckerSize * kCheckerSize * 4);
         for (uint32_t y = 0; y < kCheckerSize; ++y)
         {
             for (uint32_t x = 0; x < kCheckerSize; ++x)
             {
                 const bool light = ((x / kCheckerSquare) + (y / kCheckerSquare)) % 2 == 0;
-                uint8_t* texel = &pixels[(y * kCheckerSize + x) * 4];
+                uint8_t* texel = &image.pixels[(y * kCheckerSize + x) * 4];
                 texel[0] = texel[1] = texel[2] = light ? 230 : 60;
                 texel[3] = 255;
             }
         }
+
+        // Mip chain: 256x256, 128x128, ..., 1x1 = 9 images. Averaged in linear light, because the bytes are sRGB.
+        const std::vector<ImageRgba8> mips = GenerateMipChain(std::move(image), true /*srgb*/);
 
         // _SRGB: these byte values were picked by how they *look* (sRGB, like any image file). Sampling through an
         // _SRGB format converts them back to linear light, which is what our lighting math expects.
         m_checkerTexture = Texture(m_device, TextureDesc{
             .width = kCheckerSize,
             .height = kCheckerSize,
-            .mipLevels = 1,
+            .mipLevels = static_cast<uint16_t>(mips.size()),
             .format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
             .initialLayout = D3D12_BARRIER_LAYOUT_COPY_DEST,
             .name = L"CheckerTexture",
         });
-        const TextureSubresourceData mip0{ .data = pixels.data(), .rowPitch = kCheckerSize * 4 };
-        upload.UploadTexture(m_checkerTexture, std::span(&mip0, 1));
+
+        // One subresource per mip level, in order (subresource index = mip index for a non-array texture).
+        std::vector<TextureSubresourceData> subresources;
+        for (const ImageRgba8& mip : mips)
+            subresources.push_back({ .data = mip.pixels.data(), .rowPitch = mip.width * 4ull });
+        upload.UploadTexture(m_checkerTexture, subresources);
 
         m_checkerSrv = m_srvHeap.Allocate();
-        m_checkerTexture.CreateSrv(m_device, m_checkerSrv.cpu);
+        m_checkerTexture.CreateSrv(m_device, m_checkerSrv.cpu); // the SRV covers all mips
+        log::Info("Checker texture: {}x{}, {} mips", kCheckerSize, kCheckerSize, mips.size());
     }
 
     void TrianglePass::CreateVertexBuffer(UploadContext& upload)
@@ -192,7 +204,8 @@ namespace walnut
     }
 
     void TrianglePass::Render(ID3D12GraphicsCommandList* commandList, FrameAllocator& frameAllocator,
-                              const TriangleParams& params, DirectX::FXMMATRIX viewProjection, bool depthTest) const
+                              const TriangleParams& params, DirectX::FXMMATRIX viewProjection, bool depthTest,
+                              const TextureViewSettings& textureView) const
     {
         using namespace DirectX;
         PIXScopedEvent(commandList, pix::kColorGpu, L"TrianglePass");
@@ -214,10 +227,13 @@ namespace walnut
         commandList->SetPipelineState(depthTest ? m_depthTestPipeline.Get() : m_noDepthPipeline.Get());
         commandList->SetGraphicsRootConstantBufferView(RootParam::DrawData, constantsAddress);
 
-        // b0: tell the shader where its vertices are. No IASetVertexBuffers: the shader reads them itself.
+        // b0: where the vertices and texture are, and how to sample the texture. No IASetVertexBuffers: the shader
+        // reads the vertices itself.
         const TriangleDrawConstants drawConstants{
             .vertexBufferIndex = m_vertexBufferSrv.index,
             .textureIndex = m_checkerSrv.index,
+            .filterMode = static_cast<uint32_t>(textureView.filterMode),
+            .uvScale = textureView.uvScale,
         };
         commandList->SetGraphicsRoot32BitConstants(RootParam::DrawConstants, sizeof(drawConstants) / sizeof(uint32_t),
                                                    &drawConstants, 0);

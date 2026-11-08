@@ -5,10 +5,18 @@
 // Root constants at b0 (root parameter DrawConstants). Must match TriangleDrawConstants in TrianglePass.cpp.
 struct DrawConstants
 {
-    uint vertexBufferIndex; // descriptor heap slot of the vertex buffer's SRV
-    uint textureIndex;      // descriptor heap slot of the checkerboard texture's SRV
+    uint  vertexBufferIndex; // descriptor heap slot of the vertex buffer's SRV
+    uint  textureIndex;      // descriptor heap slot of the checkerboard texture's SRV
+    uint  filterMode;        // TextureFilterMode in TrianglePass.h
+    float uvScale;           // how many times the texture repeats across the triangle
 };
 ConstantBuffer<DrawConstants> g_draw : register(b0);
+
+static const uint kFilterPointNoMips    = 0;
+static const uint kFilterBilinearNoMips = 1;
+static const uint kFilterTrilinear      = 2;
+static const uint kFilterAnisotropic    = 3;
+static const uint kFilterShowMipLevel   = 4;
 
 // Per-draw constant buffer at b1 (root parameter DrawData of the bindless root signature). Layout must match
 // TriangleGpuConstants in TrianglePass.cpp.
@@ -53,10 +61,29 @@ PSInput VSMain(uint vertexId : SV_VertexID)
 
 float4 PSMain(PSInput input) : SV_Target
 {
-    // Texture from the bindless heap + static sampler s0 (anisotropic, WRAP addressing). UVs go 0..1 across the
-    // triangle; multiplying by 2 makes them go 0..2, and WRAP repeats the texture to fill that range.
     Texture2D<float4> checker = ResourceDescriptorHeap[g_draw.textureIndex];
-    const float3 albedo = checker.Sample(g_samplerAnisotropicWrap, input.uv * 2.0f).rgb;
+    const float2 uv = input.uv * g_draw.uvScale; // beyond 0..1, the WRAP samplers repeat the texture
+
+    // Sample() picks the mip level automatically: the GPU shades pixels in 2x2 groups, compares the UVs of
+    // neighbouring pixels, and from how fast the UV changes per pixel works out how many texels one pixel covers.
+    // Covering 4x4 texels -> mip 2, and so on. SampleLevel(..., 0) skips that and always reads mip 0.
+    float3 albedo;
+    if (g_draw.filterMode == kFilterPointNoMips)
+        albedo = checker.SampleLevel(g_samplerPointWrap, uv, 0).rgb;
+    else if (g_draw.filterMode == kFilterBilinearNoMips)
+        albedo = checker.SampleLevel(g_samplerLinearWrap, uv, 0).rgb;
+    else if (g_draw.filterMode == kFilterTrilinear)
+        albedo = checker.Sample(g_samplerLinearWrap, uv).rgb;
+    else if (g_draw.filterMode == kFilterAnisotropic)
+        albedo = checker.Sample(g_samplerAnisotropicWrap, uv).rgb;
+    else
+    {
+        // Debug view: which mip the hardware would use here. 0 = red, 1 = yellow, 2 = green, 3 = cyan, 4+ = blue.
+        const float lod = checker.CalculateLevelOfDetail(g_samplerLinearWrap, uv);
+        const float3 mipColors[5] = { float3(1, 0, 0), float3(1, 1, 0), float3(0, 1, 0), float3(0, 1, 1), float3(0, 0, 1) };
+        const uint level = min((uint)lod, 3u);
+        return float4(lerp(mipColors[level], mipColors[level + 1], saturate(lod - level)), 1.0f);
+    }
 
     return float4(input.color * albedo, 1.0f) * g_tint;
 }
