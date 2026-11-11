@@ -4,6 +4,9 @@
 #include "core/StringUtils.h"
 #include "gfx/GpuUtils.h"
 
+#include <cstddef>
+#include <vector>
+
 namespace walnut
 {
     namespace
@@ -25,6 +28,18 @@ namespace walnut
             }
         }
 
+        // CheckFeatureSupport through ID3D12Device16::CheckFeatureSupport1 when the runtime has it (the Agility SDK
+        // does). Passing the SDK version we were built against makes the runtime report capabilities as of that
+        // version, so newer runtimes can't surprise already-written checks; plain CheckFeatureSupport is deprecated
+        // (debug layer warning #989).
+        HRESULT CheckFeature(ID3D12Device* device, D3D12_FEATURE feature, void* data, UINT size)
+        {
+            ComPtr<ID3D12Device16> device16;
+            if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device16))))
+                return device16->CheckFeatureSupport1(feature, data, size, WALNUT_AGILITY_SDK_VERSION);
+            return device->CheckFeatureSupport(feature, data, size);
+        }
+
         // Highest shader model the driver supports. You ask for the highest model you know about and the
         // driver lowers it to what it can run. If this SDK's runtime doesn't recognize the value you asked for
         // (headers newer than the runtime), the call fails, so step down until it's accepted.
@@ -33,7 +48,7 @@ namespace walnut
             for (int model = D3D_HIGHEST_SHADER_MODEL; model >= D3D_SHADER_MODEL_6_0; --model)
             {
                 D3D12_FEATURE_DATA_SHADER_MODEL data{ static_cast<D3D_SHADER_MODEL>(model) };
-                if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &data, sizeof(data))))
+                if (SUCCEEDED(CheckFeature(device, D3D12_FEATURE_SHADER_MODEL, &data, sizeof(data))))
                     return data.HighestShaderModel;
             }
             return D3D_SHADER_MODEL_5_1;
@@ -129,11 +144,11 @@ namespace walnut
             //    that were never initialized, which bindless relies on.
             D3D12_FEATURE_DATA_D3D12_OPTIONS12 options12{};
             const bool enhancedBarriers =
-                SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS12, &options12, sizeof(options12)))
+                SUCCEEDED(CheckFeature(device.Get(), D3D12_FEATURE_D3D12_OPTIONS12, &options12, sizeof(options12)))
                 && options12.EnhancedBarriersSupported;
             const D3D_SHADER_MODEL shaderModel = QueryHighestShaderModel(device.Get());
             D3D12_FEATURE_DATA_D3D12_OPTIONS options{};
-            device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options));
+            CheckFeature(device.Get(), D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options));
 
             std::string missing;
             if (!enhancedBarriers)
@@ -207,6 +222,20 @@ namespace walnut
             infoQueue1->RegisterMessageCallback(&OnDebugLayerMessage, D3D12_MESSAGE_CALLBACK_FLAG_NONE,
                                                 nullptr, &m_infoQueueCallbackCookie);
         }
+
+        // Messages raised before the callback existed (while the device was created and its features checked)
+        // only went to the debugger output. They are still stored in the queue, so log them now.
+        for (UINT64 i = 0; i < infoQueue->GetNumStoredMessages(); ++i)
+        {
+            SIZE_T size = 0;
+            if (FAILED(infoQueue->GetMessage(i, nullptr, &size)))
+                continue;
+            std::vector<std::byte> storage(size);
+            auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.data());
+            if (SUCCEEDED(infoQueue->GetMessage(i, message, &size)))
+                OnDebugLayerMessage(message->Category, message->Severity, message->ID, message->pDescription, nullptr);
+        }
+        infoQueue->ClearStoredMessages();
     }
 
     void Device::LogDeviceRemoved() const

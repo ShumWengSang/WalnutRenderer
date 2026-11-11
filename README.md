@@ -2,9 +2,17 @@
 
 A small Direct3D 12 learning engine for Windows. It uses raw Win32 for the window and input, Dear ImGui for UI, and compiles HLSL at runtime with DXC.
 
+It loads a glTF scene (Sponza by default) and renders it with:
+- **Bindless resources**: one shader-visible descriptor heap and one shared root signature; shaders find buffers and textures through `ResourceDescriptorHeap[index]` (Shader Model 6.6).
+- **Vertex pulling**: no input layouts; vertex shaders read a merged `StructuredBuffer` of vertices. One `DrawIndexedInstanced` per instance, with the instance index as the only per-draw root constant.
+- **glTF materials**: base color factor and sRGB texture (with CPU-generated, linear-light mip chains), alpha test for `MASK` materials, double-sided materials without culling.
+- **Lighting**: a directional sun (Lambert diffuse) plus a constant ambient term, from per-frame constants.
+- **HDR**: the scene renders into an FP16 target in linear light; a fullscreen pass applies exposure and a tonemap curve (ACES fitted, Reinhard, clamp) and writes the back buffer through an `_SRGB` view.
+- **Reversed-Z** depth (D32_FLOAT, infinite far plane), **Enhanced Barriers** only, a fly camera, and PIX markers throughout.
+
 ## Requirements
 
-- Windows 10/11 x64 with a D3D12 (feature level 12_0) GPU whose driver supports **Enhanced Barriers** (`D3D12_OPTIONS12::EnhancedBarriersSupported`). Enhanced Barriers have no automatic fallback, so the app refuses to start without them; a driver update usually fixes that.
+- Windows 10/11 x64 with a D3D12 (feature level 12_0) GPU whose driver supports **Enhanced Barriers** (`D3D12_OPTIONS12::EnhancedBarriersSupported`), **Shader Model 6.6** and **Resource Binding Tier 3**. None of these has an automatic fallback, so the app skips adapters without them (the log says what's missing); a driver update usually fixes that.
 - Visual Studio Build Tools 2022 or newer, with the **Desktop development with C++** workload and a Windows SDK.
 - CMake 3.26+ and Ninja.
 - Optional, but needed for the D3D12 debug layer: the **Graphics Tools** Windows feature.
@@ -81,9 +89,11 @@ The camera starts inside large scenes like Sponza, or framing small ones from ou
 cmake/Dependencies.cmake  FetchContent: DirectX-Headers, Agility SDK, DXC, Dear ImGui, WinPixEventRuntime, cgltf, stb_image (all pinned)
 shaders/                  HLSL sources, compiled at runtime straight from here (a copy next to the exe is the fallback)
 src/core/                 Application loop, Win32 Window, Input, Timer, Log
-src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, ShaderCompiler, Pix
-src/renderer/             Renderer (frames in flight, begin/end frame), ScenePass, TonemapPass
-src/scene/                Camera, fly controller, glTF loading (cgltf) into a flat Scene, image decoding (stb_image)
+src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, RootSignature (shared bindless),
+                          Buffer, Texture, UploadContext (staging ring), FrameAllocator (per-frame constants),
+                          MipChain, ShaderCompiler, Pix
+src/renderer/             Renderer (frames in flight, frame constants, pass setup), ScenePass, TonemapPass
+src/scene/                Camera, fly controller, lighting, glTF loading (cgltf) into a flat Scene, image decoding (stb_image)
 src/ui/                   ImGuiLayer (Win32 + DX12 backends)
 tools/                    fetch-assets.ps1 (download glTF models), pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher)
 ```
@@ -100,7 +110,7 @@ The code uses WinPixEventRuntime (`src/gfx/Pix.h`). `USE_PIX` is defined in ever
 | Timeline | Events |
 |---|---|
 | CPU | `Frame` › `PumpMessages`, `Update + UI`, `Render` › `Wait for frame fence`, `ImGui::Render`, `Present` |
-| GPU (command list) | `Frame` › `Clear back buffer`, `ScenePass`, `ImGui` |
+| GPU (command list) | `Frame` › `Clear scene`, `ScenePass`, `Tonemap`, `ImGui` |
 | Counter | `Frame time (ms)`, recorded with `PIXReportCounter` every frame |
 
 Keep event names constant, with no frame numbers formatted into them. PIX groups executions by name, so a name that changes every frame creates a separate event each frame and breaks per-event statistics.
@@ -132,9 +142,11 @@ Example prompt: *"Survey captures\WalnutRenderer_timing_….wpix with PixMcp: fr
 1. `Input::BeginFrame()` resets the per-frame state. `Window::PumpMessages()` then passes Win32 messages to ImGui and to `Input`.
 2. If the window was resized, the renderer flushes the GPU and calls `ResizeBuffers` on the swapchain.
 3. ImGui starts a new frame. `Input` is told whether ImGui is using the keyboard or mouse, and ignores that device for game input while it is.
-4. `Renderer::BeginFrame()` waits on this frame slot's fence and resets its command allocator. It then records an Enhanced Barrier that changes the back buffer's layout from PRESENT to RENDER_TARGET (`SyncBefore = NONE`, `SyncAfter = RENDER_TARGET`), clears it, and sets the viewport and scissor.
-5. `Renderer::SetFrameConstants()` binds the frame's camera and light data at `b2` (see `src/renderer/FrameConstants.h`); every pass can read it. The scene (one draw per instance, lit by a sun and an ambient term) and the ImGui overlay are then recorded into the command list.
-6. `Renderer::EndFrame()` records an Enhanced Barrier from RENDER_TARGET back to PRESENT (`SyncBefore = RENDER_TARGET`, `SyncAfter = NONE`) and executes the command list. It then presents and signals the frame fence.
+4. `Renderer::BeginFrame()` waits on this frame slot's fence, resets its command allocator and per-frame upload memory, and prepares the HDR scene color target: an Enhanced Barrier from UNDEFINED to RENDER_TARGET (with DISCARD), then clears of the scene color and the depth buffer. It sets the viewport and scissor and binds the bindless state (descriptor heap, then the shared root signature).
+5. `Renderer::SetFrameConstants()` binds the frame's camera and light data at `b2` (see `src/renderer/FrameConstants.h`); every pass can read it. `ScenePass` then records one draw per instance (opaque first, then alpha-tested; PSOs switch only between those groups).
+6. `Renderer::BeginBackBufferPass()` records one barrier call with two transitions: scene color RENDER_TARGET → SHADER_RESOURCE (`SyncBefore = RENDER_TARGET`, `SyncAfter = PIXEL_SHADING`) and back buffer PRESENT → RENDER_TARGET. `TonemapPass` draws a fullscreen triangle that reads scene color and writes the back buffer through its `_SRGB` view.
+7. `Renderer::BeginUiPass()` switches to the back buffer's plain `UNORM` view (ImGui's colors are already sRGB), and ImGui is recorded.
+8. `Renderer::EndFrame()` records an Enhanced Barrier from RENDER_TARGET back to PRESENT (`SyncBefore = RENDER_TARGET`, `SyncAfter = NONE`) and executes the command list. It then presents and signals the frame fence.
 
 ### Barriers
 

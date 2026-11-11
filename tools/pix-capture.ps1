@@ -36,9 +36,10 @@ if (-not $Output) {
 }
 New-Item -ItemType Directory -Force (Split-Path -Parent $Output) | Out-Null
 
-# The app exits on its own shortly after the capture, so pixtool and the app both finish unattended.
+# The app exits on its own shortly after the capture, so pixtool and the app both finish unattended. Starting a
+# Timing Capture's tracing session can itself take 10+ seconds on some machines, hence the generous margin.
 if ($Kind -eq 'Timing') {
-    $appCommandLine = ("--exit-after-seconds={0} {1}" -f ([math]::Ceiling($DurationMs / 1000) + 5), $AppArgs).Trim()
+    $appCommandLine = ("--exit-after-seconds={0} {1}" -f ([math]::Ceiling($DurationMs / 1000) + 30), $AppArgs).Trim()
     $pixArgs = "launch `"$exe`" --timing --command-line=`"$appCommandLine`" --working-directory=`"$binDir`" " +
                "take-new-timing-capture `"$Output`" --duration=$DurationMs"
 }
