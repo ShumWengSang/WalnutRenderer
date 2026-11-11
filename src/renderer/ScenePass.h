@@ -61,6 +61,8 @@ namespace walnut
 
         // Expects the bindless state (descriptor heap + root signature) and the frame constants to be bound already.
         void Render(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const;
+        // Draws every instance into the bound shadow map: depth only, from the sun (frame constants' sunViewProjection).
+        void RenderShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const;
 
         uint32_t GetDrawCount() const { return static_cast<uint32_t>(m_draws.size()); }
         uint32_t GetTextureCount() const { return static_cast<uint32_t>(m_textures.size()); }
@@ -82,6 +84,8 @@ namespace walnut
                                       const wchar_t* name, DescriptorHandle& srv);
         // Uploads every loaded scene texture; returns each one's bindless SRV index (kNoTexture if it wasn't loaded).
         std::vector<uint32_t> CreateTextures(UploadContext& upload, const Scene& scene);
+        // Binds the geometry and issues every draw, with the scene PSOs or the depth-only shadow PSOs.
+        void RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings, bool shadow) const;
 
         ID3D12Device10* m_device = nullptr;
         DescriptorHeap& m_srvHeap;
@@ -104,6 +108,7 @@ namespace walnut
         std::vector<DrawItem> m_draws;
 
         std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_pipelines; // [alphaTest][cullNone]
+        std::array<ComPtr<ID3D12PipelineState>, 2> m_shadowPipelines;          // [cullNone]
         std::string m_lastError;
     };
 }

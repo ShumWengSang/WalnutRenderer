@@ -95,6 +95,16 @@ PSInput VSMain(uint vertexId : SV_VertexID)
     return output;
 }
 
+// Shadow map pass: the same vertices, seen from the sun. Only the position is needed: the pipeline has no pixel
+// shader, so the rasterizer just writes each covered texel's depth.
+float4 VSShadow(uint vertexId : SV_VertexID) : SV_Position
+{
+    StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[g_draw.vertexBufferIndex];
+    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
+    const float4 worldPosition = mul(float4(vertices[vertexId].position, 1.0f), instances[g_draw.instanceIndex].world);
+    return mul(worldPosition, g_frame.sunViewProjection);
+}
+
 // Cheap integer hash -> a stable, distinct color per index.
 float3 HashColor(uint index)
 {

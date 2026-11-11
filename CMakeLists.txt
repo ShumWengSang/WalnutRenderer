@@ -58,6 +58,8 @@ set(WALNUT_SOURCES
     src/renderer/Renderer.h
     src/renderer/ScenePass.cpp
     src/renderer/ScenePass.h
+    src/renderer/ShadowMap.cpp
+    src/renderer/ShadowMap.h
     src/renderer/TonemapPass.cpp
     src/renderer/TonemapPass.h
 

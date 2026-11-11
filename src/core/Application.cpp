@@ -171,6 +171,7 @@ namespace walnut
         m_tonemapPass = std::make_unique<TonemapPass>(m_renderer->GetDevice(), *m_shaderCompiler,
                                                       m_shaderDir / "tonemap.hlsl", m_renderer->GetRootSignature(),
                                                       SwapChain::kSrgbFormat);
+        m_shadowMap = std::make_unique<ShadowMap>(m_renderer->GetDevice(), m_renderer->GetSrvHeap(), kShadowMapSize);
 
         // Execute every upload recorded while loading, before the first frame reads that data.
         m_renderer->GetUploadContext().Flush();
@@ -186,6 +187,7 @@ namespace walnut
         // Tear down in dependency order: everything that holds GPU objects goes before the renderer.
         m_imgui.reset();
         m_scenePass.reset();
+        m_shadowMap.reset();
         m_tonemapPass.reset();
         m_shaderCompiler.reset();
         m_renderer.reset();
@@ -252,12 +254,26 @@ namespace walnut
             };
             frameConstants.sunIlluminance = scaled(m_lighting.sunColor, m_lighting.sunIntensity);
             frameConstants.ambientRadiance = scaled(m_lighting.ambientColor, m_lighting.ambientIntensity);
+            DirectX::XMStoreFloat4x4(&frameConstants.sunViewProjection,
+                                     m_lighting.GetSunViewProjection(m_scene.boundsMin, m_scene.boundsMax));
 
             {
                 PIXScopedEvent(pix::kColorCpu, L"Render");
                 m_renderer->BeginFrame(m_clearColor);
                 m_renderer->SetFrameConstants(frameConstants);
-                ID3D12GraphicsCommandList* commandList = m_renderer->GetCommandList();
+                ID3D12GraphicsCommandList7* commandList = m_renderer->GetCommandList();
+
+                // 1. Depth from the sun's point of view, into the shadow map.
+                {
+                    PIXScopedEvent(commandList, pix::kColorGpu, L"ShadowMap");
+                    m_shadowMap->Begin(commandList);
+                    if (m_scenePass)
+                        m_scenePass->RenderShadowDepth(commandList, m_sceneView);
+                    m_shadowMap->End(commandList);
+                }
+
+                // 2. The scene from the camera, into the HDR scene color target.
+                m_renderer->BeginScenePass();
                 if (m_scenePass)
                     m_scenePass->Render(commandList, m_sceneView);
 
@@ -423,7 +439,19 @@ namespace walnut
             ImGui::ColorEdit3("Ambient color", &m_lighting.ambientColor.x, ImGuiColorEditFlags_Float);
             ImGui::SliderFloat("Ambient intensity", &m_lighting.ambientIntensity, 0.0f, 5.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
             const DirectX::XMFLOAT3 sun = m_lighting.GetSunDirection();
-            ImGui::TextDisabled("Towards the sun: (%.2f, %.2f, %.2f). No shadows yet.", sun.x, sun.y, sun.z);
+            ImGui::TextDisabled("Towards the sun: (%.2f, %.2f, %.2f)", sun.x, sun.y, sun.z);
+
+            if (ImGui::TreeNode("Shadow map"))
+            {
+                // The depth the sun sees: brighter = closer to the sun (reversed-Z). Not used for lighting yet.
+                const float extent = GetSunShadowExtent(m_scene.boundsMin, m_scene.boundsMax);
+                const uint32_t size = m_shadowMap->GetSize();
+                ImGui::Text("%u x %u, D32. Covers %.1f m: %.1f cm per texel", size, size, extent,
+                            100.0f * extent / static_cast<float>(size));
+                const float width = std::min(ImGui::GetContentRegionAvail().x, 400.0f);
+                ImGui::Image(static_cast<ImTextureID>(m_shadowMap->GetDebugSrvGpuHandle().ptr), ImVec2(width, width));
+                ImGui::TreePop();
+            }
         }
 
         if (ImGui::CollapsingHeader("Tonemapping", ImGuiTreeNodeFlags_DefaultOpen))

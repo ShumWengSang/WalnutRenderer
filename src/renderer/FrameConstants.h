@@ -12,6 +12,7 @@ namespace walnut
     struct FrameConstants
     {
         DirectX::XMFLOAT4X4 viewProjection;
+        DirectX::XMFLOAT4X4 sunViewProjection; // world -> the sun's shadow map space (see SceneLighting)
         DirectX::XMFLOAT3 cameraPosition;  // world space
         float padding0 = 0.0f;
         DirectX::XMFLOAT3 sunDirection;    // world space, unit length, pointing TOWARDS the sun
@@ -21,5 +22,5 @@ namespace walnut
         DirectX::XMFLOAT3 ambientRadiance; // linear color * intensity: light arriving from every direction equally
         float padding3 = 0.0f;
     };
-    static_assert(sizeof(FrameConstants) == 128);
+    static_assert(sizeof(FrameConstants) == 192);
 }

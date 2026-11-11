@@ -5,6 +5,7 @@
 struct FrameConstants
 {
     row_major float4x4 viewProjection;
+    row_major float4x4 sunViewProjection; // world -> the sun's shadow map space
     float3 cameraPosition;  // world space
     float  padding0;
     float3 sunDirection;    // world space, unit length, pointing towards the sun

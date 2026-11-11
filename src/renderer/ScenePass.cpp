@@ -8,6 +8,7 @@
 #include "gfx/RootSignature.h"
 #include "gfx/ShaderCompiler.h"
 #include "gfx/UploadContext.h"
+#include "renderer/ShadowMap.h"
 #include "scene/Scene.h"
 
 #include <algorithm>
@@ -206,9 +207,10 @@ namespace walnut
         const ShaderCompileResult vs = m_compiler.Compile({ m_shaderPath, L"VSMain", ShaderStage::Vertex });
         const ShaderCompileResult ps = m_compiler.Compile({ m_shaderPath, L"PSMain", ShaderStage::Pixel });
         const ShaderCompileResult psAlphaTest = m_compiler.Compile({ m_shaderPath, L"PSMain", ShaderStage::Pixel, { { L"ALPHA_TEST", L"1" } } });
-        if (!vs.Succeeded() || !ps.Succeeded() || !psAlphaTest.Succeeded())
+        const ShaderCompileResult vsShadow = m_compiler.Compile({ m_shaderPath, L"VSShadow", ShaderStage::Vertex });
+        if (!vs.Succeeded() || !ps.Succeeded() || !psAlphaTest.Succeeded() || !vsShadow.Succeeded())
         {
-            m_lastError = vs.errors + ps.errors + psAlphaTest.errors;
+            m_lastError = vs.errors + ps.errors + psAlphaTest.errors + vsShadow.errors;
             return false;
         }
 
@@ -247,6 +249,22 @@ namespace walnut
                                  std::format(L"ScenePSO_{}_{}", alphaTest ? L"AlphaTest" : L"Opaque", cullNone ? L"CullNone" : L"CullBack").c_str());
             }
         }
+
+        // Shadow map pipelines: depth only. No pixel shader and no render targets: the rasterizer writes depth by
+        // itself, which is the cheapest way to draw. Same culling rules as the scene. [cullNone]
+        desc.VS = vsShadow.GetBytecode();
+        desc.PS = {};
+        desc.NumRenderTargets = 0;
+        desc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
+        desc.DSVFormat = ShadowMap::kDepthFormat;
+        std::array<ComPtr<ID3D12PipelineState>, 2> shadowPipelines;
+        for (int cullNone = 0; cullNone < 2 && SUCCEEDED(hr); ++cullNone)
+        {
+            desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
+            hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&shadowPipelines[cullNone]));
+            if (SUCCEEDED(hr))
+                SetDebugName(shadowPipelines[cullNone].Get(), cullNone ? L"ShadowPSO_CullNone" : L"ShadowPSO_CullBack");
+        }
         if (FAILED(hr))
         {
             m_lastError = std::format("CreateGraphicsPipelineState failed (0x{:08X})", static_cast<uint32_t>(hr));
@@ -255,6 +273,7 @@ namespace walnut
         }
 
         m_pipelines = std::move(pipelines);
+        m_shadowPipelines = std::move(shadowPipelines);
         m_lastError.clear();
         return true;
     }
@@ -262,7 +281,17 @@ namespace walnut
     void ScenePass::Render(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"ScenePass");
+        RecordDraws(commandList, settings, false);
+    }
 
+    void ScenePass::RenderShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const
+    {
+        PIXScopedEvent(commandList, pix::kColorGpu, L"Shadow casters");
+        RecordDraws(commandList, settings, true);
+    }
+
+    void ScenePass::RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings, bool shadow) const
+    {
         // The camera and lights come from the frame constants (b2), which the renderer has already bound.
         // Everything else shared by all draws is set once here.
         const SceneDrawConstants drawConstants{
@@ -292,7 +321,7 @@ namespace walnut
             // sorted by these two flags, so each PSO is set once.
             const bool alphaTest = settings.alphaTest && draw.alphaTest;
             const bool cullNone = !settings.backfaceCulling || draw.doubleSided;
-            ID3D12PipelineState* pipeline = m_pipelines[alphaTest][cullNone].Get();
+            ID3D12PipelineState* pipeline = shadow ? m_shadowPipelines[cullNone].Get() : m_pipelines[alphaTest][cullNone].Get();
             if (pipeline != currentPipeline)
             {
                 commandList->SetPipelineState(pipeline);

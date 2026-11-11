@@ -18,5 +18,14 @@ namespace walnut
 
         // Unit vector from a surface towards the sun.
         DirectX::XMFLOAT3 GetSunDirection() const;
+
+        // The camera the sun "sees" the scene with, for the shadow map. A directional light's rays are parallel, so
+        // the projection is orthographic (a box, not a pyramid). The box is the bounding sphere of the given world
+        // bounds, viewed along the sun direction: it holds the whole scene for any sun angle, and doesn't depend on
+        // the player camera (so the shadows don't shimmer when it moves). Reversed-Z, like the main camera.
+        DirectX::XMMATRIX GetSunViewProjection(const DirectX::XMFLOAT3& boundsMin, const DirectX::XMFLOAT3& boundsMax) const;
     };
+
+    // Size of the sun camera's box (its width, height and depth) for the given bounds: the bounding sphere's diameter.
+    float GetSunShadowExtent(const DirectX::XMFLOAT3& boundsMin, const DirectX::XMFLOAT3& boundsMax);
 }

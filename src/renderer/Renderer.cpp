@@ -110,6 +110,13 @@ namespace walnut
         // The depth buffer never leaves DEPTH_STENCIL_WRITE, so no barrier is needed: last frame's depth
         // writes and this clear are in different ExecuteCommandLists, and that boundary orders them.
         m_commandList->ClearDepthStencilView(m_dsv.cpu, D3D12_CLEAR_FLAG_DEPTH, kDepthClearValue, 0, 0, nullptr);
+
+        BindBindlessState(m_commandList.Get());
+    }
+
+    void Renderer::BeginScenePass()
+    {
+        // A separate step from BeginFrame because other passes (the shadow map) render to their own targets first.
         m_commandList->OMSetRenderTargets(1, &m_sceneRtv.cpu, FALSE, &m_dsv.cpu);
 
         const CD3DX12_VIEWPORT viewport(0.0f, 0.0f, static_cast<float>(m_swapChain->GetWidth()),
@@ -118,8 +125,6 @@ namespace walnut
                                    static_cast<LONG>(m_swapChain->GetHeight()));
         m_commandList->RSSetViewports(1, &viewport);
         m_commandList->RSSetScissorRects(1, &scissor);
-
-        BindBindlessState(m_commandList.Get());
     }
 
     void Renderer::SetFrameConstants(const FrameConstants& constants)

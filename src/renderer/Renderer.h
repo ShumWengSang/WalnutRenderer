@@ -25,7 +25,10 @@ namespace walnut
 
     // Owns the core D3D12 objects and drives the per-frame command list.
     //
-    //   renderer.BeginFrame(clearColor);   // waits for this frame slot; scene color + depth cleared and bound
+    //   renderer.BeginFrame(clearColor);   // waits for this frame slot; scene color + depth cleared
+    //   renderer.SetFrameConstants(...);   // camera + lights at b2 for every pass
+    //   ... shadow map pass ...            //   (its own depth target)
+    //   renderer.BeginScenePass();         // scene color + depth bound
     //   ... draw the 3D scene ...          //   (into the HDR scene color target, not the back buffer)
     //   renderer.BeginBackBufferPass();    // scene color becomes readable; back buffer (_SRGB view) is the target
     //   ... tonemap pass ...
@@ -63,6 +66,8 @@ namespace walnut
         // Copies 'constants' into this frame's upload memory and binds them at b2 for every following draw.
         // Call after BeginFrame (which binds the root signature; that clears root arguments).
         void SetFrameConstants(const FrameConstants& constants);
+        // Binds the scene color + depth targets and a full-window viewport (after any shadow/offscreen passes).
+        void BeginScenePass();
         void BeginBackBufferPass();
         void BeginUiPass();
         void EndFrame();
