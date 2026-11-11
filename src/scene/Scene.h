@@ -1,8 +1,11 @@
 #pragma once
 
+#include "gfx/MipChain.h"
+
 #include <DirectXMath.h>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace walnut
@@ -17,6 +20,18 @@ namespace walnut
     };
     static_assert(sizeof(SceneVertex) == 48);
 
+    inline constexpr uint32_t kNoTexture = UINT32_MAX;
+
+    // A decoded image with its full mip chain, ready to upload. 'srgb' says how its bytes are encoded: color
+    // images (base color, emissive) are sRGB; data images (normals, metallic-roughness) are linear.
+    struct SceneTexture
+    {
+        std::string name;
+        bool srgb = true;
+        std::vector<ImageRgba8> mips; // [0] = full size; empty if the image failed to load (see 'error')
+        std::string error;
+    };
+
     // How a material's alpha is used (glTF alphaMode). Values must match scene.hlsl.
     enum class AlphaMode : uint32_t
     {
@@ -25,10 +40,11 @@ namespace walnut
         Blend = 2,  // see-through; needs sorted, blended drawing (drawn as opaque for now)
     };
 
-    // A glTF metallic-roughness material: the constant factors for now (textures come next).
+    // A glTF metallic-roughness material: constant factors, multiplied by textures where it has them.
     struct SceneMaterial
     {
         DirectX::XMFLOAT4 baseColorFactor = { 1.0f, 1.0f, 1.0f, 1.0f }; // linear RGB + alpha
+        uint32_t baseColorTexture = kNoTexture; // into Scene::textures
         DirectX::XMFLOAT3 emissiveFactor = { 0.0f, 0.0f, 0.0f };
         float metallicFactor = 1.0f;  // glTF defaults: fully metallic and fully rough
         float roughnessFactor = 1.0f;
@@ -61,6 +77,7 @@ namespace walnut
         std::vector<SceneVertex> vertices;
         std::vector<uint32_t> indices;
         std::vector<SceneMaterial> materials; // the file's materials, plus a default one if some primitive had none
+        std::vector<SceneTexture> textures;   // only the images some material uses, decoded
         std::vector<ScenePrimitive> primitives;
         std::vector<SceneInstance> instances;
         DirectX::XMFLOAT3 boundsMin{}, boundsMax{}; // world space, over every instance

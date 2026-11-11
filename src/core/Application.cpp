@@ -115,7 +115,7 @@ namespace walnut
                 LogGltfSummary(*m_sceneSummary);
 
                 const auto buildStart = std::chrono::steady_clock::now();
-                m_scene = BuildSceneFromGltf(document->GetData());
+                m_scene = BuildSceneFromGltf(document->GetData(), m_scenePath.parent_path());
                 m_sceneBuildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - buildStart).count();
                 log::Info("Scene built in {:.1f} ms:", m_sceneBuildMs);
                 LogSceneStats(m_scene);
@@ -158,6 +158,9 @@ namespace walnut
                                                       m_renderer->GetSrvHeap(), *m_shaderCompiler,
                                                       m_shaderDir / "scene.hlsl", m_renderer->GetRootSignature(),
                                                       Renderer::kSceneColorFormat, Renderer::kDepthFormat, m_scene);
+            // The pixels were copied into the upload ring, so the CPU copy (~130 MB for Sponza) can go.
+            for (SceneTexture& texture : m_scene.textures)
+                texture.mips = {};
             PlaceStartCamera(m_homeCamera, m_scene.boundsMin, m_scene.boundsMax);
             m_camera = m_homeCamera;
             // Cross the scene's bounding sphere in about 8 seconds.
@@ -392,8 +395,10 @@ namespace walnut
                 {
                     ImGui::Text("GPU: %u draws per frame, %.1f MB of buffers", m_scenePass->GetDrawCount(),
                                 static_cast<double>(m_scenePass->GetGpuBytes()) / (1024.0 * 1024.0));
+                    ImGui::Text("     %u textures, %.1f MB with mips", m_scenePass->GetTextureCount(),
+                                static_cast<double>(m_scenePass->GetTextureBytes()) / (1024.0 * 1024.0));
                     const char* views[] = { "Normals (world)", "Texture coordinates", "Instance colors",
-                                            "Material colors", "Base color factor", "Alpha mode / back faces" };
+                                            "Material colors", "Base color (unlit)", "Alpha mode / back faces" };
                     int view = static_cast<int>(m_sceneView.debugView);
                     if (ImGui::Combo("Show", &view, views, IM_ARRAYSIZE(views)))
                         m_sceneView.debugView = static_cast<SceneDebugView>(view);

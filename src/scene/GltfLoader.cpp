@@ -2,14 +2,19 @@
 
 #include "core/Log.h"
 #include "core/StringUtils.h"
+#include "scene/ImageDecoder.h"
 
 #include <cgltf.h>
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
+#include <cstring>
+#include <execution>
 #include <format>
 #include <fstream>
+#include <map>
 #include <numeric>
 #include <span>
 
@@ -163,10 +168,28 @@ namespace walnut
         }
     }
 
-    Scene BuildSceneFromGltf(const cgltf_data& data)
+    Scene BuildSceneFromGltf(const cgltf_data& data, const std::filesystem::path& baseDirectory)
     {
         using namespace DirectX;
         Scene scene;
+
+        // Each (image, color space) pair becomes one SceneTexture, created the first time a material uses it.
+        std::map<std::pair<const cgltf_image*, bool>, uint32_t> textureOfImage;
+        std::vector<const cgltf_image*> textureImages; // parallel to scene.textures
+        auto useTexture = [&](const cgltf_texture_view& view, bool srgb) -> uint32_t {
+            if (!view.texture || !view.texture->image)
+                return kNoTexture;
+            if (view.texcoord != 0)
+                log::Warn("A texture uses TEXCOORD_{}; only TEXCOORD_0 is loaded", view.texcoord);
+            const auto [it, inserted] = textureOfImage.try_emplace({ view.texture->image, srgb }, static_cast<uint32_t>(scene.textures.size()));
+            if (inserted)
+            {
+                const cgltf_image& image = *view.texture->image;
+                scene.textures.push_back({ .name = image.name ? image.name : (image.uri ? image.uri : "embedded"), .srgb = srgb });
+                textureImages.push_back(&image);
+            }
+            return it->second;
+        };
 
         // 0. Materials: copy the factors. glTF stores colors as linear values already (only images are sRGB).
         for (size_t i = 0; i < data.materials_count; ++i)
@@ -177,6 +200,7 @@ namespace walnut
             {
                 const cgltf_pbr_metallic_roughness& pbr = source.pbr_metallic_roughness;
                 material.baseColorFactor = { pbr.base_color_factor[0], pbr.base_color_factor[1], pbr.base_color_factor[2], pbr.base_color_factor[3] };
+                material.baseColorTexture = useTexture(pbr.base_color_texture, true /*srgb: it's a color*/);
                 material.metallicFactor = pbr.metallic_factor;
                 material.roughnessFactor = pbr.roughness_factor;
             }
@@ -187,6 +211,60 @@ namespace walnut
             material.alphaCutoff = source.alpha_cutoff;
             material.doubleSided = source.double_sided;
         }
+
+        // Decode the images and build their mip chains, one texture per thread: each is independent, and decoding
+        // 24 JPEGs of 1024x1024 one after another takes a while.
+        const auto decodeStart = std::chrono::steady_clock::now();
+        std::vector<uint32_t> textureIndices(scene.textures.size());
+        std::iota(textureIndices.begin(), textureIndices.end(), 0u);
+        std::for_each(std::execution::par, textureIndices.begin(), textureIndices.end(), [&](uint32_t i) {
+            SceneTexture& texture = scene.textures[i];
+            std::vector<uint8_t> fileBytes;
+            std::span<const uint8_t> encoded;
+            if (const cgltf_buffer_view* view = textureImages[i]->buffer_view) // embedded, e.g. in a .glb
+                encoded = { static_cast<const uint8_t*>(cgltf_buffer_view_data(view)), view->size };
+            else if (const char* uri = textureImages[i]->uri; uri && std::string_view(uri).starts_with("data:"))
+            {
+                texture.error = "base64 data URIs are not supported";
+                return;
+            }
+            else if (uri)
+            {
+                // URIs may be percent-encoded ("my%20image.png"); cgltf_decode_uri decodes in place.
+                std::string decoded = uri;
+                cgltf_decode_uri(decoded.data());
+                decoded.resize(std::strlen(decoded.c_str()));
+                const std::filesystem::path path = baseDirectory / std::filesystem::path(ToWide(decoded));
+                if (auto bytes = ReadFileBytes(path))
+                    fileBytes = std::move(*bytes);
+                else
+                {
+                    texture.error = "can't read " + ToUtf8(path.wstring());
+                    return;
+                }
+                encoded = fileBytes;
+            }
+
+            if (std::optional<ImageRgba8> image = DecodeImage(encoded, texture.error))
+                texture.mips = GenerateMipChain(std::move(*image), texture.srgb);
+        });
+        const double decodeMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - decodeStart).count();
+
+        uint64_t textureBytes = 0;
+        for (SceneTexture& texture : scene.textures)
+        {
+            if (!texture.error.empty())
+                log::Warn("Texture '{}' not loaded: {}", texture.name, texture.error);
+            for (const ImageRgba8& mip : texture.mips)
+                textureBytes += mip.pixels.size();
+        }
+        // A material whose texture failed falls back to its constant factor.
+        for (SceneMaterial& material : scene.materials)
+            if (material.baseColorTexture != kNoTexture && scene.textures[material.baseColorTexture].mips.empty())
+                material.baseColorTexture = kNoTexture;
+        if (!scene.textures.empty())
+            log::Info("Decoded {} textures in {:.0f} ms ({:.1f} MB with mips)", scene.textures.size(), decodeMs,
+                      static_cast<double>(textureBytes) / (1024.0 * 1024.0));
 
         // 1. Geometry. Each mesh's primitives are appended once, however many nodes use that mesh.
         std::vector<std::vector<uint32_t>> primitivesOfMesh(data.meshes_count);

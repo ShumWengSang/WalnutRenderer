@@ -6,6 +6,7 @@ set(WALNUT_DXC_VERSION "1.9.2609.5")
 set(WALNUT_IMGUI_TAG "v1.93.0-docking")
 set(WALNUT_PIX_EVENT_RUNTIME_VERSION "1.0.240308001")
 set(WALNUT_CGLTF_TAG "v1.15")
+set(WALNUT_STB_COMMIT "d14d46f6b44456eb88beac58cba833a4135d4c89")
 
 # The Agility SDK "minor" number is what the exe exports as D3D12SDKVersion (e.g. 1.620.1 -> 620).
 string(REGEX MATCH "^1\\.([0-9]+)" _ "${WALNUT_AGILITY_SDK_VERSION}")
@@ -57,7 +58,15 @@ FetchContent_Declare(cgltf
     GIT_SHALLOW    TRUE
 )
 
-FetchContent_MakeAvailable(directx_headers agility_sdk dxc imgui winpixeventruntime cgltf)
+# stb_image (JPEG/PNG decoding). stb has no releases, so a commit is pinned; the archive is hash-checked.
+FetchContent_Declare(stb
+    URL           https://github.com/nothings/stb/archive/${WALNUT_STB_COMMIT}.zip
+    URL_HASH      SHA256=7CF8800E0E9A523B7CA91A52D9CEE5E47386F6C49B9F9917855F3CE847692643
+    DOWNLOAD_NAME stb.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+
+FetchContent_MakeAvailable(directx_headers agility_sdk dxc imgui winpixeventruntime cgltf stb)
 
 # --- Agility SDK -------------------------------------------------------------
 set(WALNUT_AGILITY_BIN_DIR "${agility_sdk_SOURCE_DIR}/build/native/bin/x64")
@@ -84,6 +93,16 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/cgltf_impl.c" "#define CGLTF_IMPLEMENTAT
 add_library(walnut_cgltf STATIC "${CMAKE_CURRENT_BINARY_DIR}/cgltf_impl.c")
 target_include_directories(walnut_cgltf SYSTEM PUBLIC "${cgltf_SOURCE_DIR}")
 target_compile_definitions(walnut_cgltf PRIVATE _CRT_SECURE_NO_WARNINGS)
+
+# --- stb_image ---------------------------------------------------------------
+# Same pattern as cgltf. Only the decoders glTF needs (JPEG, PNG), and no stdio: the engine reads files itself
+# (UTF-8 safe) and decodes from memory.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/stb_image_impl.c"
+    "#define STB_IMAGE_IMPLEMENTATION\n#define STBI_ONLY_JPEG\n#define STBI_ONLY_PNG\n#include <stb_image.h>\n")
+add_library(walnut_stb STATIC "${CMAKE_CURRENT_BINARY_DIR}/stb_image_impl.c")
+target_include_directories(walnut_stb SYSTEM PUBLIC "${stb_SOURCE_DIR}")
+# STBI_NO_STDIO is public so the header declares the same API everywhere it's included.
+target_compile_definitions(walnut_stb PUBLIC STBI_NO_STDIO)
 
 # --- Dear ImGui (Win32 + DX12 backends) --------------------------------------
 add_library(imgui STATIC

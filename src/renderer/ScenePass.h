@@ -3,6 +3,7 @@
 #include "gfx/Buffer.h"
 #include "gfx/D3D12Common.h"
 #include "gfx/DescriptorHeap.h"
+#include "gfx/Texture.h"
 
 #include <DirectXMath.h>
 
@@ -26,13 +27,13 @@ namespace walnut
         Texcoords = 1,       // UV as red/green
         Instances = 2,       // a random color per instance (= per draw)
         Materials = 3,       // a random color per material
-        BaseColorFactor = 4, // the material's constant base color
+        BaseColor = 4,       // the material's base color: texture * factor (unlit)
         AlphaMode = 5,       // opaque gray, mask yellow, blend red; back faces of double-sided materials darker
     };
 
     struct SceneViewSettings
     {
-        SceneDebugView debugView = SceneDebugView::Normals;
+        SceneDebugView debugView = SceneDebugView::BaseColor;
         bool backfaceCulling = true; // for single-sided materials; double-sided ones are never culled
     };
 
@@ -60,7 +61,9 @@ namespace walnut
                     DirectX::FXMMATRIX viewProjection, const SceneViewSettings& settings) const;
 
         uint32_t GetDrawCount() const { return static_cast<uint32_t>(m_draws.size()); }
-        uint64_t GetGpuBytes() const;
+        uint32_t GetTextureCount() const { return static_cast<uint32_t>(m_textures.size()); }
+        uint64_t GetGpuBytes() const;     // buffers
+        uint64_t GetTextureBytes() const { return m_textureBytes; } // GPU memory of all textures, mips included
 
     private:
         // Everything one draw call needs: which indices, and which instance (world matrix) to place them with.
@@ -74,6 +77,8 @@ namespace walnut
 
         Buffer CreateStructuredBuffer(UploadContext& upload, const void* data, uint32_t count, uint32_t stride,
                                       const wchar_t* name, DescriptorHandle& srv);
+        // Uploads every loaded scene texture; returns each one's bindless SRV index (kNoTexture if it wasn't loaded).
+        std::vector<uint32_t> CreateTextures(UploadContext& upload, const Scene& scene);
 
         ID3D12Device10* m_device = nullptr;
         DescriptorHeap& m_srvHeap;
@@ -90,6 +95,9 @@ namespace walnut
         DescriptorHandle m_vertexSrv;    // their slots in the bindless heap
         DescriptorHandle m_instanceSrv;
         DescriptorHandle m_materialSrv;
+        std::vector<Texture> m_textures;
+        std::vector<DescriptorHandle> m_textureSrvs;
+        uint64_t m_textureBytes = 0;
         std::vector<DrawItem> m_draws;
 
         ComPtr<ID3D12PipelineState> m_cullBackPipeline;

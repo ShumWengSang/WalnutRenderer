@@ -64,6 +64,7 @@ namespace walnut
     void LogGltfSummary(const GltfSummary& summary);
 
     // Converts a glTF file into the engine's Scene: merged vertex/index arrays, one ScenePrimitive per glTF
-    // primitive and one SceneInstance per (node, primitive) pair, all in the engine's left-handed space.
-    Scene BuildSceneFromGltf(const cgltf_data& data);
+    // primitive and one SceneInstance per (node, primitive) pair, all in the engine's left-handed space. Images
+    // that materials use are decoded (relative URIs resolved against 'baseDirectory') and given mip chains.
+    Scene BuildSceneFromGltf(const cgltf_data& data, const std::filesystem::path& baseDirectory);
 }

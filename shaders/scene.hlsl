@@ -17,8 +17,10 @@ static const uint kViewNormals         = 0;
 static const uint kViewTexcoords       = 1;
 static const uint kViewInstances       = 2;
 static const uint kViewMaterials       = 3;
-static const uint kViewBaseColorFactor = 4;
+static const uint kViewBaseColor       = 4;
 static const uint kViewAlphaMode       = 5;
+
+static const uint kNoTexture = 0xFFFFFFFF;
 
 static const uint kAlphaOpaque = 0; // AlphaMode in Scene.h
 static const uint kAlphaMask   = 1;
@@ -48,7 +50,7 @@ struct Instance
     uint3 padding;
 };
 
-// Must match MaterialGpuData in ScenePass.cpp (48 bytes).
+// Must match MaterialGpuData in ScenePass.cpp (64 bytes).
 struct Material
 {
     float4 baseColorFactor; // linear
@@ -58,6 +60,8 @@ struct Material
     float alphaCutoff;
     uint alphaMode;
     uint doubleSided;
+    uint baseColorTexture; // descriptor heap slot of a Texture2D, or kNoTexture
+    uint3 padding;
 };
 
 struct PSInput
@@ -110,6 +114,17 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     if (!isFrontFace)
         normal = -normal;
 
+    // Base color = constant factor * texture. The texture is _SRGB, so Sample() returns linear values.
+    // The texture index comes from the material, which comes from a root constant, so it's the same for every
+    // pixel of the draw ("uniform"). An index that could differ between pixels of one draw would have to be
+    // wrapped in NonUniformResourceIndex(), or the GPU may read the wrong texture.
+    float4 baseColor = material.baseColorFactor;
+    if (material.baseColorTexture != kNoTexture)
+    {
+        Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[material.baseColorTexture];
+        baseColor *= baseColorTexture.Sample(g_samplerAnisotropicWrap, input.uv);
+    }
+
     float3 color;
     if (g_draw.debugView == kViewNormals)
         color = normal * 0.5f + 0.5f;
@@ -119,8 +134,8 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         color = HashColor(g_draw.instanceIndex);
     else if (g_draw.debugView == kViewMaterials)
         color = HashColor(materialIndex);
-    else if (g_draw.debugView == kViewBaseColorFactor)
-        color = material.baseColorFactor.rgb;
+    else if (g_draw.debugView == kViewBaseColor)
+        color = baseColor.rgb;
     else
     {
         color = material.alphaMode == kAlphaMask  ? float3(1.0f, 0.85f, 0.1f)

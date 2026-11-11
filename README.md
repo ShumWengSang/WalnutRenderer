@@ -77,12 +77,12 @@ The camera starts inside large scenes like Sponza, or framing small ones from ou
 ## Layout
 
 ```
-cmake/Dependencies.cmake  FetchContent: DirectX-Headers, Agility SDK, DXC, Dear ImGui, WinPixEventRuntime, cgltf (all pinned)
+cmake/Dependencies.cmake  FetchContent: DirectX-Headers, Agility SDK, DXC, Dear ImGui, WinPixEventRuntime, cgltf, stb_image (all pinned)
 shaders/                  HLSL sources, compiled at runtime straight from here (a copy next to the exe is the fallback)
 src/core/                 Application loop, Win32 Window, Input, Timer, Log
 src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, ShaderCompiler, Pix
 src/renderer/             Renderer (frames in flight, begin/end frame), ScenePass, TonemapPass
-src/scene/                Camera, fly controller, glTF loading (cgltf) into a flat Scene
+src/scene/                Camera, fly controller, glTF loading (cgltf) into a flat Scene, image decoding (stb_image)
 src/ui/                   ImGuiLayer (Win32 + DX12 backends)
 tools/                    fetch-assets.ps1 (download glTF models), pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher)
 ```
@@ -155,5 +155,6 @@ The **Agility SDK** is enabled through the `D3D12SDKVersion` and `D3D12SDKPath` 
 | Dear ImGui | v1.93.0-docking |
 | WinPixEventRuntime | 1.0.240308001 |
 | cgltf | v1.15 |
+| stb_image | commit d14d46f |
 
 Versions are set at the top of `cmake/Dependencies.cmake`. Keep the Agility SDK and DirectX-Headers on the same version.

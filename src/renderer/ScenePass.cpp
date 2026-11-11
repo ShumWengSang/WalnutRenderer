@@ -1,6 +1,7 @@
 #include "renderer/ScenePass.h"
 
 #include "core/Log.h"
+#include "core/StringUtils.h"
 #include "gfx/Device.h"
 #include "gfx/FrameAllocator.h"
 #include "gfx/GpuUtils.h"
@@ -38,8 +39,10 @@ namespace walnut
             float alphaCutoff;
             uint32_t alphaMode; // AlphaMode
             uint32_t doubleSided;
+            uint32_t baseColorTexture; // bindless SRV index, or kNoTexture
+            uint32_t padding[3];
         };
-        static_assert(sizeof(MaterialGpuData) == 48);
+        static_assert(sizeof(MaterialGpuData) == 64);
 
         // Per-pass constants (b1). Must match the cbuffer in scene.hlsl.
         struct ScenePassConstants
@@ -87,6 +90,10 @@ namespace walnut
         // switching PSOs once per frame instead of whenever two neighbouring draws differ.
         std::ranges::stable_partition(m_draws, [](const DrawItem& draw) { return !draw.doubleSided; });
 
+        // Textures first: materials refer to them by their slot in the bindless heap, which is only known once
+        // each texture's SRV exists.
+        const std::vector<uint32_t> textureSrvIndex = CreateTextures(upload, scene);
+
         std::vector<MaterialGpuData> materials;
         for (const SceneMaterial& material : scene.materials)
         {
@@ -98,6 +105,7 @@ namespace walnut
                 .alphaCutoff = material.alphaCutoff,
                 .alphaMode = static_cast<uint32_t>(material.alphaMode),
                 .doubleSided = material.doubleSided ? 1u : 0u,
+                .baseColorTexture = material.baseColorTexture != kNoTexture ? textureSrvIndex[material.baseColorTexture] : kNoTexture,
             });
         }
 
@@ -118,9 +126,48 @@ namespace walnut
 
         if (!ReloadShaders())
             throw std::runtime_error("Failed to build scene pipeline:\n" + m_lastError);
-        log::Info("ScenePass: {} draws ({} double-sided), {} materials, {:.1f} MB of buffers on the GPU", m_draws.size(),
-                  std::ranges::count_if(m_draws, [](const DrawItem& draw) { return draw.doubleSided; }), materials.size(),
-                  static_cast<double>(GetGpuBytes()) / (1024.0 * 1024.0));
+        log::Info("ScenePass: {} draws ({} double-sided), {} materials, {:.1f} MB of buffers, {} textures ({:.1f} MB) on the GPU",
+                  m_draws.size(), std::ranges::count_if(m_draws, [](const DrawItem& draw) { return draw.doubleSided; }),
+                  materials.size(), static_cast<double>(GetGpuBytes()) / (1024.0 * 1024.0), m_textures.size(),
+                  static_cast<double>(m_textureBytes) / (1024.0 * 1024.0));
+    }
+
+    std::vector<uint32_t> ScenePass::CreateTextures(UploadContext& upload, const Scene& scene)
+    {
+        std::vector<uint32_t> srvIndices(scene.textures.size(), kNoTexture);
+        for (size_t i = 0; i < scene.textures.size(); ++i)
+        {
+            const SceneTexture& source = scene.textures[i];
+            if (source.mips.empty())
+                continue;
+
+            // The same bytes, read two ways: _SRGB makes the sampler decode sRGB to linear light (before filtering,
+            // so blending between texels is done in linear light too); plain UNORM returns the bytes / 255.
+            Texture texture(m_device, TextureDesc{
+                .width = source.mips[0].width,
+                .height = source.mips[0].height,
+                .mipLevels = static_cast<uint16_t>(source.mips.size()),
+                .format = source.srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM,
+                .initialLayout = D3D12_BARRIER_LAYOUT_COPY_DEST,
+                .name = ToWide(source.name),
+            });
+
+            std::vector<TextureSubresourceData> subresources;
+            for (const ImageRgba8& mip : source.mips)
+                subresources.push_back({ .data = mip.pixels.data(), .rowPitch = mip.width * 4ull });
+            upload.UploadTexture(texture, subresources); // copied into the staging ring now; the CPU pixels can go
+
+            // What the GPU really allocates for it (rows padded, mips placed by the driver), not just width * height * 4.
+            D3D12_RESOURCE_ALLOCATION_INFO1 info{};
+            m_textureBytes += m_device->GetResourceAllocationInfo2(0, 1, &texture.GetResourceDesc(), &info).SizeInBytes;
+
+            const DescriptorHandle srv = m_srvHeap.Allocate();
+            texture.CreateSrv(m_device, srv.cpu);
+            srvIndices[i] = srv.index;
+            m_textureSrvs.push_back(srv);
+            m_textures.push_back(std::move(texture));
+        }
+        return srvIndices;
     }
 
     ScenePass::~ScenePass()
@@ -128,6 +175,8 @@ namespace walnut
         m_srvHeap.Free(m_vertexSrv);
         m_srvHeap.Free(m_instanceSrv);
         m_srvHeap.Free(m_materialSrv);
+        for (const DescriptorHandle& srv : m_textureSrvs)
+            m_srvHeap.Free(srv);
     }
 
     uint64_t ScenePass::GetGpuBytes() const
