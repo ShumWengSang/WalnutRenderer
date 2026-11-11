@@ -3,7 +3,6 @@
 #include "core/Log.h"
 #include "core/StringUtils.h"
 #include "gfx/Device.h"
-#include "gfx/FrameAllocator.h"
 #include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
 #include "gfx/RootSignature.h"
@@ -44,12 +43,6 @@ namespace walnut
             uint32_t padding[3];
         };
         static_assert(sizeof(MaterialGpuData) == 64);
-
-        // Per-pass constants (b1). Must match the cbuffer in scene.hlsl.
-        struct ScenePassConstants
-        {
-            DirectX::XMFLOAT4X4 viewProjection;
-        };
 
         // Root constants (b0). Must match DrawConstants in scene.hlsl.
         struct SceneDrawConstants
@@ -266,16 +259,12 @@ namespace walnut
         return true;
     }
 
-    void ScenePass::Render(ID3D12GraphicsCommandList* commandList, FrameAllocator& frameAllocator,
-                           DirectX::FXMMATRIX viewProjection, const SceneViewSettings& settings) const
+    void ScenePass::Render(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"ScenePass");
 
-        // Everything shared by all draws is set once.
-        ScenePassConstants passConstants{};
-        DirectX::XMStoreFloat4x4(&passConstants.viewProjection, viewProjection);
-        commandList->SetGraphicsRootConstantBufferView(RootParam::DrawData, frameAllocator.AllocateConstants(passConstants));
-
+        // The camera and lights come from the frame constants (b2), which the renderer has already bound.
+        // Everything else shared by all draws is set once here.
         const SceneDrawConstants drawConstants{
             .vertexBufferIndex = m_vertexSrv.index,
             .instanceBufferIndex = m_instanceSrv.index,

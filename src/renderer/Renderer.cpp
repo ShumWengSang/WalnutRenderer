@@ -122,6 +122,13 @@ namespace walnut
         BindBindlessState(m_commandList.Get());
     }
 
+    void Renderer::SetFrameConstants(const FrameConstants& constants)
+    {
+        // Root arguments stay bound across PSO changes (they belong to the root signature), so this one call
+        // covers every pass that uses the shared root signature this frame.
+        m_commandList->SetGraphicsRootConstantBufferView(RootParam::FrameData, m_frameAllocator->AllocateConstants(constants));
+    }
+
     void Renderer::BeginBackBufferPass()
     {
         // Two transitions in one Barrier() call, so the driver can batch them:

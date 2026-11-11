@@ -1,6 +1,7 @@
 // Scene shaders: draws every instance of the loaded scene. Compiled at runtime by DXC (see ScenePass.cpp).
 
 #include "common/Bindless.hlsli"
+#include "common/FrameConstants.hlsli"
 
 #ifndef ALPHA_TEST
 #define ALPHA_TEST 0 // ScenePass compiles the pixel shader twice: with ALPHA_TEST=1 for alpha-mask materials
@@ -17,12 +18,16 @@ struct DrawConstants
 };
 ConstantBuffer<DrawConstants> g_draw : register(b0);
 
-static const uint kViewNormals         = 0;
-static const uint kViewTexcoords       = 1;
-static const uint kViewInstances       = 2;
-static const uint kViewMaterials       = 3;
-static const uint kViewBaseColor       = 4;
-static const uint kViewAlphaMode       = 5;
+static const uint kViewLit          = 0; // SceneDebugView in ScenePass.h
+static const uint kViewLightingOnly = 1;
+static const uint kViewBaseColor    = 2;
+static const uint kViewNormals      = 3;
+static const uint kViewTexcoords    = 4;
+static const uint kViewInstances    = 5;
+static const uint kViewMaterials    = 6;
+static const uint kViewAlphaMode    = 7;
+
+static const float kPi = 3.14159265f;
 
 static const uint kNoTexture = 0xFFFFFFFF;
 
@@ -30,11 +35,6 @@ static const uint kAlphaOpaque = 0; // AlphaMode in Scene.h
 static const uint kAlphaMask   = 1;
 static const uint kAlphaBlend  = 2;
 
-// Set once per pass at b1. Must match ScenePassConstants in ScenePass.cpp.
-cbuffer PassConstants : register(b1)
-{
-    row_major float4x4 g_viewProjection;
-};
 
 // Must match SceneVertex in Scene.h (48 bytes).
 struct Vertex
@@ -70,9 +70,10 @@ struct Material
 
 struct PSInput
 {
-    float4 position : SV_Position;
-    float3 normal   : NORMAL;
-    float2 uv       : TEXCOORD0;
+    float4 position      : SV_Position;
+    float3 worldPosition : POSITION;
+    float3 normal        : NORMAL;
+    float2 uv            : TEXCOORD0;
 };
 
 // For an indexed draw, SV_VertexID is the value read from the index buffer, which the loader made point straight
@@ -87,7 +88,8 @@ PSInput VSMain(uint vertexId : SV_VertexID)
     const float4 worldPosition = mul(float4(vertex.position, 1.0f), instance.world);
 
     PSInput output;
-    output.position = mul(worldPosition, g_viewProjection);
+    output.position = mul(worldPosition, g_frame.viewProjection);
+    output.worldPosition = worldPosition.xyz;
     output.normal = mul(float4(vertex.normal, 0.0f), instance.normalMatrix).xyz; // w = 0: directions don't move
     output.uv = vertex.uv;
     return output;
@@ -114,9 +116,21 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
 
     // The normal points out of the front face. Seen from behind (a leaf's underside), the surface faces the other
     // way, so glTF says to flip it for double-sided materials.
-    float3 normal = normalize(input.normal); // interpolation shortens normals, so normalize again
-    if (!isFrontFace)
-        normal = -normal;
+    float3 normal = input.normal;
+    // Files without normals leave them zero (normalize would give NaN). Fall back to the triangle's flat normal:
+    // ddx/ddy give how the world position changes to the neighbouring pixel, and their cross product is
+    // perpendicular to the surface. Computed outside the 'if': derivatives need every pixel of the 2x2 group.
+    float3 flatNormal = normalize(cross(ddy(input.worldPosition), ddx(input.worldPosition)));
+    if (dot(flatNormal, g_frame.cameraPosition - input.worldPosition) < 0.0f)
+        flatNormal = -flatNormal; // we see this side, so it faces us
+    if (dot(normal, normal) > 1e-12f)
+    {
+        normal = normalize(normal); // interpolation shortens normals, so normalize again
+        if (!isFrontFace)
+            normal = -normal;
+    }
+    else
+        normal = flatNormal;
 
     // Base color = constant factor * texture. The texture is _SRGB, so Sample() returns linear values.
     // The texture index comes from the material, which comes from a root constant, so it's the same for every
@@ -140,8 +154,25 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         discard;
 #endif
 
+    // Diffuse lighting (Lambert). A matte surface scatters light equally in all directions; how much it receives
+    // depends on how directly it faces the light: N.L, the cosine of the angle between the normal and the light
+    // direction (1 facing the sun, 0 edge-on, negative = facing away, so clamped to 0). Its BRDF is albedo / pi
+    // (the pi spreads the light over the hemisphere, so a white surface never reflects more than it receives).
+    //
+    //   sun:     albedo / pi * sunIlluminance * N.L
+    //   ambient: albedo * ambientRadiance    (the same light from every direction, integrated over the hemisphere:
+    //                                         pi * radiance, times albedo / pi)
+    //
+    // No shadows yet: a surface facing the sun is lit even if a roof is in the way.
+    const float NdotL = saturate(dot(normal, g_frame.sunDirection));
+    const float3 lighting = g_frame.sunIlluminance * NdotL / kPi + g_frame.ambientRadiance;
+
     float3 color;
-    if (g_draw.debugView == kViewNormals)
+    if (g_draw.debugView == kViewLit)
+        color = baseColor.rgb * lighting;
+    else if (g_draw.debugView == kViewLightingOnly)
+        color = lighting;
+    else if (g_draw.debugView == kViewNormals)
         color = normal * 0.5f + 0.5f;
     else if (g_draw.debugView == kViewTexcoords)
         color = float3(frac(input.uv), 0.0f); // frac: glTF UVs may go beyond 0..1 (repeating textures)

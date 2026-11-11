@@ -7,6 +7,7 @@
 #include "gfx/FrameAllocator.h"
 #include "gfx/SwapChain.h"
 #include "gfx/UploadContext.h"
+#include "renderer/FrameConstants.h"
 
 #include <array>
 #include <cstdint>
@@ -59,6 +60,9 @@ namespace walnut
         Renderer& operator=(const Renderer&) = delete;
 
         void BeginFrame(const float clearColor[4]);
+        // Copies 'constants' into this frame's upload memory and binds them at b2 for every following draw.
+        // Call after BeginFrame (which binds the root signature; that clears root arguments).
+        void SetFrameConstants(const FrameConstants& constants);
         void BeginBackBufferPass();
         void BeginUiPass();
         void EndFrame();

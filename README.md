@@ -132,7 +132,7 @@ Example prompt: *"Survey captures\WalnutRenderer_timing_….wpix with PixMcp: fr
 2. If the window was resized, the renderer flushes the GPU and calls `ResizeBuffers` on the swapchain.
 3. ImGui starts a new frame. `Input` is told whether ImGui is using the keyboard or mouse, and ignores that device for game input while it is.
 4. `Renderer::BeginFrame()` waits on this frame slot's fence and resets its command allocator. It then records an Enhanced Barrier that changes the back buffer's layout from PRESENT to RENDER_TARGET (`SyncBefore = NONE`, `SyncAfter = RENDER_TARGET`), clears it, and sets the viewport and scissor.
-5. The scene (one draw per instance) and the ImGui overlay are recorded into the command list.
+5. `Renderer::SetFrameConstants()` binds the frame's camera and light data at `b2` (see `src/renderer/FrameConstants.h`); every pass can read it. The scene (one draw per instance, lit by a sun and an ambient term) and the ImGui overlay are then recorded into the command list.
 6. `Renderer::EndFrame()` records an Enhanced Barrier from RENDER_TARGET back to PRESENT (`SyncBefore = RENDER_TARGET`, `SyncAfter = NONE`) and executes the command list. It then presents and signals the frame fence.
 
 ### Barriers

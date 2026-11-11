@@ -8,6 +8,7 @@
 #include "scene/Camera.h"
 #include "scene/FlyCameraController.h"
 #include "scene/GltfLoader.h"
+#include "scene/Lighting.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -78,6 +79,7 @@ namespace walnut
         float m_clearColor[4] = {}; // starts as Renderer::kDefaultClearColor (the scene target's fast-clear color)
         TonemapSettings m_tonemapSettings;
         SceneViewSettings m_sceneView;
+        SceneLighting m_lighting;
         Camera m_camera;
         Camera m_homeCamera; // where "Reset camera" goes: framing the loaded scene
         FlyCameraController m_cameraController;

@@ -16,25 +16,26 @@
 namespace walnut
 {
     class Device;
-    class FrameAllocator;
     class ShaderCompiler;
     class UploadContext;
     struct Scene;
 
-    // What the scene shader outputs until textures and lighting exist. Values must match scene.hlsl.
+    // What the scene shader outputs. Values must match scene.hlsl.
     enum class SceneDebugView : uint32_t
     {
-        Normals = 0,         // world-space normal, mapped from -1..1 to 0..1 colors
-        Texcoords = 1,       // UV as red/green
-        Instances = 2,       // a random color per instance (= per draw)
-        Materials = 3,       // a random color per material
-        BaseColor = 4,       // the material's base color: texture * factor (unlit)
-        AlphaMode = 5,       // opaque gray, mask yellow, blend red; back faces of double-sided materials darker
+        Lit = 0,          // base color lit by the sun (Lambert diffuse) plus ambient
+        LightingOnly = 1, // the same lighting on a white surface: shows the light without the textures
+        BaseColor = 2,    // the material's base color: texture * factor (unlit)
+        Normals = 3,      // world-space normal, mapped from -1..1 to 0..1 colors
+        Texcoords = 4,    // UV as red/green
+        Instances = 5,    // a random color per instance (= per draw)
+        Materials = 6,    // a random color per material
+        AlphaMode = 7,    // opaque gray, mask yellow, blend red; back faces of double-sided materials darker
     };
 
     struct SceneViewSettings
     {
-        SceneDebugView debugView = SceneDebugView::BaseColor;
+        SceneDebugView debugView = SceneDebugView::Lit;
         bool backfaceCulling = true; // for single-sided materials; double-sided ones are never culled
         bool alphaTest = true;       // cut out alpha-mask materials; off draws them as opaque, to compare
     };
@@ -58,9 +59,8 @@ namespace walnut
         bool ReloadShaders();
         const std::string& GetLastError() const { return m_lastError; }
 
-        // Expects the bindless state (descriptor heap + root signature) to be bound already.
-        void Render(ID3D12GraphicsCommandList* commandList, FrameAllocator& frameAllocator,
-                    DirectX::FXMMATRIX viewProjection, const SceneViewSettings& settings) const;
+        // Expects the bindless state (descriptor heap + root signature) and the frame constants to be bound already.
+        void Render(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const;
 
         uint32_t GetDrawCount() const { return static_cast<uint32_t>(m_draws.size()); }
         uint32_t GetTextureCount() const { return static_cast<uint32_t>(m_textures.size()); }

@@ -240,14 +240,26 @@ namespace walnut
             // The aspect ratio comes from the back buffer, so the image doesn't stretch when the window resizes.
             const SwapChain& swapChain = m_renderer->GetSwapChain();
             const float aspect = static_cast<float>(swapChain.GetWidth()) / static_cast<float>(swapChain.GetHeight());
-            const DirectX::XMMATRIX viewProjection = m_camera.GetViewProjectionMatrix(aspect);
+
+            // Everything the frame's shaders share: camera and lights. Colors are multiplied by their intensity here,
+            // so shaders only see the resulting light amounts.
+            FrameConstants frameConstants{};
+            DirectX::XMStoreFloat4x4(&frameConstants.viewProjection, m_camera.GetViewProjectionMatrix(aspect));
+            frameConstants.cameraPosition = m_camera.position;
+            frameConstants.sunDirection = m_lighting.GetSunDirection();
+            const auto scaled = [](const DirectX::XMFLOAT3& color, float intensity) {
+                return DirectX::XMFLOAT3{ color.x * intensity, color.y * intensity, color.z * intensity };
+            };
+            frameConstants.sunIlluminance = scaled(m_lighting.sunColor, m_lighting.sunIntensity);
+            frameConstants.ambientRadiance = scaled(m_lighting.ambientColor, m_lighting.ambientIntensity);
 
             {
                 PIXScopedEvent(pix::kColorCpu, L"Render");
                 m_renderer->BeginFrame(m_clearColor);
+                m_renderer->SetFrameConstants(frameConstants);
                 ID3D12GraphicsCommandList* commandList = m_renderer->GetCommandList();
                 if (m_scenePass)
-                    m_scenePass->Render(commandList, m_renderer->GetFrameAllocator(), viewProjection, m_sceneView);
+                    m_scenePass->Render(commandList, m_sceneView);
 
                 // The 3D scene is done; from here on we draw into the back buffer.
                 m_renderer->BeginBackBufferPass();
@@ -397,8 +409,8 @@ namespace walnut
                                 static_cast<double>(m_scenePass->GetGpuBytes()) / (1024.0 * 1024.0));
                     ImGui::Text("     %u textures, %.1f MB with mips", m_scenePass->GetTextureCount(),
                                 static_cast<double>(m_scenePass->GetTextureBytes()) / (1024.0 * 1024.0));
-                    const char* views[] = { "Normals (world)", "Texture coordinates", "Instance colors",
-                                            "Material colors", "Base color (unlit)", "Alpha mode / back faces" };
+                    const char* views[] = { "Lit (sun + ambient)", "Lighting only", "Base color (unlit)", "Normals (world)",
+                                            "Texture coordinates", "Instance colors", "Material colors", "Alpha mode / back faces" };
                     int view = static_cast<int>(m_sceneView.debugView);
                     if (ImGui::Combo("Show", &view, views, IM_ARRAYSIZE(views)))
                         m_sceneView.debugView = static_cast<SceneDebugView>(view);
@@ -412,6 +424,18 @@ namespace walnut
                 ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s %s", fileName.c_str(), m_sceneError.c_str());
                 ImGui::SetItemTooltip("%s", ToUtf8(m_scenePath.wstring()).c_str());
             }
+        }
+
+        if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen))
+        {
+            ImGui::SliderAngle("Sun azimuth", &m_lighting.sunAzimuth, -180.0f, 180.0f);
+            ImGui::SliderAngle("Sun elevation", &m_lighting.sunElevation, -10.0f, 90.0f);
+            ImGui::ColorEdit3("Sun color", &m_lighting.sunColor.x, ImGuiColorEditFlags_Float);
+            ImGui::SliderFloat("Sun intensity", &m_lighting.sunIntensity, 0.0f, 50.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+            ImGui::ColorEdit3("Ambient color", &m_lighting.ambientColor.x, ImGuiColorEditFlags_Float);
+            ImGui::SliderFloat("Ambient intensity", &m_lighting.ambientIntensity, 0.0f, 5.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
+            const DirectX::XMFLOAT3 sun = m_lighting.GetSunDirection();
+            ImGui::TextDisabled("Towards the sun: (%.2f, %.2f, %.2f). No shadows yet.", sun.x, sun.y, sun.z);
         }
 
         if (ImGui::CollapsingHeader("Tonemapping", ImGuiTreeNodeFlags_DefaultOpen))
