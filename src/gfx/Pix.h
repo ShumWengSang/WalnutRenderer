@@ -4,7 +4,7 @@
 //
 // Use PIXScopedEvent / PIXBeginEvent / PIXEndEvent / PIXSetMarker from pix3.h directly:
 //   PIXScopedEvent(pix::kColorCpu, L"Update");                      // CPU timeline
-//   PIXScopedEvent(commandList, pix::kColorGpu, L"Triangle");       // GPU timeline
+//   PIXScopedEvent(commandList, pix::kColorGpu, L"ScenePass");      // GPU timeline
 //
 // CPU events show up in Timing Captures. GPU events (on command lists and queues) show up
 // in both Timing Captures and GPU Captures.

@@ -52,6 +52,7 @@ namespace walnut
     private:
         void Update(float deltaSeconds);
         void DrawUI(float deltaSeconds);
+        void DrawStatsOverlay() const;
         void DrawPixUI();
         void ReloadShaders();
         void RequestGpuCapture();
@@ -84,6 +85,7 @@ namespace walnut
         Camera m_homeCamera; // where "Reset camera" goes: framing the loaded scene
         FlyCameraController m_cameraController;
         bool m_showDemoWindow = false;
+        bool m_showUI = true; // F1
         float m_smoothedFrameMs = 0.0f;
         std::filesystem::path m_lastCapturePath;
     };

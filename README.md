@@ -69,6 +69,7 @@ Logs go to the debugger output and to `WalnutRenderer.log` next to the exe. When
 | Q/E | Move down/up |
 | Shift | Move faster |
 | Mouse wheel | Change move speed |
+| F1 | Hide or show the UI |
 | F5 | Recompile shaders. Edit `shaders/scene.hlsl` in the repo and press F5 to see the change live. |
 | Esc | Quit |
 

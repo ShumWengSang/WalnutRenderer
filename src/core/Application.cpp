@@ -293,6 +293,8 @@ namespace walnut
             PostMessageW(m_window->GetHandle(), WM_CLOSE, 0, 0);
         if (m_input.WasKeyPressed(VK_F5))
             ReloadShaders();
+        if (m_input.WasKeyPressed(VK_F1))
+            m_showUI = !m_showUI;
 
         m_cameraController.Update(m_camera, m_input, deltaSeconds);
     }
@@ -344,86 +346,72 @@ namespace walnut
         }
     }
 
+    void Application::DrawStatsOverlay() const
+    {
+        // A small, borderless, see-through window pinned to the top-right corner: numbers you want while looking at
+        // the scene. Not saved to imgui.ini and never takes focus, so it doesn't get in the way.
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 10.0f, viewport->WorkPos.y + 10.0f),
+                                ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+        ImGui::SetNextWindowBgAlpha(0.35f);
+        const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                                       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                                       ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs;
+        if (ImGui::Begin("Stats", nullptr, flags))
+        {
+            const SwapChain& swapChain = m_renderer->GetSwapChain();
+            ImGui::Text("%.2f ms  (%.0f FPS)", m_smoothedFrameMs, m_smoothedFrameMs > 0.0f ? 1000.0f / m_smoothedFrameMs : 0.0f);
+            ImGui::Text("%u x %u%s", swapChain.GetWidth(), swapChain.GetHeight(), m_renderer->GetVsync() ? ", vsync" : "");
+            if (m_scenePass)
+                ImGui::Text("%u draws, %.2f M triangles", m_scenePass->GetDrawCount(),
+                            static_cast<double>(m_scene.indices.size() / 3) / 1e6);
+            ImGui::Text("Camera (%.1f, %.1f, %.1f)", m_camera.position.x, m_camera.position.y, m_camera.position.z);
+            ImGui::TextDisabled("F1: hide UI");
+        }
+        ImGui::End();
+    }
+
     void Application::DrawUI(float deltaSeconds)
     {
         const float frameMs = deltaSeconds * 1000.0f;
         m_smoothedFrameMs = (m_smoothedFrameMs == 0.0f) ? frameMs : m_smoothedFrameMs * 0.95f + frameMs * 0.05f;
+        if (!m_showUI)
+            return;
+
+        DrawStatsOverlay();
 
         const SwapChain& swapChain = m_renderer->GetSwapChain();
         Device& device = m_renderer->GetDevice();
 
-        ImGui::SetNextWindowPos(ImVec2(10.0f, 10.0f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(450.0f, 0.0f), ImGuiCond_FirstUseEver);
-        ImGui::Begin("WalnutRenderer");
+        // As tall as the window, so the sections scroll instead of running off the bottom of the screen.
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 10.0f, viewport->WorkPos.y + 10.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(430.0f, viewport->WorkSize.y - 20.0f), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Settings");
 
-        ImGui::Text("Adapter: %s", ToUtf8(device.GetAdapterName()).c_str());
-        ImGui::Text("%.2f ms/frame (%.0f FPS)", m_smoothedFrameMs, m_smoothedFrameMs > 0.0f ? 1000.0f / m_smoothedFrameMs : 0.0f);
-        ImGui::Text("Back buffer: %u x %u, frame %llu", swapChain.GetWidth(), swapChain.GetHeight(),
-                    static_cast<unsigned long long>(m_renderer->GetFrameCount()));
-        ImGui::Text("Debug layer: %s", device.IsDebugLayerEnabled() ? "on" : "off");
-        ImGui::Text("Shader Model %s (compiling for %ls), Resource Binding Tier %d",
-                    ToString(device.GetShaderModel()).c_str(), kShaderModelSuffix,
-                    static_cast<int>(device.GetResourceBindingTier()));
-
-        if (ImGui::CollapsingHeader("Renderer", ImGuiTreeNodeFlags_DefaultOpen))
+        // Shader errors first: they would otherwise be easy to miss inside a closed section.
+        const std::string noError;
+        for (const std::string* error : { m_scenePass ? &m_scenePass->GetLastError() : &noError, &m_tonemapPass->GetLastError() })
         {
-            bool vsync = m_renderer->GetVsync();
-            if (ImGui::Checkbox("VSync", &vsync))
-                m_renderer->SetVsync(vsync);
-            ImGui::SameLine();
-            ImGui::TextDisabled(swapChain.IsTearingSupported() ? "(tearing supported)" : "(tearing unsupported)");
-            // Float + HDR: scene colors are linear light and may go above 1.0.
-            ImGui::ColorEdit3("Clear color (linear)", m_clearColor, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
-
-            // Read before this frame's allocations, so this shows what the previous frame used.
-            const FrameAllocator& frameAllocator = m_renderer->GetFrameAllocator();
-            ImGui::Text("Frame upload memory: %llu / %llu bytes",
-                        static_cast<unsigned long long>(frameAllocator.GetUsedBytes()),
-                        static_cast<unsigned long long>(frameAllocator.GetBytesPerFrame()));
-            const DescriptorHeap& srvHeap = m_renderer->GetSrvHeap();
-            ImGui::Text("Bindless descriptors: %u / %u used", srvHeap.GetAllocatedCount(), srvHeap.GetCapacity());
+            if (error->empty())
+                continue;
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+            ImGui::TextWrapped("%s", error->c_str());
+            ImGui::PopStyleColor();
         }
 
-        if (ImGui::CollapsingHeader("Scene", ImGuiTreeNodeFlags_DefaultOpen))
+        // --- What you tweak most: open by default ----------------------------------------------------------------
+
+        if (m_scenePass && ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            const std::string fileName = ToUtf8(m_scenePath.filename().wstring());
-            if (m_sceneSummary)
-            {
-                const GltfSummary& s = *m_sceneSummary;
-                ImGui::Text("%s (parsed in %.1f ms, built in %.1f ms)", fileName.c_str(), m_sceneLoadMs, m_sceneBuildMs);
-                ImGui::SetItemTooltip("%s", ToUtf8(m_scenePath.wstring()).c_str());
-                ImGui::Text("%zu nodes, %zu meshes, %zu images", s.nodes, s.meshes, s.images);
-                ImGui::Text("%zu materials (%zu alpha-mask, %zu alpha-blend, %zu double-sided)", m_scene.materials.size(),
-                            static_cast<size_t>(std::ranges::count(m_scene.materials, AlphaMode::Mask, &SceneMaterial::alphaMode)),
-                            static_cast<size_t>(std::ranges::count(m_scene.materials, AlphaMode::Blend, &SceneMaterial::alphaMode)),
-                            static_cast<size_t>(std::ranges::count(m_scene.materials, true, &SceneMaterial::doubleSided)));
-                ImGui::Text("%zu instances of %zu primitives", m_scene.instances.size(), m_scene.primitives.size());
-                ImGui::Text("%zu vertices, %zu triangles", m_scene.vertices.size(), m_scene.indices.size() / 3);
-                const DirectX::XMFLOAT3& lo = m_scene.boundsMin;
-                const DirectX::XMFLOAT3& hi = m_scene.boundsMax;
-                ImGui::Text("Size %.1f x %.1f x %.1f", hi.x - lo.x, hi.y - lo.y, hi.z - lo.z);
-                ImGui::SetItemTooltip("World bounds (%.2f, %.2f, %.2f) to (%.2f, %.2f, %.2f)", lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
-                if (m_scenePass)
-                {
-                    ImGui::Text("GPU: %u draws per frame, %.1f MB of buffers", m_scenePass->GetDrawCount(),
-                                static_cast<double>(m_scenePass->GetGpuBytes()) / (1024.0 * 1024.0));
-                    ImGui::Text("     %u textures, %.1f MB with mips", m_scenePass->GetTextureCount(),
-                                static_cast<double>(m_scenePass->GetTextureBytes()) / (1024.0 * 1024.0));
-                    const char* views[] = { "Lit (sun + ambient)", "Lighting only", "Base color (unlit)", "Normals (world)",
-                                            "Texture coordinates", "Instance colors", "Material colors", "Alpha mode / back faces" };
-                    int view = static_cast<int>(m_sceneView.debugView);
-                    if (ImGui::Combo("Show", &view, views, IM_ARRAYSIZE(views)))
-                        m_sceneView.debugView = static_cast<SceneDebugView>(view);
-                    ImGui::Checkbox("Back-face culling", &m_sceneView.backfaceCulling);
-                    ImGui::SameLine();
-                    ImGui::Checkbox("Alpha test", &m_sceneView.alphaTest);
-                }
-            }
-            else
-            {
-                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s %s", fileName.c_str(), m_sceneError.c_str());
-                ImGui::SetItemTooltip("%s", ToUtf8(m_scenePath.wstring()).c_str());
-            }
+            const char* views[] = { "Lit (sun + ambient)", "Lighting only", "Base color (unlit)", "Normals (world)",
+                                    "Texture coordinates", "Instance colors", "Material colors", "Alpha mode / back faces" };
+            int view = static_cast<int>(m_sceneView.debugView);
+            if (ImGui::Combo("Show", &view, views, IM_ARRAYSIZE(views)))
+                m_sceneView.debugView = static_cast<SceneDebugView>(view);
+            ImGui::Checkbox("Back-face culling", &m_sceneView.backfaceCulling);
+            ImGui::SameLine();
+            ImGui::Checkbox("Alpha test", &m_sceneView.alphaTest);
         }
 
         if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen))
@@ -448,7 +436,9 @@ namespace walnut
             ImGui::TextDisabled("Output: back buffer _SRGB view (hardware linear -> sRGB)");
         }
 
-        if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen))
+        // --- Details: closed by default ---------------------------------------------------------------------------
+
+        if (ImGui::CollapsingHeader("Camera"))
         {
             ImGui::DragFloat3("Position", &m_camera.position.x, 0.01f);
             ImGui::SliderAngle("Yaw", &m_camera.yaw, -180.0f, 180.0f);
@@ -460,24 +450,73 @@ namespace walnut
                 m_camera = m_homeCamera;
         }
 
-        if (ImGui::CollapsingHeader("Shaders", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader("Scene"))
+        {
+            const std::string fileName = ToUtf8(m_scenePath.filename().wstring());
+            if (m_sceneSummary)
+            {
+                const GltfSummary& s = *m_sceneSummary;
+                ImGui::Text("%s (parsed in %.1f ms, built in %.1f ms)", fileName.c_str(), m_sceneLoadMs, m_sceneBuildMs);
+                ImGui::SetItemTooltip("%s", ToUtf8(m_scenePath.wstring()).c_str());
+                ImGui::Text("%zu nodes, %zu meshes, %zu images", s.nodes, s.meshes, s.images);
+                ImGui::Text("%zu materials (%zu alpha-mask, %zu alpha-blend, %zu double-sided)", m_scene.materials.size(),
+                            static_cast<size_t>(std::ranges::count(m_scene.materials, AlphaMode::Mask, &SceneMaterial::alphaMode)),
+                            static_cast<size_t>(std::ranges::count(m_scene.materials, AlphaMode::Blend, &SceneMaterial::alphaMode)),
+                            static_cast<size_t>(std::ranges::count(m_scene.materials, true, &SceneMaterial::doubleSided)));
+                ImGui::Text("%zu instances of %zu primitives", m_scene.instances.size(), m_scene.primitives.size());
+                ImGui::Text("%zu vertices, %zu triangles", m_scene.vertices.size(), m_scene.indices.size() / 3);
+                const DirectX::XMFLOAT3& lo = m_scene.boundsMin;
+                const DirectX::XMFLOAT3& hi = m_scene.boundsMax;
+                ImGui::Text("Size %.1f x %.1f x %.1f", hi.x - lo.x, hi.y - lo.y, hi.z - lo.z);
+                ImGui::SetItemTooltip("World bounds (%.2f, %.2f, %.2f) to (%.2f, %.2f, %.2f)", lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
+                if (m_scenePass)
+                {
+                    ImGui::Text("GPU: %.1f MB of buffers, %u textures (%.1f MB with mips)",
+                                static_cast<double>(m_scenePass->GetGpuBytes()) / (1024.0 * 1024.0), m_scenePass->GetTextureCount(),
+                                static_cast<double>(m_scenePass->GetTextureBytes()) / (1024.0 * 1024.0));
+                }
+            }
+            else
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s %s", fileName.c_str(), m_sceneError.c_str());
+                ImGui::SetItemTooltip("%s", ToUtf8(m_scenePath.wstring()).c_str());
+            }
+        }
+
+        if (ImGui::CollapsingHeader("Renderer"))
+        {
+            ImGui::Text("Adapter: %s", ToUtf8(device.GetAdapterName()).c_str());
+            ImGui::Text("Shader Model %s (compiling for %ls), Resource Binding Tier %d",
+                        ToString(device.GetShaderModel()).c_str(), kShaderModelSuffix,
+                        static_cast<int>(device.GetResourceBindingTier()));
+            ImGui::Text("Debug layer: %s, frame %llu", device.IsDebugLayerEnabled() ? "on" : "off",
+                        static_cast<unsigned long long>(m_renderer->GetFrameCount()));
+            bool vsync = m_renderer->GetVsync();
+            if (ImGui::Checkbox("VSync", &vsync))
+                m_renderer->SetVsync(vsync);
+            ImGui::SameLine();
+            ImGui::TextDisabled(swapChain.IsTearingSupported() ? "(tearing supported)" : "(tearing unsupported)");
+            // Float + HDR: scene colors are linear light and may go above 1.0.
+            ImGui::ColorEdit3("Clear color (linear)", m_clearColor, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+
+            // Read before this frame's allocations, so this shows what the previous frame used.
+            const FrameAllocator& frameAllocator = m_renderer->GetFrameAllocator();
+            ImGui::Text("Frame upload memory: %llu / %llu bytes",
+                        static_cast<unsigned long long>(frameAllocator.GetUsedBytes()),
+                        static_cast<unsigned long long>(frameAllocator.GetBytesPerFrame()));
+            const DescriptorHeap& srvHeap = m_renderer->GetSrvHeap();
+            ImGui::Text("Bindless descriptors: %u / %u used", srvHeap.GetAllocatedCount(), srvHeap.GetCapacity());
+        }
+
+        if (ImGui::CollapsingHeader("Shaders"))
         {
             if (ImGui::Button("Reload shaders (F5)"))
                 ReloadShaders();
             ImGui::SameLine();
             ImGui::TextDisabled("from %s", ToUtf8(m_shaderDir.wstring()).c_str());
-            const std::string noError;
-            for (const std::string* error : { m_scenePass ? &m_scenePass->GetLastError() : &noError, &m_tonemapPass->GetLastError() })
-            {
-                if (error->empty())
-                    continue;
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
-                ImGui::TextWrapped("%s", error->c_str());
-                ImGui::PopStyleColor();
-            }
         }
 
-        if (ImGui::CollapsingHeader("Input", ImGuiTreeNodeFlags_DefaultOpen))
+        if (ImGui::CollapsingHeader("Input"))
         {
             ImGui::Text("Mouse: (%d, %d)  raw delta: (%d, %d)", m_input.GetMouseX(), m_input.GetMouseY(),
                         m_input.GetMouseDeltaXRaw(), m_input.GetMouseDeltaYRaw());
@@ -505,7 +544,7 @@ namespace walnut
 
             ImGui::Separator();
             ImGui::TextDisabled("Hold right mouse: look   WASD: move   Q/E: down/up");
-            ImGui::TextDisabled("Shift: fast   wheel: speed   F5: reload shaders   Esc: quit");
+            ImGui::TextDisabled("Shift: fast   wheel: speed   F1: hide UI   F5: reload shaders   Esc: quit");
         }
 
         DrawPixUI();
