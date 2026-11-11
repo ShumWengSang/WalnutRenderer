@@ -403,6 +403,8 @@ namespace walnut
                     if (ImGui::Combo("Show", &view, views, IM_ARRAYSIZE(views)))
                         m_sceneView.debugView = static_cast<SceneDebugView>(view);
                     ImGui::Checkbox("Back-face culling", &m_sceneView.backfaceCulling);
+                    ImGui::SameLine();
+                    ImGui::Checkbox("Alpha test", &m_sceneView.alphaTest);
                 }
             }
             else

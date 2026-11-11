@@ -110,7 +110,10 @@ namespace walnut
         }
 
         WR_CHECK(compileResult->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&result.bytecode), nullptr));
-        log::Info("Compiled shader {} [{} {}]", desc.path.filename().string(), ToUtf8(desc.entryPoint), ToUtf8(target));
+        std::wstring defineList;
+        for (const std::wstring& define : defineStrings)
+            defineList += L" " + define;
+        log::Info("Compiled shader {} [{} {}{}]", desc.path.filename().string(), ToUtf8(desc.entryPoint), ToUtf8(target), ToUtf8(defineList));
         return result;
     }
 }

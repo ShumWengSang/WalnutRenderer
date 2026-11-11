@@ -12,6 +12,7 @@
 #include "scene/Scene.h"
 
 #include <algorithm>
+#include <array>
 
 namespace walnut
 {
@@ -82,13 +83,15 @@ namespace walnut
             XMStoreFloat4x4(&gpu.normalMatrix, XMMatrixTranspose(XMMatrixInverse(nullptr, world)));
 
             const ScenePrimitive& primitive = scene.primitives[instance.primitiveIndex];
+            const SceneMaterial& material = scene.materials[primitive.materialIndex];
             gpu.materialIndex = primitive.materialIndex;
             m_draws.push_back({ primitive.indexCount, primitive.firstIndex, static_cast<uint32_t>(m_draws.size()),
-                                scene.materials[primitive.materialIndex].doubleSided });
+                                material.doubleSided, material.alphaMode == AlphaMode::Mask });
         }
-        // Single-sided draws first, then double-sided ones: culling is part of the PSO, so grouping them means
-        // switching PSOs once per frame instead of whenever two neighbouring draws differ.
-        std::ranges::stable_partition(m_draws, [](const DrawItem& draw) { return !draw.doubleSided; });
+        // Sorted by PSO: opaque single-sided, opaque double-sided, masked single-sided, masked double-sided. Each PSO
+        // is then set once per frame. Opaque goes first on purpose: alpha-tested pixels are slower (see scene.hlsl),
+        // and drawing them last lets the depth test reject the ones hidden behind walls before they're shaded.
+        std::ranges::stable_sort(m_draws, {}, [](const DrawItem& draw) { return draw.alphaTest * 2 + draw.doubleSided; });
 
         // Textures first: materials refer to them by their slot in the bindless heap, which is only known once
         // each texture's SRV exists.
@@ -126,8 +129,9 @@ namespace walnut
 
         if (!ReloadShaders())
             throw std::runtime_error("Failed to build scene pipeline:\n" + m_lastError);
-        log::Info("ScenePass: {} draws ({} double-sided), {} materials, {:.1f} MB of buffers, {} textures ({:.1f} MB) on the GPU",
+        log::Info("ScenePass: {} draws ({} double-sided, {} alpha-tested), {} materials, {:.1f} MB of buffers, {} textures ({:.1f} MB) on the GPU",
                   m_draws.size(), std::ranges::count_if(m_draws, [](const DrawItem& draw) { return draw.doubleSided; }),
+                  std::ranges::count_if(m_draws, [](const DrawItem& draw) { return draw.alphaTest; }),
                   materials.size(), static_cast<double>(GetGpuBytes()) / (1024.0 * 1024.0), m_textures.size(),
                   static_cast<double>(m_textureBytes) / (1024.0 * 1024.0));
     }
@@ -204,11 +208,14 @@ namespace walnut
 
     bool ScenePass::ReloadShaders()
     {
+        // One vertex shader; two pixel shaders built from the same source. The alpha-tested one is compiled with
+        // ALPHA_TEST=1, which adds the 'discard'. Opaque materials use the one without it.
         const ShaderCompileResult vs = m_compiler.Compile({ m_shaderPath, L"VSMain", ShaderStage::Vertex });
         const ShaderCompileResult ps = m_compiler.Compile({ m_shaderPath, L"PSMain", ShaderStage::Pixel });
-        if (!vs.Succeeded() || !ps.Succeeded())
+        const ShaderCompileResult psAlphaTest = m_compiler.Compile({ m_shaderPath, L"PSMain", ShaderStage::Pixel, { { L"ALPHA_TEST", L"1" } } });
+        if (!vs.Succeeded() || !ps.Succeeded() || !psAlphaTest.Succeeded())
         {
-            m_lastError = vs.errors + ps.errors;
+            m_lastError = vs.errors + ps.errors + psAlphaTest.errors;
             return false;
         }
 
@@ -232,23 +239,29 @@ namespace walnut
         desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
         desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER; // reversed-Z: greater = closer
 
-        ComPtr<ID3D12PipelineState> cullBack;
-        HRESULT hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&cullBack));
-        desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-        ComPtr<ID3D12PipelineState> cullNone;
-        if (SUCCEEDED(hr))
-            hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&cullNone));
+        // Every combination of pixel shader and cull mode: [alphaTest][cullNone].
+        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> pipelines;
+        HRESULT hr = S_OK;
+        for (int alphaTest = 0; alphaTest < 2 && SUCCEEDED(hr); ++alphaTest)
+        {
+            for (int cullNone = 0; cullNone < 2 && SUCCEEDED(hr); ++cullNone)
+            {
+                desc.PS = alphaTest ? psAlphaTest.GetBytecode() : ps.GetBytecode();
+                desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
+                hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipelines[alphaTest][cullNone]));
+                if (SUCCEEDED(hr))
+                    SetDebugName(pipelines[alphaTest][cullNone].Get(),
+                                 std::format(L"ScenePSO_{}_{}", alphaTest ? L"AlphaTest" : L"Opaque", cullNone ? L"CullNone" : L"CullBack").c_str());
+            }
+        }
         if (FAILED(hr))
         {
             m_lastError = std::format("CreateGraphicsPipelineState failed (0x{:08X})", static_cast<uint32_t>(hr));
             log::Error("{}", m_lastError);
             return false;
         }
-        SetDebugName(cullBack.Get(), L"ScenePSO_CullBack");
-        SetDebugName(cullNone.Get(), L"ScenePSO_CullNone");
 
-        m_cullBackPipeline = std::move(cullBack);
-        m_cullNonePipeline = std::move(cullNone);
+        m_pipelines = std::move(pipelines);
         m_lastError.clear();
         return true;
     }
@@ -286,9 +299,11 @@ namespace walnut
         ID3D12PipelineState* currentPipeline = nullptr;
         for (const DrawItem& draw : m_draws)
         {
-            // Double-sided materials are never culled. The draws are sorted so this switches at most once.
-            ID3D12PipelineState* pipeline = settings.backfaceCulling && !draw.doubleSided ? m_cullBackPipeline.Get()
-                                                                                          : m_cullNonePipeline.Get();
+            // Double-sided materials are never culled; masked ones use the discarding pixel shader. The draws are
+            // sorted by these two flags, so each PSO is set once.
+            const bool alphaTest = settings.alphaTest && draw.alphaTest;
+            const bool cullNone = !settings.backfaceCulling || draw.doubleSided;
+            ID3D12PipelineState* pipeline = m_pipelines[alphaTest][cullNone].Get();
             if (pipeline != currentPipeline)
             {
                 commandList->SetPipelineState(pipeline);

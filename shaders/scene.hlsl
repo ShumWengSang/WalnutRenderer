@@ -2,6 +2,10 @@
 
 #include "common/Bindless.hlsli"
 
+#ifndef ALPHA_TEST
+#define ALPHA_TEST 0 // ScenePass compiles the pixel shader twice: with ALPHA_TEST=1 for alpha-mask materials
+#endif
+
 // Root constants at b0. Must match SceneDrawConstants in ScenePass.cpp.
 struct DrawConstants
 {
@@ -124,6 +128,17 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[material.baseColorTexture];
         baseColor *= baseColorTexture.Sample(g_samplerAnisotropicWrap, input.uv);
     }
+
+#if ALPHA_TEST
+    // Alpha test (glTF alphaMode MASK): pixels whose alpha is below the cutoff are thrown away. 'discard' writes
+    // neither color nor depth, so the leaves' outlines come from the texture, not from the (rectangular) triangles.
+    //
+    // It's compiled only into the pixel shader that masked materials use. A shader that may discard can't have its
+    // depth written before it runs ("early-Z"), since the GPU doesn't know yet whether the pixel survives; keeping
+    // discard out of the opaque shader keeps that optimization for everything else.
+    if (baseColor.a < material.alphaCutoff)
+        discard;
+#endif
 
     float3 color;
     if (g_draw.debugView == kViewNormals)

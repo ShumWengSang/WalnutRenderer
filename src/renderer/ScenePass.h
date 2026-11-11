@@ -7,6 +7,7 @@
 
 #include <DirectXMath.h>
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -35,6 +36,7 @@ namespace walnut
     {
         SceneDebugView debugView = SceneDebugView::BaseColor;
         bool backfaceCulling = true; // for single-sided materials; double-sided ones are never culled
+        bool alphaTest = true;       // cut out alpha-mask materials; off draws them as opaque, to compare
     };
 
     // Draws a Scene: uploads its merged vertex/index arrays and an instance buffer once, then issues one
@@ -73,6 +75,7 @@ namespace walnut
             uint32_t firstIndex;
             uint32_t instanceIndex;
             bool doubleSided; // drawn without back-face culling
+            bool alphaTest;   // alpha-mask material: drawn with the discarding pixel shader
         };
 
         Buffer CreateStructuredBuffer(UploadContext& upload, const void* data, uint32_t count, uint32_t stride,
@@ -100,8 +103,7 @@ namespace walnut
         uint64_t m_textureBytes = 0;
         std::vector<DrawItem> m_draws;
 
-        ComPtr<ID3D12PipelineState> m_cullBackPipeline;
-        ComPtr<ID3D12PipelineState> m_cullNonePipeline;
+        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_pipelines; // [alphaTest][cullNone]
         std::string m_lastError;
     };
 }
