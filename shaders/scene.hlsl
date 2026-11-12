@@ -31,6 +31,7 @@ static const uint kViewInstances    = 5;
 static const uint kViewMaterials    = 6;
 static const uint kViewAlphaMode    = 7;
 static const uint kViewSunShadow    = 8;
+static const uint kViewShadowDifference = 9;
 
 static const float kPi = 3.14159265f;
 
@@ -366,6 +367,21 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         color = lighting;
     else if (g_draw.debugView == kViewSunShadow)
         color = shadow.xxx;
+    else if (g_draw.debugView == kViewShadowDifference)
+    {
+#if RAYTRACED_SHADOWS
+        // Both answers for the same pixel: the ray (exact) and the shadow map (what H1-H5 produce). Gray where they
+        // agree; red where only the shadow map says "shadow" (acne, bias, blur spilling into lit areas); blue where only
+        // the ray says "shadow" (light leaking: peter-panning, thin casters the map's texels missed).
+        const float mapShadow = NdotL > 0.0f ? SunShadow(input.worldPosition, normal, NdotL) : 0.0f;
+        const float difference = mapShadow - shadow; // + : map lit, ray shadow (blue)   - : map shadow, ray lit (red)
+        color = lerp(0.35f, 0.9f, shadow).xxx * 0.5f;
+        color = lerp(color, float3(1.0f, 0.1f, 0.05f), saturate(-difference));
+        color = lerp(color, float3(0.1f, 0.35f, 1.0f), saturate(difference));
+#else
+        color = float3(1.0f, 0.0f, 1.0f); // needs the ray-traced variant (the UI only offers it there)
+#endif
+    }
     else if (g_draw.debugView == kViewNormals)
         color = normal * 0.5f + 0.5f;
     else if (g_draw.debugView == kViewTexcoords)

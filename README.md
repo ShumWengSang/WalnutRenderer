@@ -6,7 +6,9 @@ It loads a glTF scene (Sponza by default) and renders it with:
 - **Bindless resources**: one shader-visible descriptor heap and one shared root signature; shaders find buffers and textures through `ResourceDescriptorHeap[index]` (Shader Model 6.6).
 - **Vertex pulling**: no input layouts; vertex shaders read a merged `StructuredBuffer` of vertices. One `DrawIndexedInstanced` per instance, with the instance index as the only per-draw root constant.
 - **glTF materials**: base color factor and sRGB texture (with CPU-generated, linear-light mip chains), alpha test for `MASK` materials, double-sided materials without culling.
-- **Lighting**: a directional sun (Lambert diffuse) with shadow-mapped shadows (2048² map, slope-scaled bias + normal offset, alpha-tested casters, PCF soft edges) plus a constant ambient term, from per-frame constants.
+- **Lighting**: a directional sun (Lambert diffuse) plus a constant ambient term, from per-frame constants. Sun shadows come from either:
+  - a **shadow map** (2048², slope-scaled bias + normal offset, alpha-tested casters, PCF soft edges), or
+  - **ray tracing** (DXR 1.1 inline `RayQuery` against a BLAS-per-primitive / TLAS acceleration structure, alpha-tested leaves via candidate hits), when the GPU supports raytracing tier 1.1. A difference view compares the two.
 - **HDR**: the scene renders into an FP16 target in linear light; a fullscreen pass applies exposure and a tonemap curve (ACES fitted, Reinhard, clamp) and writes the back buffer through an `_SRGB` view.
 - **Reversed-Z** depth (D32_FLOAT, infinite far plane), **Enhanced Barriers** only, a fly camera, and PIX markers throughout.
 
@@ -92,7 +94,8 @@ src/core/                 Application loop, Win32 Window, Input, Timer, Log
 src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, RootSignature (shared bindless),
                           Buffer, Texture, UploadContext (staging ring), FrameAllocator (per-frame constants),
                           MipChain, ShaderCompiler, Pix
-src/renderer/             Renderer (frames in flight, frame constants, pass setup), ScenePass, TonemapPass
+src/renderer/             Renderer (frames in flight, frame constants, pass setup), ScenePass, ShadowMap,
+                          AccelerationStructures (BLAS/TLAS), TonemapPass
 src/scene/                Camera, fly controller, lighting, glTF loading (cgltf) into a flat Scene, image decoding (stb_image)
 src/ui/                   ImGuiLayer (Win32 + DX12 backends)
 tools/                    fetch-assets.ps1 (download glTF models), pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher)
@@ -145,11 +148,24 @@ Example prompt: *"Survey captures\WalnutRenderer_timing_….wpix with PixMcp: fr
 4. `Renderer::BeginFrame()` waits on this frame slot's fence, resets its command allocator and per-frame upload memory, and prepares the HDR scene color target: an Enhanced Barrier from UNDEFINED to RENDER_TARGET (with DISCARD), then clears of the scene color and the depth buffer. It binds the bindless state (descriptor heap, then the shared root signature).
 5. `Renderer::SetFrameConstants()` binds the frame's camera and light data at `b2` (see `src/renderer/FrameConstants.h`); every pass can read it.
 6. The shadow pass renders depth from the sun into a 2048² shadow map (`ShadowMap`: UNDEFINED → DEPTH_STENCIL_WRITE with DISCARD, clear, depth-only draws, then DEPTH_STENCIL_WRITE → DIRECT_QUEUE_SHADER_RESOURCE so pixel shaders can read it). The sun's camera is orthographic, fitted to the scene's bounding sphere.
-7. `Renderer::BeginScenePass()` binds scene color and depth, and `ScenePass` records one draw per instance (opaque first, then alpha-tested; PSOs switch only between those groups). Pixels are lit by the sun (Lambert, shadowed through the shadow map with slope-scaled bias, normal offset and PCF) plus an ambient term.
+   - At load (not per frame), when ray tracing is supported, `AccelerationStructures` builds one BLAS per primitive from the scene's vertex/index buffers and a TLAS over the instances.
+7. `Renderer::BeginScenePass()` binds scene color and depth, and `ScenePass` records one draw per instance (opaque first, then alpha-tested; PSOs switch only between those groups). Pixels are lit by the sun (Lambert) plus an ambient term. The sun's visibility comes from the shadow map (slope-scaled bias, normal offset, PCF) or, with **Lighting → Ray traced**, from one `RayQuery` shadow ray per pixel against the TLAS. In ray-traced mode the shadow map pass is cleared but draws nothing.
 8. `Renderer::BeginBackBufferPass()` records one barrier call with two transitions: scene color RENDER_TARGET → SHADER_RESOURCE (`SyncBefore = RENDER_TARGET`, `SyncAfter = PIXEL_SHADING`) and back buffer PRESENT → RENDER_TARGET. `TonemapPass` draws a fullscreen triangle that reads scene color and writes the back buffer through its `_SRGB` view.
 9. `Renderer::BeginUiPass()` switches to the back buffer's plain `UNORM` view (ImGui's colors are already sRGB), and ImGui is recorded.
 10. `Renderer::EndFrame()` records an Enhanced Barrier from RENDER_TARGET back to PRESENT (`SyncBefore = RENDER_TARGET`, `SyncAfter = NONE`) and executes the command list. It then presents and signals the frame fence.
 
+### Sun shadows: shadow map vs ray traced
+
+Switch with **Lighting → Shadow map / Ray traced**; **View → Show → Shadow difference** colors where they disagree (red: only the shadow map shadows; blue: only the ray does). Measured with PIX Timing Captures, Release, 1280×720, vsync off, RTX 3070 Ti, Sponza start view:
+
+| | Shadow pass | Scene pass | GPU frame |
+|---|---|---|---|
+| Shadow map, hard (1 tap) | 0.06 ms | 0.09 ms | 0.18 ms |
+| Shadow map, PCF 3×3 (default) | 0.06 ms | 0.14 ms | 0.22 ms |
+| Ray traced, alpha-tested leaves | 0.00 ms | 0.64 ms | 0.66 ms |
+| Ray traced, leaves forced opaque | 0.00 ms | 0.57 ms | 0.60 ms |
+
+Ray-traced shadows are exact (no resolution, bias or acne) but cost about 0.5 ms here: one ray for every pixel the scene pass shades, including pixels later covered by closer geometry (overdraw). The shadow map's cost is mostly fixed (103 depth-only draws) and its quality depends on texel size.
 ### Barriers
 
 The renderer uses **Enhanced Barriers** only: `ID3D12GraphicsCommandList7::Barrier`, plus `CreateCommittedResource3` with an `InitialLayout`. A barrier states three things separately:

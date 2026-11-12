@@ -286,12 +286,15 @@ namespace walnut
                 m_renderer->SetFrameConstants(frameConstants);
                 ID3D12GraphicsCommandList7* commandList = m_renderer->GetCommandList();
 
-                // 1. Depth from the sun's point of view, into the shadow map. Still rendered with ray-traced shadows on,
-                //    only without casters: the clear + barriers keep it valid for the UI's shadow map view.
+                // 1. Depth from the sun's point of view, into the shadow map. With ray-traced shadows the casters are
+                //    skipped (nothing reads the map), except for the difference view, which compares both. The pass
+                //    still clears + transitions it, which keeps it valid for the UI's shadow map view.
                 {
                     PIXScopedEvent(commandList, pix::kColorGpu, L"ShadowMap");
                     m_shadowMap->Begin(commandList);
-                    if (m_scenePass && !m_sceneView.raytracedShadows)
+                    const bool needShadowMap = !m_sceneView.raytracedShadows ||
+                                               m_sceneView.debugView == SceneDebugView::ShadowDifference;
+                    if (m_scenePass && needShadowMap)
                         m_scenePass->RenderShadowDepth(commandList, m_sceneView);
                     m_shadowMap->End(commandList);
                 }
@@ -446,10 +449,23 @@ namespace walnut
         {
             const char* views[] = { "Lit (sun + ambient)", "Lighting only", "Base color (unlit)", "Normals (world)",
                                     "Texture coordinates", "Instance colors", "Material colors", "Alpha mode / back faces",
-                                    "Sun shadow (shadow map test)" };
+                                    "Sun shadow", "Shadow difference (ray traced vs map)" };
+            const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
             int view = static_cast<int>(m_sceneView.debugView);
-            if (ImGui::Combo("Show", &view, views, IM_ARRAYSIZE(views)))
+            if (ImGui::Combo("Show", &view, views, canTrace ? IM_ARRAYSIZE(views) : IM_ARRAYSIZE(views) - 1))
                 m_sceneView.debugView = static_cast<SceneDebugView>(view);
+            if (m_sceneView.debugView == SceneDebugView::ShadowDifference)
+            {
+                // The comparison is computed in the ray-traced shader, which also samples the shadow map.
+                m_sceneView.raytracedShadows = true;
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.2f, 1.0f), "red");
+                ImGui::SameLine(0.0f, 4.0f);
+                ImGui::TextDisabled("= only the shadow map shadows   ");
+                ImGui::SameLine(0.0f, 0.0f);
+                ImGui::TextColored(ImVec4(0.3f, 0.5f, 1.0f, 1.0f), "blue");
+                ImGui::SameLine(0.0f, 4.0f);
+                ImGui::TextDisabled("= only the ray shadows");
+            }
             ImGui::Checkbox("Back-face culling", &m_sceneView.backfaceCulling);
             ImGui::SameLine();
             ImGui::Checkbox("Alpha test", &m_sceneView.alphaTest);

@@ -32,6 +32,7 @@ namespace walnut
         Materials = 6,    // a random color per material
         AlphaMode = 7,    // opaque gray, mask yellow, blend red; back faces of double-sided materials darker
         SunShadow = 8,    // the shadow map test: white = the sun reaches this point, black = blocked
+        ShadowDifference = 9, // ray traced vs shadow map: red = only the map shadows, blue = only the ray shadows
     };
 
     struct SceneViewSettings
