@@ -41,13 +41,20 @@ namespace walnut
     };
 
     // A glTF metallic-roughness material: constant factors, multiplied by textures where it has them.
+    // Texture indices point into Scene::textures (kNoTexture = none: use the factor alone).
     struct SceneMaterial
     {
         DirectX::XMFLOAT4 baseColorFactor = { 1.0f, 1.0f, 1.0f, 1.0f }; // linear RGB + alpha
-        uint32_t baseColorTexture = kNoTexture; // into Scene::textures
+        uint32_t baseColorTexture = kNoTexture;        // sRGB color (+ alpha)
+        uint32_t metallicRoughnessTexture = kNoTexture; // linear: G = roughness, B = metallic (glTF packing)
+        uint32_t normalTexture = kNoTexture;           // linear: tangent-space normal, 0..1 encoding of -1..1
+        uint32_t occlusionTexture = kNoTexture;        // linear: R = how much ambient light reaches the surface
+        uint32_t emissiveTexture = kNoTexture;         // sRGB color of the light the surface gives off
         DirectX::XMFLOAT3 emissiveFactor = { 0.0f, 0.0f, 0.0f };
         float metallicFactor = 1.0f;  // glTF defaults: fully metallic and fully rough
         float roughnessFactor = 1.0f;
+        float normalScale = 1.0f;       // scales the normal map's x/y (bumpiness)
+        float occlusionStrength = 1.0f; // 0 = ignore the occlusion map, 1 = full effect
         AlphaMode alphaMode = AlphaMode::Opaque;
         float alphaCutoff = 0.5f;
         bool doubleSided = false; // draw back faces too (not culled), with their normal flipped

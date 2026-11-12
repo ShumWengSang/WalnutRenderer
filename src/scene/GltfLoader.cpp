@@ -201,10 +201,24 @@ namespace walnut
                 const cgltf_pbr_metallic_roughness& pbr = source.pbr_metallic_roughness;
                 material.baseColorFactor = { pbr.base_color_factor[0], pbr.base_color_factor[1], pbr.base_color_factor[2], pbr.base_color_factor[3] };
                 material.baseColorTexture = useTexture(pbr.base_color_texture, true /*srgb: it's a color*/);
+                material.metallicRoughnessTexture = useTexture(pbr.metallic_roughness_texture, false /*data, not color*/);
                 material.metallicFactor = pbr.metallic_factor;
                 material.roughnessFactor = pbr.roughness_factor;
             }
+            // Normals, occlusion and metallic-roughness are measurements stored in the image, so they're read as
+            // linear numbers. Only base color and emissive are colors and use sRGB.
+            material.normalTexture = useTexture(source.normal_texture, false);
+            material.normalScale = source.normal_texture.texture ? source.normal_texture.scale : 1.0f;
+            material.occlusionTexture = useTexture(source.occlusion_texture, false);
+            material.occlusionStrength = source.occlusion_texture.texture ? source.occlusion_texture.scale : 1.0f;
+            material.emissiveTexture = useTexture(source.emissive_texture, true);
             material.emissiveFactor = { source.emissive_factor[0], source.emissive_factor[1], source.emissive_factor[2] };
+            if (source.has_emissive_strength) // KHR_materials_emissive_strength: lets emissive go above 1.0
+            {
+                material.emissiveFactor.x *= source.emissive_strength.emissive_strength;
+                material.emissiveFactor.y *= source.emissive_strength.emissive_strength;
+                material.emissiveFactor.z *= source.emissive_strength.emissive_strength;
+            }
             material.alphaMode = source.alpha_mode == cgltf_alpha_mode_mask    ? AlphaMode::Mask
                                : source.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend
                                                                               : AlphaMode::Opaque;
@@ -259,9 +273,18 @@ namespace walnut
                 textureBytes += mip.pixels.size();
         }
         // A material whose texture failed falls back to its constant factor.
+        const auto dropIfFailed = [&](uint32_t& texture) {
+            if (texture != kNoTexture && scene.textures[texture].mips.empty())
+                texture = kNoTexture;
+        };
         for (SceneMaterial& material : scene.materials)
-            if (material.baseColorTexture != kNoTexture && scene.textures[material.baseColorTexture].mips.empty())
-                material.baseColorTexture = kNoTexture;
+        {
+            dropIfFailed(material.baseColorTexture);
+            dropIfFailed(material.metallicRoughnessTexture);
+            dropIfFailed(material.normalTexture);
+            dropIfFailed(material.occlusionTexture);
+            dropIfFailed(material.emissiveTexture);
+        }
         if (!scene.textures.empty())
             log::Info("Decoded {} textures in {:.0f} ms ({:.1f} MB with mips)", scene.textures.size(), decodeMs,
                       static_cast<double>(textureBytes) / (1024.0 * 1024.0));

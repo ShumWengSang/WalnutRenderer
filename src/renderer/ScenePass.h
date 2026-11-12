@@ -33,6 +33,11 @@ namespace walnut
         AlphaMode = 7,    // opaque gray, mask yellow, blend red; back faces of double-sided materials darker
         SunShadow = 8,    // the shadow map test: white = the sun reaches this point, black = blocked
         ShadowDifference = 9, // ray traced vs shadow map: red = only the map shadows, blue = only the ray shadows
+        Roughness = 10,   // metallic-roughness map G * roughnessFactor (black = mirror, white = matte)
+        Metallic = 11,    // metallic-roughness map B * metallicFactor (white = metal)
+        NormalMap = 12,   // the raw tangent-space normal map (light blue = flat)
+        Occlusion = 13,   // ambient occlusion map, scaled by its strength
+        Emissive = 14,    // emitted light: emissive map * factor
     };
 
     struct SceneViewSettings

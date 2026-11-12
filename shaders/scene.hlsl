@@ -32,6 +32,11 @@ static const uint kViewMaterials    = 6;
 static const uint kViewAlphaMode    = 7;
 static const uint kViewSunShadow    = 8;
 static const uint kViewShadowDifference = 9;
+static const uint kViewRoughness    = 10;
+static const uint kViewMetallic     = 11;
+static const uint kViewNormalMap    = 12;
+static const uint kViewOcclusion    = 13;
+static const uint kViewEmissive     = 14;
 
 static const float kPi = 3.14159265f;
 
@@ -61,7 +66,7 @@ struct Instance
     uint2 padding;
 };
 
-// Must match MaterialGpuData in ScenePass.cpp (64 bytes).
+// Must match MaterialGpuData in ScenePass.cpp (80 bytes).
 struct Material
 {
     float4 baseColorFactor; // linear
@@ -71,8 +76,15 @@ struct Material
     float alphaCutoff;
     uint alphaMode;
     uint doubleSided;
-    uint baseColorTexture; // descriptor heap slot of a Texture2D, or kNoTexture
-    uint3 padding;
+    // Descriptor heap slots of Texture2Ds, or kNoTexture.
+    uint baseColorTexture;         // sRGB: base color + alpha
+    uint metallicRoughnessTexture; // linear: G = roughness, B = metallic
+    uint normalTexture;            // linear: tangent-space normal
+    uint occlusionTexture;         // linear: R = ambient occlusion
+    uint emissiveTexture;          // sRGB: emitted light color
+    float normalScale;
+    float occlusionStrength;
+    uint padding;
 };
 
 struct PSInput
@@ -283,6 +295,16 @@ float RayTracedSunShadow(float3 worldPosition, float3 normal)
 }
 #endif
 
+// Samples one of the material's textures, or returns 'fallback' if it has none (glTF: a missing texture counts as 1,
+// so the factor alone applies). Every pixel of a draw uses the same material, so the index is uniform.
+float4 SampleMaterialTexture(uint textureIndex, float2 uv, float4 fallback)
+{
+    if (textureIndex == kNoTexture)
+        return fallback;
+    Texture2D<float4> texture = ResourceDescriptorHeap[textureIndex];
+    return texture.Sample(g_samplerAnisotropicWrap, uv);
+}
+
 // Cheap integer hash -> a stable, distinct color per index.
 float3 HashColor(uint index)
 {
@@ -392,6 +414,19 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         color = HashColor(materialIndex);
     else if (g_draw.debugView == kViewBaseColor)
         color = baseColor.rgb;
+    // The other maps, as stored (not used for lighting yet). glTF packs metallic and roughness into one texture:
+    // roughness in G, metallic in B (R is unused, or occlusion in some files); each times its factor.
+    else if (g_draw.debugView == kViewRoughness)
+        color = (SampleMaterialTexture(material.metallicRoughnessTexture, input.uv, 1.0f).g * material.roughnessFactor).xxx;
+    else if (g_draw.debugView == kViewMetallic)
+        color = (SampleMaterialTexture(material.metallicRoughnessTexture, input.uv, 1.0f).b * material.metallicFactor).xxx;
+    else if (g_draw.debugView == kViewNormalMap)
+        // Raw tangent-space normal map: (0.5, 0.5, 1) = "straight out of the surface", the typical light blue.
+        color = SampleMaterialTexture(material.normalTexture, input.uv, float4(0.5f, 0.5f, 1.0f, 1.0f)).rgb;
+    else if (g_draw.debugView == kViewOcclusion)
+        color = lerp(1.0f, SampleMaterialTexture(material.occlusionTexture, input.uv, 1.0f).r, material.occlusionStrength).xxx;
+    else if (g_draw.debugView == kViewEmissive)
+        color = SampleMaterialTexture(material.emissiveTexture, input.uv, 1.0f).rgb * material.emissiveFactor;
     else
     {
         color = material.alphaMode == kAlphaMask  ? float3(1.0f, 0.85f, 0.1f)

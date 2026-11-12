@@ -41,10 +41,17 @@ namespace walnut
             float alphaCutoff;
             uint32_t alphaMode; // AlphaMode
             uint32_t doubleSided;
-            uint32_t baseColorTexture; // bindless SRV index, or kNoTexture
-            uint32_t padding[3];
+            // Bindless SRV indices, or kNoTexture.
+            uint32_t baseColorTexture;
+            uint32_t metallicRoughnessTexture;
+            uint32_t normalTexture;
+            uint32_t occlusionTexture;
+            uint32_t emissiveTexture;
+            float normalScale;
+            float occlusionStrength;
+            uint32_t padding;
         };
-        static_assert(sizeof(MaterialGpuData) == 64);
+        static_assert(sizeof(MaterialGpuData) == 80);
 
         // Root constants (b0). Must match DrawConstants in scene.hlsl.
         struct SceneDrawConstants
@@ -96,6 +103,7 @@ namespace walnut
         const std::vector<uint32_t> textureSrvIndex = CreateTextures(upload, scene);
 
         std::vector<MaterialGpuData> materials;
+        const auto srv = [&](uint32_t texture) { return texture != kNoTexture ? textureSrvIndex[texture] : kNoTexture; };
         for (const SceneMaterial& material : scene.materials)
         {
             materials.push_back({
@@ -106,7 +114,13 @@ namespace walnut
                 .alphaCutoff = material.alphaCutoff,
                 .alphaMode = static_cast<uint32_t>(material.alphaMode),
                 .doubleSided = material.doubleSided ? 1u : 0u,
-                .baseColorTexture = material.baseColorTexture != kNoTexture ? textureSrvIndex[material.baseColorTexture] : kNoTexture,
+                .baseColorTexture = srv(material.baseColorTexture),
+                .metallicRoughnessTexture = srv(material.metallicRoughnessTexture),
+                .normalTexture = srv(material.normalTexture),
+                .occlusionTexture = srv(material.occlusionTexture),
+                .emissiveTexture = srv(material.emissiveTexture),
+                .normalScale = material.normalScale,
+                .occlusionStrength = material.occlusionStrength,
             });
         }
 

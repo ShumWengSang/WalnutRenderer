@@ -449,11 +449,24 @@ namespace walnut
         {
             const char* views[] = { "Lit (sun + ambient)", "Lighting only", "Base color (unlit)", "Normals (world)",
                                     "Texture coordinates", "Instance colors", "Material colors", "Alpha mode / back faces",
-                                    "Sun shadow", "Shadow difference (ray traced vs map)" };
+                                    "Sun shadow", "Shadow difference (ray traced vs map)",
+                                    "Roughness", "Metallic", "Normal map (tangent space)", "Occlusion", "Emissive" };
             const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
-            int view = static_cast<int>(m_sceneView.debugView);
-            if (ImGui::Combo("Show", &view, views, canTrace ? IM_ARRAYSIZE(views) : IM_ARRAYSIZE(views) - 1))
-                m_sceneView.debugView = static_cast<SceneDebugView>(view);
+            const int current = static_cast<int>(m_sceneView.debugView);
+            if (ImGui::BeginCombo("Show", views[current]))
+            {
+                for (int i = 0; i < IM_ARRAYSIZE(views); ++i)
+                {
+                    const bool needsTracing = static_cast<SceneDebugView>(i) == SceneDebugView::ShadowDifference;
+                    if (i == static_cast<int>(SceneDebugView::Roughness))
+                        ImGui::SeparatorText("Material maps");
+                    ImGui::BeginDisabled(needsTracing && !canTrace);
+                    if (ImGui::Selectable(views[i], i == current))
+                        m_sceneView.debugView = static_cast<SceneDebugView>(i);
+                    ImGui::EndDisabled();
+                }
+                ImGui::EndCombo();
+            }
             if (m_sceneView.debugView == SceneDebugView::ShadowDifference)
             {
                 // The comparison is computed in the ray-traced shader, which also samples the shadow map.
@@ -580,6 +593,15 @@ namespace walnut
                             static_cast<size_t>(std::ranges::count(m_scene.materials, AlphaMode::Mask, &SceneMaterial::alphaMode)),
                             static_cast<size_t>(std::ranges::count(m_scene.materials, AlphaMode::Blend, &SceneMaterial::alphaMode)),
                             static_cast<size_t>(std::ranges::count(m_scene.materials, true, &SceneMaterial::doubleSided)));
+                const auto withMap = [&](uint32_t SceneMaterial::*map) {
+                    return std::ranges::count_if(m_scene.materials, [&](const SceneMaterial& m) { return m.*map != kNoTexture; });
+                };
+                ImGui::Text("  maps: base color %zu, metal-rough %zu, normal %zu, occlusion %zu, emissive %zu",
+                            static_cast<size_t>(withMap(&SceneMaterial::baseColorTexture)),
+                            static_cast<size_t>(withMap(&SceneMaterial::metallicRoughnessTexture)),
+                            static_cast<size_t>(withMap(&SceneMaterial::normalTexture)),
+                            static_cast<size_t>(withMap(&SceneMaterial::occlusionTexture)),
+                            static_cast<size_t>(withMap(&SceneMaterial::emissiveTexture)));
                 ImGui::Text("%zu instances of %zu primitives", m_scene.instances.size(), m_scene.primitives.size());
                 ImGui::Text("%zu vertices, %zu triangles", m_scene.vertices.size(), m_scene.indices.size() / 3);
                 const DirectX::XMFLOAT3& lo = m_scene.boundsMin;
