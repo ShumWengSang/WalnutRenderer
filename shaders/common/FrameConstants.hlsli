@@ -14,6 +14,13 @@ struct FrameConstants
     float  padding2;
     float3 ambientRadiance; // linear
     float  padding3;
+
+    float  shadowTexelWorldSize; // meters per shadow-map texel
+    float  shadowDepthPerMeter;  // depth change per meter towards the sun (linear: orthographic)
+    float  shadowConstantBias;   // texels
+    float  shadowSlopeBias;      // texels, times tan(angle to the sun)
+    float  shadowNormalOffset;   // texels, along the surface normal
+    float3 padding4;
 };
 ConstantBuffer<FrameConstants> g_frame : register(b2);
 

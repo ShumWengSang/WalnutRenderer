@@ -21,6 +21,14 @@ namespace walnut
         float padding2 = 0.0f;
         DirectX::XMFLOAT3 ambientRadiance; // linear color * intensity: light arriving from every direction equally
         float padding3 = 0.0f;
+
+        // Shadow bias (H3). Sizes are in shadow-map texels: one texel covers shadowTexelWorldSize meters.
+        float shadowTexelWorldSize = 0.0f; // meters covered by one shadow-map texel
+        float shadowDepthPerMeter = 0.0f;  // the sun's depth is linear: moving 1 m towards the sun adds this
+        float shadowConstantBias = 0.0f;   // texels: push every comparison towards the sun by this much
+        float shadowSlopeBias = 0.0f;      // texels: ... plus this much times tan(angle to the sun)
+        float shadowNormalOffset = 0.0f;   // texels: look up the shadow map this far out along the surface normal
+        float padding4[3] = {};
     };
-    static_assert(sizeof(FrameConstants) == 192);
+    static_assert(sizeof(FrameConstants) == 224);
 }

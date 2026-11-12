@@ -16,6 +16,11 @@ namespace walnut
         DirectX::XMFLOAT3 ambientColor = { 0.55f, 0.65f, 0.85f }; // linear, sky blue
         float ambientIntensity = 0.25f;
 
+        // Shadow-map bias, in shadow-map texels (see SunShadow in scene.hlsl).
+        float shadowConstantBias = 0.5f;
+        float shadowSlopeBias = 1.0f;
+        float shadowNormalOffset = 1.0f;
+
         // Unit vector from a surface towards the sun.
         DirectX::XMFLOAT3 GetSunDirection() const;
 

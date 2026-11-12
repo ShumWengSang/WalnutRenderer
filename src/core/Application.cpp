@@ -258,6 +258,12 @@ namespace walnut
                                      m_lighting.GetSunViewProjection(m_scene.boundsMin, m_scene.boundsMax));
             frameConstants.shadowMapIndex = m_shadowMap->GetSrvIndex();
             frameConstants.shadowsEnabled = m_shadowsEnabled ? 1u : 0u;
+            const float shadowExtent = GetSunShadowExtent(m_scene.boundsMin, m_scene.boundsMax);
+            frameConstants.shadowTexelWorldSize = shadowExtent / static_cast<float>(m_shadowMap->GetSize());
+            frameConstants.shadowDepthPerMeter = 1.0f / shadowExtent;
+            frameConstants.shadowConstantBias = m_lighting.shadowConstantBias;
+            frameConstants.shadowSlopeBias = m_lighting.shadowSlopeBias;
+            frameConstants.shadowNormalOffset = m_lighting.shadowNormalOffset;
 
             {
                 PIXScopedEvent(pix::kColorCpu, L"Render");
@@ -444,6 +450,29 @@ namespace walnut
             const DirectX::XMFLOAT3 sun = m_lighting.GetSunDirection();
             ImGui::TextDisabled("Towards the sun: (%.2f, %.2f, %.2f)", sun.x, sun.y, sun.z);
             ImGui::Checkbox("Sun shadows", &m_shadowsEnabled);
+            if (ImGui::TreeNode("Shadow bias"))
+            {
+                // All three in shadow-map texels (1.8 cm each for Sponza). Zero shows the acne; large values show
+                // shadows detaching from their casters (peter-panning).
+                ImGui::SliderFloat("Constant", &m_lighting.shadowConstantBias, 0.0f, 20.0f, "%.2f texels");
+                ImGui::SetItemTooltip("Pushes every comparison towards the sun by this distance.");
+                ImGui::SliderFloat("Slope-scaled", &m_lighting.shadowSlopeBias, 0.0f, 20.0f, "%.2f texels");
+                ImGui::SetItemTooltip("Extra push that grows with how tilted the surface is relative to the sun\n"
+                                      "(times tan of the angle): tilted surfaces need more.");
+                ImGui::SliderFloat("Normal offset", &m_lighting.shadowNormalOffset, 0.0f, 20.0f, "%.2f texels");
+                ImGui::SetItemTooltip("Looks the shadow map up this far out along the surface normal.");
+                if (ImGui::Button("Defaults"))
+                {
+                    const SceneLighting defaults;
+                    m_lighting.shadowConstantBias = defaults.shadowConstantBias;
+                    m_lighting.shadowSlopeBias = defaults.shadowSlopeBias;
+                    m_lighting.shadowNormalOffset = defaults.shadowNormalOffset;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("None (show acne)"))
+                    m_lighting.shadowConstantBias = m_lighting.shadowSlopeBias = m_lighting.shadowNormalOffset = 0.0f;
+                ImGui::TreePop();
+            }
 
             if (ImGui::TreeNode("Shadow map"))
             {

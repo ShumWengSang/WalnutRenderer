@@ -113,14 +113,30 @@ float4 VSShadow(uint vertexId : SV_VertexID) : SV_Position
 // 2. Clip space y points up, texture v points down: uv = (x * 0.5 + 0.5, -y * 0.5 + 0.5).
 // 3. SampleCmpLevelZero reads the depth the sun saw at uv and compares our depth with it (comparison sampler s5:
 //    lit if ours >= stored, reversed-Z). "LevelZero": mip 0, the only one; derivatives aren't needed.
-float SunShadow(float3 worldPosition)
+//
+// Bias: each shadow-map texel stores ONE depth for a whole patch of surface. On a surface tilted away from the sun,
+// half of that patch is slightly farther from the sun than the stored value and would shadow itself ("acne"). Two
+// fixes, both sized in texels so they scale with the shadow map's resolution:
+//  - Normal offset: look the point up a little way out along its normal, i.e. just above the surface.
+//  - Depth bias: pretend the point is a little closer to the sun. The depth error inside one texel grows with the
+//    surface's tilt, as tan(angle between normal and sun), so there's a constant part and a slope-scaled part.
+// Too much of either detaches shadows from the objects casting them ("peter-panning").
+float SunShadow(float3 worldPosition, float3 normal, float NdotL)
 {
     if (g_frame.shadowsEnabled == 0)
         return 1.0f;
-    const float4 lightClip = mul(float4(worldPosition, 1.0f), g_frame.sunViewProjection);
+
+    const float texel = g_frame.shadowTexelWorldSize;
+    const float3 offsetPosition = worldPosition + normal * (g_frame.shadowNormalOffset * texel);
+    const float4 lightClip = mul(float4(offsetPosition, 1.0f), g_frame.sunViewProjection);
     const float2 uv = float2(lightClip.x * 0.5f + 0.5f, lightClip.y * -0.5f + 0.5f);
+
+    const float tanAngle = min(sqrt(saturate(1.0f - NdotL * NdotL)) / max(NdotL, 1e-4f), 10.0f);
+    const float biasMeters = (g_frame.shadowConstantBias + g_frame.shadowSlopeBias * tanAngle) * texel;
+    const float depth = lightClip.z + biasMeters * g_frame.shadowDepthPerMeter; // + = closer to the sun (reversed-Z)
+
     Texture2D<float> shadowMap = ResourceDescriptorHeap[g_frame.shadowMapIndex];
-    return shadowMap.SampleCmpLevelZero(g_samplerShadow, uv, lightClip.z);
+    return shadowMap.SampleCmpLevelZero(g_samplerShadow, uv, depth);
 }
 
 // Cheap integer hash -> a stable, distinct color per index.
@@ -193,7 +209,7 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     //   ambient: albedo * ambientRadiance    (the same light from every direction, integrated over the hemisphere:
     //                                         pi * radiance, times albedo / pi)
     const float NdotL = saturate(dot(normal, g_frame.sunDirection));
-    const float shadow = NdotL > 0.0f ? SunShadow(input.worldPosition) : 0.0f; // facing away: dark anyway, skip the lookup
+    const float shadow = NdotL > 0.0f ? SunShadow(input.worldPosition, normal, NdotL) : 0.0f; // facing away: dark anyway, skip the lookup
     const float3 lighting = g_frame.sunIlluminance * NdotL * shadow / kPi + g_frame.ambientRadiance;
 
     float3 color;
