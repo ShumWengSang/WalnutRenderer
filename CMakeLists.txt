@@ -55,7 +55,11 @@ set(WALNUT_SOURCES
 
     src/renderer/AccelerationStructures.cpp
     src/renderer/AccelerationStructures.h
+    src/renderer/DeferredPass.cpp
+    src/renderer/DeferredPass.h
     src/renderer/FrameConstants.h
+    src/renderer/GBuffer.cpp
+    src/renderer/GBuffer.h
     src/renderer/Renderer.cpp
     src/renderer/Renderer.h
     src/renderer/ScenePass.cpp

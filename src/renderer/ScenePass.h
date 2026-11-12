@@ -40,6 +40,7 @@ namespace walnut
         Emissive = 14,    // emitted light: emissive map * factor
         SunSpecular = 15, // only the sun's GGX specular reflection (the highlights)
         Ambient = 16,     // only the ambient light: sky/ground diffuse + reflection, times occlusion
+        GeometricNormals = 17, // the surface's own normal, without the normal map (used for shadows)
     };
 
     // Where the tangent frame for normal mapping comes from. Values must match scene.hlsl.
@@ -50,8 +51,16 @@ namespace walnut
         Derived = 2, // TBN always derived per pixel from position/uv screen-space derivatives
     };
 
+    // How the scene's pixels get their color.
+    enum class RenderPath : uint32_t
+    {
+        Forward,  // one pass: each draw's pixel shader samples the material and lights it
+        Deferred, // the draws only write the material to the G-buffer; a fullscreen pass reads it (K2/K3)
+    };
+
     struct SceneViewSettings
     {
+        RenderPath renderPath = RenderPath::Forward;
         SceneDebugView debugView = SceneDebugView::Lit;
         NormalMapping normalMapping = NormalMapping::Mesh;
         // Negative: use the material's value. 0..1: every material uses this instead (sent as frame constants).
@@ -90,6 +99,9 @@ namespace walnut
         // Draws every instance into the bound depth buffer from the camera, depth only. With settings.depthPrepass,
         // Render() must follow with the same settings: it then shades only the fragments matching this depth.
         void RenderDepthPrepass(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const;
+        // Deferred shading: writes every visible pixel's material into the bound G-buffer. Needs the depth pre-pass
+        // first (it tests depth EQUAL).
+        void RenderGBuffer(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const;
 
         uint32_t GetDrawCount() const { return static_cast<uint32_t>(m_draws.size()); }
         uint32_t GetTextureCount() const { return static_cast<uint32_t>(m_textures.size()); }
@@ -114,7 +126,7 @@ namespace walnut
                                       const wchar_t* name, DescriptorHandle& srv);
         // Uploads every loaded scene texture; returns each one's bindless SRV index (kNoTexture if it wasn't loaded).
         std::vector<uint32_t> CreateTextures(UploadContext& upload, const Scene& scene);
-        enum class DrawMode { Scene, ShadowDepth, DepthPrepass };
+        enum class DrawMode { Scene, ShadowDepth, DepthPrepass, GBuffer };
         // Binds the geometry and issues every draw, with the PSOs for the given pass.
         void RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings, DrawMode mode) const;
 
@@ -146,6 +158,7 @@ namespace walnut
         std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_prepassPipelines; // [alphaTest][cullNone]
         // Scene pass after a depth pre-pass: depth EQUAL, no depth writes, no discard. [raytraced][cullNone]
         std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_equalPipelines;
+        std::array<ComPtr<ID3D12PipelineState>, 2> m_gbufferPipelines; // [cullNone]; depth EQUAL, 4 render targets
         bool m_raytracingSupported = false;
         std::string m_lastError;
     };

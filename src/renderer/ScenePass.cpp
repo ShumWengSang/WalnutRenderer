@@ -8,6 +8,7 @@
 #include "gfx/RootSignature.h"
 #include "gfx/ShaderCompiler.h"
 #include "gfx/UploadContext.h"
+#include "renderer/GBuffer.h"
 #include "renderer/ShadowMap.h"
 #include "scene/Scene.h"
 
@@ -243,11 +244,13 @@ namespace walnut
         const ShaderCompileResult vsPrepass = m_compiler.Compile({ m_shaderPath, L"VSDepthPrepass", ShaderStage::Vertex });
         const ShaderCompileResult vsPrepassAlpha = m_compiler.Compile({ m_shaderPath, L"VSDepthPrepassAlphaTest", ShaderStage::Vertex });
         const ShaderCompileResult psDepthAlpha = m_compiler.Compile({ m_shaderPath, L"PSDepthAlphaTest", ShaderStage::Pixel });
+        const ShaderCompileResult psGBuffer = m_compiler.Compile({ m_shaderPath, L"PSGBuffer", ShaderStage::Pixel });
         if (!vs.Succeeded() || !ps.Succeeded() || !psAlphaTest.Succeeded() || !vsShadow.Succeeded() ||
-            !vsShadowAlpha.Succeeded() || !vsPrepass.Succeeded() || !vsPrepassAlpha.Succeeded() || !psDepthAlpha.Succeeded())
+            !vsShadowAlpha.Succeeded() || !vsPrepass.Succeeded() || !vsPrepassAlpha.Succeeded() ||
+            !psDepthAlpha.Succeeded() || !psGBuffer.Succeeded())
         {
             m_lastError = vs.errors + ps.errors + psAlphaTest.errors + vsShadow.errors + vsShadowAlpha.errors +
-                          vsPrepass.errors + vsPrepassAlpha.errors + psDepthAlpha.errors;
+                          vsPrepass.errors + vsPrepassAlpha.errors + psDepthAlpha.errors + psGBuffer.errors;
             return false;
         }
 
@@ -326,6 +329,23 @@ namespace walnut
                                              cullNone ? L"CullNone" : L"CullBack").c_str());
             }
         }
+
+        // G-buffer pipelines (deferred shading): the same EQUAL test after the pre-pass, but the pixel shader
+        // writes four render targets (the G-buffer's formats, in SV_Target order) instead of one lit color.
+        std::array<ComPtr<ID3D12PipelineState>, 2> gbufferPipelines;
+        desc.PS = psGBuffer.GetBytecode();
+        desc.NumRenderTargets = GBuffer::kCount;
+        for (uint32_t i = 0; i < GBuffer::kCount; ++i)
+            desc.RTVFormats[i] = GBuffer::kFormats[i];
+        for (int cullNone = 0; cullNone < 2 && SUCCEEDED(hr); ++cullNone)
+        {
+            desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
+            hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&gbufferPipelines[cullNone]));
+            if (SUCCEEDED(hr))
+                SetDebugName(gbufferPipelines[cullNone].Get(), cullNone ? L"GBufferPSO_CullNone" : L"GBufferPSO_CullBack");
+        }
+        for (uint32_t i = 1; i < GBuffer::kCount; ++i)
+            desc.RTVFormats[i] = DXGI_FORMAT_UNKNOWN;
         desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER;
         desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
 
@@ -376,6 +396,7 @@ namespace walnut
         m_pipelines = std::move(pipelines);
         m_shadowPipelines = std::move(shadowPipelines);
         m_equalPipelines = std::move(equalPipelines);
+        m_gbufferPipelines = std::move(gbufferPipelines);
         m_prepassPipelines = std::move(prepassPipelines);
         m_lastError.clear();
         return true;
@@ -397,6 +418,12 @@ namespace walnut
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"Depth pre-pass");
         RecordDraws(commandList, settings, DrawMode::DepthPrepass);
+    }
+
+    void ScenePass::RenderGBuffer(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const
+    {
+        PIXScopedEvent(commandList, pix::kColorGpu, L"G-buffer");
+        RecordDraws(commandList, settings, DrawMode::GBuffer);
     }
 
     void ScenePass::RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings, DrawMode mode) const
@@ -438,6 +465,7 @@ namespace walnut
             {
             case DrawMode::ShadowDepth: pipeline = m_shadowPipelines[alphaTest][cullNone].Get(); break;
             case DrawMode::DepthPrepass: pipeline = m_prepassPipelines[alphaTest][cullNone].Get(); break;
+            case DrawMode::GBuffer: pipeline = m_gbufferPipelines[cullNone].Get(); break;
             case DrawMode::Scene:
                 pipeline = settings.depthPrepass ? m_equalPipelines[raytraced][cullNone].Get()
                                                  : m_pipelines[raytraced][alphaTest][cullNone].Get();

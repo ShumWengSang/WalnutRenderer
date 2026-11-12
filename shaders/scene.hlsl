@@ -3,6 +3,7 @@
 #include "common/Bindless.hlsli"
 #include "common/Brdf.hlsli"
 #include "common/FrameConstants.hlsli"
+#include "common/GBuffer.hlsli"
 
 #ifndef ALPHA_TEST
 #define ALPHA_TEST 0 // ScenePass compiles the pixel shader twice: with ALPHA_TEST=1 for alpha-mask materials
@@ -41,6 +42,7 @@ static const uint kViewOcclusion    = 13;
 static const uint kViewEmissive     = 14;
 static const uint kViewSunSpecular  = 15;
 static const uint kViewAmbient      = 16;
+static const uint kViewGeometricNormals = 17;
 
 static const uint kShadingLambert = 0; // ShadingModel in Lighting.h
 static const uint kShadingPbr     = 1;
@@ -396,16 +398,21 @@ float3 HashColor(uint index)
     return float3(h & 0xFF, (h >> 8) & 0xFF, (h >> 16) & 0xFF) / 255.0f;
 }
 
-// SV_IsFrontFace: whether the rasterizer saw this triangle's front (counter-clockwise on screen, per the PSO).
-// Only visible for double-sided materials (or with culling turned off).
-float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
+// Everything the lighting needs from the material at one pixel: its textures and factors, evaluated. Shared by
+// forward shading (PSMain) and the G-buffer pass (PSGBuffer), so both see exactly the same surface.
+struct MaterialSample
 {
-    // The material is the same for the whole draw, so every pixel reads the same two elements (cheap: cached).
-    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
-    StructuredBuffer<Material> materials = ResourceDescriptorHeap[g_draw.materialBufferIndex];
-    const uint materialIndex = instances[g_draw.instanceIndex].materialIndex;
-    const Material material = materials[materialIndex];
+    float3 baseColor;
+    float3 normal;          // shading normal: normal-mapped, flipped for back faces
+    float3 geometricNormal; // the surface itself, without the normal map (shadow bias, ray offsets)
+    float  roughness;
+    float  metallic;
+    float  occlusion;       // 1 = open to the sky, 0 = fully hidden (ambient only)
+    float3 emissive;
+};
 
+MaterialSample SampleMaterial(PSInput input, bool isFrontFace, Material material)
+{
     // The normal points out of the front face. Seen from behind (a leaf's underside), the surface faces the other
     // way, so glTF says to flip it for double-sided materials.
     float3 normal = input.normal;
@@ -479,6 +486,61 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         discard;
 #endif
 
+    MaterialSample result;
+    result.baseColor = baseColor.rgb;
+    result.normal = normal;
+    result.geometricNormal = geometricNormal;
+
+    // glTF packs both into one texture: roughness in G, metallic in B (R is unused, or occlusion in some files).
+    const float4 metallicRoughness = SampleMaterialTexture(material.metallicRoughnessTexture, input.uv, 1.0f);
+    result.roughness = metallicRoughness.g * material.roughnessFactor;
+    result.metallic = saturate(metallicRoughness.b * material.metallicFactor);
+    if (g_frame.roughnessOverride >= 0.0f)
+        result.roughness = g_frame.roughnessOverride; // View > Roughness override
+    if (g_frame.metallicOverride >= 0.0f)
+        result.metallic = g_frame.metallicOverride;
+
+    result.occlusion = lerp(1.0f, SampleMaterialTexture(material.occlusionTexture, input.uv, 1.0f).r,
+                            material.occlusionStrength);
+    // Emitted light (screens, lamps, lava): added as is, it doesn't depend on any light arriving.
+    result.emissive = SampleMaterialTexture(material.emissiveTexture, input.uv, 1.0f).rgb * material.emissiveFactor;
+    return result;
+}
+
+// SV_IsFrontFace: whether the rasterizer saw this triangle's front (counter-clockwise on screen, per the PSO).
+// Only visible for double-sided materials (or with culling turned off).
+//
+// Deferred shading (K2): instead of lighting the pixel, store what the lighting will need (the G-buffer, see
+// GBuffer.hlsli). Drawn after the depth pre-pass with depth EQUAL, so each pixel writes the G-buffer once.
+GBufferOutput PSGBuffer(PSInput input, bool isFrontFace : SV_IsFrontFace)
+{
+    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
+    StructuredBuffer<Material> materials = ResourceDescriptorHeap[g_draw.materialBufferIndex];
+    const Material material = materials[instances[g_draw.instanceIndex].materialIndex];
+    const MaterialSample mat = SampleMaterial(input, isFrontFace, material);
+
+    GBufferOutput output;
+    output.baseColor = float4(mat.baseColor, 1.0f);
+    output.normals = float4(OctahedralEncode(mat.normal), OctahedralEncode(mat.geometricNormal));
+    output.material = float4(mat.roughness, mat.metallic, mat.occlusion, 0.0f);
+    output.emissive = float4(mat.emissive, 0.0f);
+    return output;
+}
+
+// Forward shading: material and lighting in one go, written straight to the HDR scene color.
+float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
+{
+    // The material is the same for the whole draw, so every pixel reads the same two elements (cheap: cached).
+    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
+    StructuredBuffer<Material> materials = ResourceDescriptorHeap[g_draw.materialBufferIndex];
+    const uint materialIndex = instances[g_draw.instanceIndex].materialIndex;
+    const Material material = materials[materialIndex];
+
+    const MaterialSample mat = SampleMaterial(input, isFrontFace, material);
+    const float3 baseColor = mat.baseColor;
+    const float3 normal = mat.normal;
+    const float3 geometricNormal = mat.geometricNormal;
+
     // The sun's light arrives on a surface facing it with sunIlluminance; tilted away by an angle, the same light
     // spreads over a bigger area, so each point gets cos(angle) = N.L of it (clamped: facing away gets none).
     // It only arrives if nothing blocks it: 'shadow' is 1 (lit) or 0 (in shadow).
@@ -502,17 +564,11 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     // What a white matte surface would show: the sun's share plus the ambient light around the normal.
     const float3 lighting = sunLight / kPi + HemisphereLight(normal, 1.0f);
 
-    // glTF packs both into one texture: roughness in G, metallic in B (R is unused, or occlusion in some files).
-    const float4 metallicRoughness = SampleMaterialTexture(material.metallicRoughnessTexture, input.uv, 1.0f);
-    float roughness = metallicRoughness.g * material.roughnessFactor;
-    float metallic = saturate(metallicRoughness.b * material.metallicFactor);
-    if (g_frame.roughnessOverride >= 0.0f)
-        roughness = g_frame.roughnessOverride; // View > Roughness override
-    if (g_frame.metallicOverride >= 0.0f)
-        metallic = g_frame.metallicOverride;
+    const float roughness = mat.roughness;
+    const float metallic = mat.metallic;
 
     const float3 toCamera = normalize(g_frame.cameraPosition - input.worldPosition);
-    const SurfaceBrdf surface = MakeSurfaceBrdf(baseColor.rgb, metallic, roughness);
+    const SurfaceBrdf surface = MakeSurfaceBrdf(baseColor, metallic, roughness);
     const BrdfValue brdf = EvaluateBrdf(surface, normal, toCamera, g_frame.sunDirection);
     const float3 sunSpecular = brdf.specular * sunLight;
 
@@ -525,13 +581,11 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     const float NdotV = max(dot(normal, toCamera), 1e-4f);
     const float3 environmentBrdf = EnvironmentBrdf(surface, NdotV);
     const float3 reflected = reflect(-toCamera, normal);
-    const float occlusion = lerp(1.0f, SampleMaterialTexture(material.occlusionTexture, input.uv, 1.0f).r,
-                                 material.occlusionStrength);
+    const float occlusion = mat.occlusion;
     const float3 ambient = (surface.diffuseColor * (1.0f - environmentBrdf) * HemisphereLight(normal, 1.0f)
                           + environmentBrdf * HemisphereLight(reflected, surface.alpha)) * occlusion;
 
-    // Emitted light (screens, lamps, lava) is added as is: it doesn't depend on any light arriving.
-    const float3 emissive = SampleMaterialTexture(material.emissiveTexture, input.uv, 1.0f).rgb * material.emissiveFactor;
+    const float3 emissive = mat.emissive;
 
     float3 color;
     if (g_draw.debugView == kViewLit)
@@ -539,7 +593,7 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         if (g_frame.shadingModel == kShadingPbr)
             color = (brdf.diffuse + brdf.specular) * sunLight + ambient + emissive;
         else
-            color = baseColor.rgb * lighting; // Lambert: matte only, no occlusion map, no emission
+            color = baseColor * lighting; // Lambert: matte only, no occlusion map, no emission
     }
     else if (g_draw.debugView == kViewLightingOnly)
         color = lighting;
@@ -566,6 +620,8 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     }
     else if (g_draw.debugView == kViewNormals)
         color = normal * 0.5f + 0.5f;
+    else if (g_draw.debugView == kViewGeometricNormals)
+        color = geometricNormal * 0.5f + 0.5f;
     else if (g_draw.debugView == kViewTexcoords)
         color = float3(frac(input.uv), 0.0f); // frac: glTF UVs may go beyond 0..1 (repeating textures)
     else if (g_draw.debugView == kViewInstances)
@@ -573,7 +629,7 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     else if (g_draw.debugView == kViewMaterials)
         color = HashColor(materialIndex);
     else if (g_draw.debugView == kViewBaseColor)
-        color = baseColor.rgb;
+        color = baseColor;
     // The other maps, as stored. Roughness/metallic as read above (before the BRDF's minimum roughness).
     else if (g_draw.debugView == kViewRoughness)
         color = roughness.xxx;

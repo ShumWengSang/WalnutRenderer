@@ -171,6 +171,9 @@ namespace walnut
         m_tonemapPass = std::make_unique<TonemapPass>(m_renderer->GetDevice(), *m_shaderCompiler,
                                                       m_shaderDir / "tonemap.hlsl", m_renderer->GetRootSignature(),
                                                       SwapChain::kSrgbFormat);
+        m_deferredPass = std::make_unique<DeferredPass>(m_renderer->GetDevice(), *m_shaderCompiler,
+                                                        m_shaderDir / "deferred.hlsl", m_renderer->GetRootSignature(),
+                                                        Renderer::kSceneColorFormat);
         m_shadowMap = std::make_unique<ShadowMap>(m_renderer->GetDevice(), m_renderer->GetSrvHeap(), kShadowMapSize);
 
         // Execute every upload recorded while loading, before the first frame reads that data.
@@ -200,6 +203,7 @@ namespace walnut
         m_scenePass.reset();
         m_shadowMap.reset();
         m_tonemapPass.reset();
+        m_deferredPass.reset();
         m_shaderCompiler.reset();
         m_renderer.reset();
         m_window.reset();
@@ -305,14 +309,35 @@ namespace walnut
 
                 // 2. The scene from the camera, into the HDR scene color target. With the depth pre-pass, depth
                 //    first: the scene pass then shades only the closest surface of each pixel.
-                if (m_scenePass && m_sceneView.depthPrepass)
+                const bool deferred = m_scenePass && m_sceneView.renderPath == RenderPath::Deferred;
+                if (m_scenePass && (m_sceneView.depthPrepass || deferred))
                 {
                     m_renderer->BeginDepthPrepass();
                     m_scenePass->RenderDepthPrepass(commandList, m_sceneView);
                 }
-                m_renderer->BeginScenePass();
-                if (m_scenePass)
-                    m_scenePass->Render(commandList, m_sceneView);
+                if (deferred)
+                {
+                    // Deferred: the draws write each visible pixel's material into the G-buffer, then one
+                    // fullscreen pass reads it back.
+                    m_renderer->BeginGBufferPass();
+                    m_scenePass->RenderGBuffer(commandList, m_sceneView);
+                    m_renderer->BeginDeferredPass();
+                    const GBuffer& gbuffer = m_renderer->GetGBuffer();
+                    const DeferredInputs inputs{
+                        .baseColor = gbuffer.GetSrvIndex(GBuffer::BaseColor),
+                        .normals = gbuffer.GetSrvIndex(GBuffer::Normals),
+                        .material = gbuffer.GetSrvIndex(GBuffer::Material),
+                        .emissive = gbuffer.GetSrvIndex(GBuffer::Emissive),
+                        .depth = m_renderer->GetDepthSrvIndex(),
+                    };
+                    m_deferredPass->Render(commandList, inputs, m_sceneView.debugView);
+                }
+                else
+                {
+                    m_renderer->BeginScenePass();
+                    if (m_scenePass)
+                        m_scenePass->Render(commandList, m_sceneView);
+                }
 
                 // The 3D scene is done; from here on we draw into the back buffer.
                 m_renderer->BeginBackBufferPass();
@@ -358,7 +383,8 @@ namespace walnut
         m_renderer->WaitForGpu();
         const bool sceneOk = !m_scenePass || m_scenePass->ReloadShaders();
         const bool tonemapOk = m_tonemapPass->ReloadShaders();
-        if (sceneOk && tonemapOk)
+        const bool deferredOk = m_deferredPass->ReloadShaders();
+        if (sceneOk && tonemapOk && deferredOk)
             log::Info("Shaders reloaded");
     }
 
@@ -444,7 +470,8 @@ namespace walnut
 
         // Shader errors first: they would otherwise be easy to miss inside a closed section.
         const std::string noError;
-        for (const std::string* error : { m_scenePass ? &m_scenePass->GetLastError() : &noError, &m_tonemapPass->GetLastError() })
+        for (const std::string* error : { m_scenePass ? &m_scenePass->GetLastError() : &noError, &m_tonemapPass->GetLastError(),
+                                          &m_deferredPass->GetLastError() })
         {
             if (error->empty())
                 continue;
@@ -461,8 +488,37 @@ namespace walnut
                                     "Texture coordinates", "Instance colors", "Material colors", "Alpha mode / back faces",
                                     "Sun shadow", "Shadow difference (ray traced vs map)",
                                     "Roughness", "Metallic", "Normal map (tangent space)", "Occlusion", "Emissive",
-                                    "Sun specular (highlights)", "Ambient (sky + ground, occluded)" };
+                                    "Sun specular (highlights)", "Ambient (sky + ground, occluded)",
+                                    "Geometric normals (no normal map)" };
             const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
+
+            // Forward or deferred. Deferred can only show what the G-buffer stores (K2: no lighting pass yet).
+            const auto inGBuffer = [](SceneDebugView view) {
+                switch (view)
+                {
+                case SceneDebugView::BaseColor: case SceneDebugView::Normals: case SceneDebugView::GeometricNormals:
+                case SceneDebugView::Roughness: case SceneDebugView::Metallic: case SceneDebugView::Occlusion:
+                case SceneDebugView::Emissive:
+                    return true;
+                default:
+                    return false;
+                }
+            };
+            {
+                int path = static_cast<int>(m_sceneView.renderPath);
+                ImGui::RadioButton("Forward##path", &path, static_cast<int>(RenderPath::Forward));
+                ImGui::SameLine();
+                ImGui::RadioButton("Deferred##path", &path, static_cast<int>(RenderPath::Deferred));
+                ImGui::SameLine();
+                ImGui::TextDisabled("Rendering");
+                ImGui::SetItemTooltip("Forward: each draw samples its material and lights it.\n"
+                                      "Deferred: the draws store the material in the G-buffer; a fullscreen pass reads it.");
+                m_sceneView.renderPath = static_cast<RenderPath>(path);
+            }
+            const bool deferred = m_sceneView.renderPath == RenderPath::Deferred;
+            if (deferred && !inGBuffer(m_sceneView.debugView))
+                m_sceneView.debugView = SceneDebugView::BaseColor;
+
             const int current = static_cast<int>(m_sceneView.debugView);
             if (ImGui::BeginCombo("Show", views[current]))
             {
@@ -473,7 +529,9 @@ namespace walnut
                         ImGui::SeparatorText("Material maps");
                     else if (i == static_cast<int>(SceneDebugView::SunSpecular))
                         ImGui::SeparatorText("Lighting terms");
-                    ImGui::BeginDisabled(needsTracing && !canTrace);
+                    else if (i == static_cast<int>(SceneDebugView::GeometricNormals))
+                        ImGui::SeparatorText("Geometry");
+                    ImGui::BeginDisabled((needsTracing && !canTrace) || (deferred && !inGBuffer(static_cast<SceneDebugView>(i))));
                     if (ImGui::Selectable(views[i], i == current))
                         m_sceneView.debugView = static_cast<SceneDebugView>(i);
                     ImGui::EndDisabled();
@@ -521,9 +579,17 @@ namespace walnut
             ImGui::Checkbox("Back-face culling", &m_sceneView.backfaceCulling);
             ImGui::SameLine();
             ImGui::Checkbox("Alpha test", &m_sceneView.alphaTest);
-            ImGui::Checkbox("Depth pre-pass", &m_sceneView.depthPrepass);
-            ImGui::SetItemTooltip("Draw depth first (no pixel shading), then shade only the closest surface of each pixel\n"
-                                  "(depth test EQUAL). Off: every fragment that passes the depth test when drawn is shaded.");
+            {
+                // Deferred always draws the pre-pass first (its G-buffer pass tests depth EQUAL).
+                bool prepass = m_sceneView.depthPrepass || deferred;
+                ImGui::BeginDisabled(deferred);
+                if (ImGui::Checkbox("Depth pre-pass", &prepass))
+                    m_sceneView.depthPrepass = prepass;
+                ImGui::EndDisabled();
+                ImGui::SetItemTooltip("Draw depth first (no pixel shading), then shade only the closest surface of each pixel\n"
+                                      "(depth test EQUAL). Off: every fragment that passes the depth test when drawn is shaded.\n"
+                                      "Always on for deferred rendering.");
+            }
         }
 
         if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen))

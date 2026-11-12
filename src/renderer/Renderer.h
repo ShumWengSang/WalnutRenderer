@@ -8,6 +8,7 @@
 #include "gfx/SwapChain.h"
 #include "gfx/UploadContext.h"
 #include "renderer/FrameConstants.h"
+#include "renderer/GBuffer.h"
 
 #include <array>
 #include <cstdint>
@@ -49,7 +50,10 @@ namespace walnut
         static constexpr uint64_t kUploadRingBytes = 64 * 1024 * 1024;
 
         // 32-bit float depth: required for reversed-Z to pay off (see Camera.cpp).
-        static constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
+        static constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT; // as a depth buffer (DSV, PSOs)
+        // The depth texture is created typeless so it can also be read as plain floats (deferred shading).
+        static constexpr DXGI_FORMAT kDepthResourceFormat = DXGI_FORMAT_R32_TYPELESS;
+        static constexpr DXGI_FORMAT kDepthSrvFormat = DXGI_FORMAT_R32_FLOAT;
         // Reversed-Z: 1 = near plane, 0 = infinitely far. "Empty" depth is therefore 0, and a pixel is closer
         // (and wins) when its depth is GREATER.
         static constexpr float kDepthClearValue = 0.0f;
@@ -72,6 +76,11 @@ namespace walnut
         void BeginDepthPrepass();
         // Binds the scene color + depth targets and a full-window viewport (after any shadow/offscreen passes).
         void BeginScenePass();
+        // Deferred shading: the G-buffer targets + depth (after the depth pre-pass) ...
+        void BeginGBufferPass();
+        // ... then the G-buffer and depth become shader-readable and only the scene color is bound, for a
+        // fullscreen pass.
+        void BeginDeferredPass();
         void BeginBackBufferPass();
         void BeginUiPass();
         void EndFrame();
@@ -89,6 +98,8 @@ namespace walnut
         ID3D12RootSignature* GetRootSignature() const { return m_rootSignature.Get(); }
         // Bindless heap index of the scene color texture's SRV (readable after BeginBackBufferPass).
         uint32_t GetSceneColorSrvIndex() const { return m_sceneSrv.index; }
+        uint32_t GetDepthSrvIndex() const { return m_depthSrv.index; }
+        const GBuffer& GetGBuffer() const { return *m_gbuffer; }
 
         // Binds the shared descriptor heap and the bindless root signature. BeginFrame does this; call it again
         // after anything that changes the root signature (e.g. ImGui) before drawing with our passes.
@@ -117,7 +128,9 @@ namespace walnut
         ComPtr<ID3D12RootSignature> m_rootSignature;
         std::unique_ptr<DescriptorHeap> m_dsvHeap;
         DescriptorHandle m_dsv;
+        DescriptorHandle m_depthSrv; // the depth buffer as Texture2D<float> (bindless)
         ComPtr<ID3D12Resource> m_depthBuffer;
+        std::unique_ptr<GBuffer> m_gbuffer;
         std::unique_ptr<DescriptorHeap> m_rtvHeap; // for the scene color target (the swapchain has its own)
         DescriptorHandle m_sceneRtv;
         DescriptorHandle m_sceneSrv;

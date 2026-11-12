@@ -35,7 +35,9 @@ namespace walnut
         // Depth-stencil views, like RTVs, live in a CPU-only (non-shader-visible) heap.
         m_dsvHeap = std::make_unique<DescriptorHeap>(device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false, L"DsvHeap");
         m_dsv = m_dsvHeap->Allocate();
+        m_depthSrv = m_srvHeap->Allocate();
         CreateDepthBuffer(m_swapChain->GetWidth(), m_swapChain->GetHeight());
+        m_gbuffer = std::make_unique<GBuffer>(*m_device, *m_srvHeap, m_swapChain->GetWidth(), m_swapChain->GetHeight());
 
         m_rtvHeap = std::make_unique<DescriptorHeap>(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false, L"SceneRtvHeap");
         m_sceneRtv = m_rtvHeap->Allocate();
@@ -107,8 +109,16 @@ namespace walnut
 
         m_commandList->ClearRenderTargetView(m_sceneRtv.cpu, clearColor, 0, nullptr);
 
-        // The depth buffer never leaves DEPTH_STENCIL_WRITE, so no barrier is needed: last frame's depth
-        // writes and this clear are in different ExecuteCommandLists, and that boundary orders them.
+        // The depth buffer: deferred shading leaves it shader-readable at the end of a frame, forward leaves it
+        // DEPTH_STENCIL_WRITE. Either way it's cleared now, so UNDEFINED -> DEPTH_STENCIL_WRITE with DISCARD
+        // works from both without tracking which: like the scene color above.
+        const CD3DX12_TEXTURE_BARRIER depthToWrite(
+            D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_SYNC_DEPTH_STENCIL,
+            D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE,
+            D3D12_BARRIER_LAYOUT_UNDEFINED, D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE,
+            m_depthBuffer.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources), D3D12_TEXTURE_BARRIER_FLAG_DISCARD);
+        const CD3DX12_BARRIER_GROUP depthGroup(1, &depthToWrite);
+        m_commandList->Barrier(1, &depthGroup);
         m_commandList->ClearDepthStencilView(m_dsv.cpu, D3D12_CLEAR_FLAG_DEPTH, kDepthClearValue, 0, 0, nullptr);
 
         BindBindlessState(m_commandList.Get());
@@ -125,6 +135,33 @@ namespace walnut
     {
         // A separate step from BeginFrame because other passes (the shadow map) render to their own targets first.
         m_commandList->OMSetRenderTargets(1, &m_sceneRtv.cpu, FALSE, &m_dsv.cpu);
+        SetWindowViewport();
+    }
+
+    void Renderer::BeginGBufferPass()
+    {
+        m_gbuffer->BeginWrite(m_commandList.Get());
+        // Four render targets at once ("MRT"): the pixel shader's SV_Target0..3 go to these, in this order.
+        const auto& rtvs = m_gbuffer->GetRtvs();
+        m_commandList->OMSetRenderTargets(static_cast<UINT>(rtvs.size()), rtvs.data(), FALSE, &m_dsv.cpu);
+        SetWindowViewport();
+    }
+
+    void Renderer::BeginDeferredPass()
+    {
+        m_gbuffer->EndWrite(m_commandList.Get());
+        // The depth buffer too: the fullscreen pass reads it as a texture. Wait for the depth tests and writes of
+        // the pre-pass and G-buffer pass (SyncBefore = DEPTH_STENCIL) before pixel shaders read it.
+        const CD3DX12_TEXTURE_BARRIER depthToRead(
+            D3D12_BARRIER_SYNC_DEPTH_STENCIL, D3D12_BARRIER_SYNC_PIXEL_SHADING,
+            D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
+            D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE, D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE,
+            m_depthBuffer.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources));
+        const CD3DX12_BARRIER_GROUP depthGroup(1, &depthToRead);
+        m_commandList->Barrier(1, &depthGroup);
+
+        // Only the scene color: no depth buffer bound (a 2D pass, and the depth buffer is being read).
+        m_commandList->OMSetRenderTargets(1, &m_sceneRtv.cpu, FALSE, nullptr);
         SetWindowViewport();
     }
 
@@ -238,6 +275,7 @@ namespace walnut
         // Both must always match the back buffer size.
         CreateDepthBuffer(width, height);
         CreateSceneColorTarget(width, height);
+        m_gbuffer->Resize(width, height);
         log::Info("Swapchain resized to {}x{}", width, height);
     }
 
@@ -279,12 +317,13 @@ namespace walnut
     {
         m_depthBuffer.Reset();
 
-        // DENY_SHADER_RESOURCE: we never sample this texture, which lets the driver pick its most compact
-        // depth-only compression. (Shadow maps, which ARE sampled, will leave this flag off.)
+        // Typeless, so it has two views: D32_FLOAT as a depth buffer, R32_FLOAT as a texture (deferred shading
+        // reads it to rebuild each pixel's position). Readable depth can cost a little: without
+        // DENY_SHADER_RESOURCE the driver must keep the compression something a shader can decode.
         const CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
         const CD3DX12_RESOURCE_DESC1 desc = CD3DX12_RESOURCE_DESC1::Tex2D(
-            kDepthFormat, width, height, 1 /*array size*/, 1 /*mip levels*/, 1 /*samples*/, 0,
-            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL | D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE);
+            kDepthResourceFormat, width, height, 1 /*array size*/, 1 /*mip levels*/, 1 /*samples*/, 0,
+            D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
 
         // The "optimized clear value": clearing to exactly this value is a fast metadata-only operation on
         // most GPUs. Clearing to anything else still works, but the debug layer warns that it's slower.
@@ -292,7 +331,7 @@ namespace walnut
         clearValue.Format = kDepthFormat;
         clearValue.DepthStencil.Depth = kDepthClearValue;
 
-        // Created directly in the layout it will always be used in, so it never needs a barrier.
+        // Created in the layout every frame starts with.
         WR_CHECK(m_device->Get()->CreateCommittedResource3(&heapProps, D3D12_HEAP_FLAG_NONE, &desc,
                                                            D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE, &clearValue,
                                                            nullptr, 0, nullptr, IID_PPV_ARGS(&m_depthBuffer)));
@@ -302,5 +341,12 @@ namespace walnut
         dsvDesc.Format = kDepthFormat;
         dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
         m_device->Get()->CreateDepthStencilView(m_depthBuffer.Get(), &dsvDesc, m_dsv.cpu);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = kDepthSrvFormat;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2D.MipLevels = 1;
+        m_device->Get()->CreateShaderResourceView(m_depthBuffer.Get(), &srvDesc, m_depthSrv.cpu);
     }
 }
