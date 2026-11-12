@@ -53,6 +53,8 @@ set(WALNUT_SOURCES
     src/gfx/UploadContext.cpp
     src/gfx/UploadContext.h
 
+    src/renderer/AccelerationStructures.cpp
+    src/renderer/AccelerationStructures.h
     src/renderer/FrameConstants.h
     src/renderer/Renderer.cpp
     src/renderer/Renderer.h

@@ -149,6 +149,9 @@ namespace walnut
             const D3D_SHADER_MODEL shaderModel = QueryHighestShaderModel(device.Get());
             D3D12_FEATURE_DATA_D3D12_OPTIONS options{};
             CheckFeature(device.Get(), D3D12_FEATURE_D3D12_OPTIONS, &options, sizeof(options));
+            // Ray tracing is optional: the raster renderer works without it; ray-traced features are skipped.
+            D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5{};
+            CheckFeature(device.Get(), D3D12_FEATURE_D3D12_OPTIONS5, &options5, sizeof(options5));
 
             std::string missing;
             if (!enhancedBarriers)
@@ -168,9 +171,14 @@ namespace walnut
             m_adapterName = adapterDesc.Description;
             m_shaderModel = shaderModel;
             m_resourceBindingTier = options.ResourceBindingTier;
-            log::Info("Using adapter: {} ({} MB VRAM): Shader Model {}, Resource Binding Tier {}, Enhanced Barriers",
+            m_raytracingTier = options5.RaytracingTier;
+            log::Info("Using adapter: {} ({} MB VRAM): Shader Model {}, Resource Binding Tier {}, Enhanced Barriers, "
+                      "ray tracing tier {}",
                       ToUtf8(m_adapterName), adapterDesc.DedicatedVideoMemory / (1024 * 1024),
-                      ToString(m_shaderModel), static_cast<int>(m_resourceBindingTier));
+                      ToString(m_shaderModel), static_cast<int>(m_resourceBindingTier),
+                      m_raytracingTier == D3D12_RAYTRACING_TIER_NOT_SUPPORTED
+                          ? std::string("none")
+                          : std::format("{}.{}", static_cast<int>(m_raytracingTier) / 10, static_cast<int>(m_raytracingTier) % 10));
             break;
         }
 

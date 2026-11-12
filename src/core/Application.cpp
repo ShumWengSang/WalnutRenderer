@@ -176,6 +176,16 @@ namespace walnut
         // Execute every upload recorded while loading, before the first frame reads that data.
         m_renderer->GetUploadContext().Flush();
 
+        // Ray tracing acceleration structures are built from the uploaded geometry, so after the flush.
+        if (m_scenePass && m_renderer->GetDevice().SupportsInlineRaytracing())
+        {
+            m_accelerationStructures = std::make_unique<AccelerationStructures>(
+                m_renderer->GetDevice(), m_renderer->GetDirectQueue(), m_renderer->GetSrvHeap(), m_scene,
+                m_scenePass->GetVertexBuffer(), m_scenePass->GetIndexBuffer());
+        }
+        else if (m_scenePass)
+            log::Warn("Inline ray tracing (tier 1.1) not supported: ray-traced features disabled");
+
         m_imgui = std::make_unique<ImGuiLayer>(*m_window, *m_renderer);
     }
 
@@ -186,6 +196,7 @@ namespace walnut
 
         // Tear down in dependency order: everything that holds GPU objects goes before the renderer.
         m_imgui.reset();
+        m_accelerationStructures.reset();
         m_scenePass.reset();
         m_shadowMap.reset();
         m_tonemapPass.reset();
@@ -547,6 +558,17 @@ namespace walnut
                                 static_cast<double>(m_scenePass->GetGpuBytes()) / (1024.0 * 1024.0), m_scenePass->GetTextureCount(),
                                 static_cast<double>(m_scenePass->GetTextureBytes()) / (1024.0 * 1024.0));
                 }
+                if (m_accelerationStructures)
+                {
+                    const AccelerationStructures::Stats& rt = m_accelerationStructures->GetStats();
+                    constexpr double kMB = 1024.0 * 1024.0;
+                    ImGui::Text("Ray tracing: %u BLASes %.1f MB (compactable to %.1f MB)", rt.blasCount,
+                                static_cast<double>(rt.blasBytes) / kMB, static_cast<double>(rt.blasCompactedBytes) / kMB);
+                    ImGui::Text("     TLAS: %u instances, %.1f KB; built in %.1f ms", rt.instanceCount,
+                                static_cast<double>(rt.tlasBytes) / 1024.0, rt.buildMs);
+                }
+                else
+                    ImGui::TextDisabled("Ray tracing: not available on this GPU");
             }
             else
             {

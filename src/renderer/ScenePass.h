@@ -69,6 +69,9 @@ namespace walnut
         uint32_t GetTextureCount() const { return static_cast<uint32_t>(m_textures.size()); }
         uint64_t GetGpuBytes() const;     // buffers
         uint64_t GetTextureBytes() const { return m_textureBytes; } // GPU memory of all textures, mips included
+        // The merged geometry, for building ray tracing acceleration structures from it.
+        const Buffer& GetVertexBuffer() const { return m_vertexBuffer; }
+        const Buffer& GetIndexBuffer() const { return m_indexBuffer; }
 
     private:
         // Everything one draw call needs: which indices, and which instance (world matrix) to place them with.

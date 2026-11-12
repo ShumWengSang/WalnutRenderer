@@ -2,6 +2,7 @@
 
 #include "core/Input.h"
 #include "core/Timer.h"
+#include "renderer/AccelerationStructures.h"
 #include "renderer/ScenePass.h"
 #include "renderer/ShadowMap.h"
 #include "renderer/TonemapPass.h"
@@ -74,6 +75,7 @@ namespace walnut
         std::unique_ptr<ShaderCompiler> m_shaderCompiler;
         std::unique_ptr<ScenePass> m_scenePass; // null when no scene loaded
         std::unique_ptr<ShadowMap> m_shadowMap;
+        std::unique_ptr<AccelerationStructures> m_accelerationStructures; // null without inline ray tracing support
         static constexpr uint32_t kShadowMapSize = 2048;
         std::unique_ptr<TonemapPass> m_tonemapPass;
         std::unique_ptr<ImGuiLayer> m_imgui;

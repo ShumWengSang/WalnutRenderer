@@ -38,6 +38,9 @@ namespace walnut
         bool IsDebugLayerEnabled() const { return m_debugLayerEnabled; }
         D3D_SHADER_MODEL GetShaderModel() const { return m_shaderModel; }
         D3D12_RESOURCE_BINDING_TIER GetResourceBindingTier() const { return m_resourceBindingTier; }
+        // Inline ray tracing (RayQuery in any shader) needs tier 1.1. Optional: ray-traced features check this.
+        D3D12_RAYTRACING_TIER GetRaytracingTier() const { return m_raytracingTier; }
+        bool SupportsInlineRaytracing() const { return m_raytracingTier >= D3D12_RAYTRACING_TIER_1_1; }
 
         // Logs the device-removed reason and DRED breadcrumbs/page-fault info, if available.
         void LogDeviceRemoved() const;
@@ -54,6 +57,7 @@ namespace walnut
         std::wstring m_adapterName;
         D3D_SHADER_MODEL m_shaderModel = D3D_SHADER_MODEL_5_1;
         D3D12_RESOURCE_BINDING_TIER m_resourceBindingTier = D3D12_RESOURCE_BINDING_TIER_1;
+        D3D12_RAYTRACING_TIER m_raytracingTier = D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
         bool m_tearingSupported = false;
         bool m_debugLayerEnabled = false;
         DWORD m_infoQueueCallbackCookie = 0;
