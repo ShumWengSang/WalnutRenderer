@@ -11,7 +11,7 @@ struct FrameConstants
     float3 sunDirection;    // world space, unit length, pointing towards the sun
     uint   shadowsEnabled;
     float3 sunIlluminance;  // linear
-    float  padding2;
+    uint   shadingModel;    // 0 = Lambert, 1 = PBR (ShadingModel in Lighting.h)
     float3 ambientRadiance; // linear
     float  padding3;
 

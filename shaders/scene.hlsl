@@ -1,6 +1,7 @@
 // Scene shaders: draws every instance of the loaded scene. Compiled at runtime by DXC (see ScenePass.cpp).
 
 #include "common/Bindless.hlsli"
+#include "common/Brdf.hlsli"
 #include "common/FrameConstants.hlsli"
 
 #ifndef ALPHA_TEST
@@ -38,8 +39,10 @@ static const uint kViewMetallic     = 11;
 static const uint kViewNormalMap    = 12;
 static const uint kViewOcclusion    = 13;
 static const uint kViewEmissive     = 14;
+static const uint kViewSunSpecular  = 15;
 
-static const float kPi = 3.14159265f;
+static const uint kShadingLambert = 0; // ShadingModel in Lighting.h
+static const uint kShadingPbr     = 1;
 
 static const uint kNormalMappingOff     = 0; // NormalMapping in ScenePass.h
 static const uint kNormalMappingMesh    = 1;
@@ -429,16 +432,17 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         discard;
 #endif
 
-    // Diffuse lighting (Lambert). A matte surface scatters light equally in all directions; how much it receives
-    // depends on how directly it faces the light: N.L, the cosine of the angle between the normal and the light
-    // direction (1 facing the sun, 0 edge-on, negative = facing away, so clamped to 0). Its BRDF is albedo / pi
-    // (the pi spreads the light over the hemisphere, so a white surface never reflects more than it receives).
+    // The sun's light arrives on a surface facing it with sunIlluminance; tilted away by an angle, the same light
+    // spreads over a bigger area, so each point gets cos(angle) = N.L of it (clamped: facing away gets none).
+    // It only arrives if nothing blocks it: 'shadow' is 1 (lit) or 0 (in shadow).
     //
-    // The sun's light only arrives if nothing blocks it: 'shadow' is 1 (lit) or 0 (in shadow).
+    // The surface sends some of that light towards the camera; how much is the BRDF (see Brdf.hlsli):
+    //   Lambert (J1): baseColor / pi, the same in every direction (a matte surface)
+    //   PBR (J3):     Lambert diffuse for what enters the surface + GGX specular for what bounces off it
     //
-    //   sun:     albedo / pi * sunIlluminance * N.L * shadow
-    //   ambient: albedo * ambientRadiance    (the same light from every direction, integrated over the hemisphere:
-    //                                         pi * radiance, times albedo / pi)
+    //   sun:     BRDF * sunIlluminance * N.L * shadow
+    //   ambient: baseColor * ambientRadiance    (the same light from every direction, integrated over the
+    //            hemisphere: pi * radiance, times baseColor / pi). J4 gives it diffuse/specular parts too.
     const float NdotL = saturate(dot(normal, g_frame.sunDirection));
     // Shadow lookups use the real surface (geometricNormal), not the normal-mapped one.
     const float geometricNdotL = saturate(dot(geometricNormal, g_frame.sunDirection));
@@ -447,13 +451,32 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
 #else
     const float shadow = NdotL > 0.0f ? SunShadow(input.worldPosition, geometricNormal, geometricNdotL) : 0.0f; // facing away: dark anyway, skip the lookup
 #endif
-    const float3 lighting = g_frame.sunIlluminance * NdotL * shadow / kPi + g_frame.ambientRadiance;
+    const float3 sunLight = g_frame.sunIlluminance * NdotL * shadow;
+    const float3 lighting = sunLight / kPi + g_frame.ambientRadiance; // what a white matte surface would show
+
+    // glTF packs both into one texture: roughness in G, metallic in B (R is unused, or occlusion in some files).
+    const float4 metallicRoughness = SampleMaterialTexture(material.metallicRoughnessTexture, input.uv, 1.0f);
+    const float roughness = metallicRoughness.g * material.roughnessFactor;
+    const float metallic = saturate(metallicRoughness.b * material.metallicFactor);
+
+    const float3 toCamera = normalize(g_frame.cameraPosition - input.worldPosition);
+    const SurfaceBrdf surface = MakeSurfaceBrdf(baseColor.rgb, metallic, roughness);
+    const BrdfValue brdf = EvaluateBrdf(surface, normal, toCamera, g_frame.sunDirection);
+    const float3 sunSpecular = brdf.specular * sunLight;
+    const float3 ambient = baseColor.rgb * g_frame.ambientRadiance;
 
     float3 color;
     if (g_draw.debugView == kViewLit)
-        color = baseColor.rgb * lighting;
+    {
+        if (g_frame.shadingModel == kShadingPbr)
+            color = (brdf.diffuse + brdf.specular) * sunLight + ambient;
+        else
+            color = baseColor.rgb * lighting;
+    }
     else if (g_draw.debugView == kViewLightingOnly)
         color = lighting;
+    else if (g_draw.debugView == kViewSunSpecular)
+        color = sunSpecular;
     else if (g_draw.debugView == kViewSunShadow)
         color = shadow.xxx;
     else if (g_draw.debugView == kViewShadowDifference)
@@ -481,12 +504,11 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         color = HashColor(materialIndex);
     else if (g_draw.debugView == kViewBaseColor)
         color = baseColor.rgb;
-    // The other maps, as stored (not used for lighting yet). glTF packs metallic and roughness into one texture:
-    // roughness in G, metallic in B (R is unused, or occlusion in some files); each times its factor.
+    // The other maps, as stored. Roughness/metallic as read above (before the BRDF's minimum roughness).
     else if (g_draw.debugView == kViewRoughness)
-        color = (SampleMaterialTexture(material.metallicRoughnessTexture, input.uv, 1.0f).g * material.roughnessFactor).xxx;
+        color = roughness.xxx;
     else if (g_draw.debugView == kViewMetallic)
-        color = (SampleMaterialTexture(material.metallicRoughnessTexture, input.uv, 1.0f).b * material.metallicFactor).xxx;
+        color = metallic.xxx;
     else if (g_draw.debugView == kViewNormalMap)
         // Raw tangent-space normal map: (0.5, 0.5, 1) = "straight out of the surface", the typical light blue.
         color = SampleMaterialTexture(material.normalTexture, input.uv, float4(0.5f, 0.5f, 1.0f, 1.0f)).rgb;

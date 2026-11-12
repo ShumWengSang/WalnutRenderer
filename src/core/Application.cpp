@@ -265,6 +265,7 @@ namespace walnut
             };
             frameConstants.sunIlluminance = scaled(m_lighting.sunColor, m_lighting.sunIntensity);
             frameConstants.ambientRadiance = scaled(m_lighting.ambientColor, m_lighting.ambientIntensity);
+            frameConstants.shadingModel = static_cast<uint32_t>(m_lighting.shadingModel);
             DirectX::XMStoreFloat4x4(&frameConstants.sunViewProjection,
                                      m_lighting.GetSunViewProjection(m_scene.boundsMin, m_scene.boundsMax));
             frameConstants.shadowMapIndex = m_shadowMap->GetSrvIndex();
@@ -450,7 +451,8 @@ namespace walnut
             const char* views[] = { "Lit (sun + ambient)", "Lighting only", "Base color (unlit)", "Normals (world)",
                                     "Texture coordinates", "Instance colors", "Material colors", "Alpha mode / back faces",
                                     "Sun shadow", "Shadow difference (ray traced vs map)",
-                                    "Roughness", "Metallic", "Normal map (tangent space)", "Occlusion", "Emissive" };
+                                    "Roughness", "Metallic", "Normal map (tangent space)", "Occlusion", "Emissive",
+                                    "Sun specular (highlights)" };
             const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
             const int current = static_cast<int>(m_sceneView.debugView);
             if (ImGui::BeginCombo("Show", views[current]))
@@ -460,6 +462,8 @@ namespace walnut
                     const bool needsTracing = static_cast<SceneDebugView>(i) == SceneDebugView::ShadowDifference;
                     if (i == static_cast<int>(SceneDebugView::Roughness))
                         ImGui::SeparatorText("Material maps");
+                    else if (i == static_cast<int>(SceneDebugView::SunSpecular))
+                        ImGui::SeparatorText("Lighting terms");
                     ImGui::BeginDisabled(needsTracing && !canTrace);
                     if (ImGui::Selectable(views[i], i == current))
                         m_sceneView.debugView = static_cast<SceneDebugView>(i);
@@ -502,6 +506,17 @@ namespace walnut
             ImGui::SliderFloat("Ambient intensity", &m_lighting.ambientIntensity, 0.0f, 5.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
             const DirectX::XMFLOAT3 sun = m_lighting.GetSunDirection();
             ImGui::TextDisabled("Towards the sun: (%.2f, %.2f, %.2f)", sun.x, sun.y, sun.z);
+            {
+                int shading = static_cast<int>(m_lighting.shadingModel);
+                ImGui::RadioButton("Lambert##shading", &shading, static_cast<int>(ShadingModel::Lambert));
+                ImGui::SameLine();
+                ImGui::RadioButton("PBR (GGX)##shading", &shading, static_cast<int>(ShadingModel::Pbr));
+                ImGui::SameLine();
+                ImGui::TextDisabled("Shading");
+                ImGui::SetItemTooltip("Lambert: matte only (baseColor / pi).\n"
+                                      "PBR: Lambert diffuse + Cook-Torrance GGX specular, driven by the metallic and roughness maps.");
+                m_lighting.shadingModel = static_cast<ShadingModel>(shading);
+            }
             ImGui::Checkbox("Sun shadows", &m_shadowsEnabled);
             {
                 // Ray-traced shadows need the TLAS, which exists only with inline ray tracing support.

@@ -4,6 +4,13 @@
 
 namespace walnut
 {
+    // How surfaces respond to light. Values must match scene.hlsl.
+    enum class ShadingModel : uint32_t
+    {
+        Lambert = 0, // matte only: baseColor / pi (Step 1-2)
+        Pbr = 1,     // glTF metallic-roughness: Lambert diffuse + Cook-Torrance GGX specular (Brdf.hlsli)
+    };
+
     // The scene's light: one sun (a directional light: infinitely far away, so every point receives it from the
     // same direction) and a constant ambient term standing in for all the light bouncing around.
     struct SceneLighting
@@ -15,6 +22,7 @@ namespace walnut
         float sunIntensity = 8.0f;
         DirectX::XMFLOAT3 ambientColor = { 0.55f, 0.65f, 0.85f }; // linear, sky blue
         float ambientIntensity = 0.25f;
+        ShadingModel shadingModel = ShadingModel::Pbr;
 
         // Shadow-map bias, in shadow-map texels (see SunShadow in scene.hlsl).
         float shadowConstantBias = 0.5f;

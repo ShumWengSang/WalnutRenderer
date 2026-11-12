@@ -18,7 +18,7 @@ namespace walnut
         DirectX::XMFLOAT3 sunDirection;    // world space, unit length, pointing TOWARDS the sun
         uint32_t shadowsEnabled = 1;       // 0: the sun reaches everything (no shadow map lookup)
         DirectX::XMFLOAT3 sunIlluminance;  // linear color * intensity: light arriving on a surface facing the sun
-        float padding2 = 0.0f;
+        uint32_t shadingModel = 1;         // ShadingModel (Lighting.h): 0 = Lambert, 1 = PBR
         DirectX::XMFLOAT3 ambientRadiance; // linear color * intensity: light arriving from every direction equally
         float padding3 = 0.0f;
 

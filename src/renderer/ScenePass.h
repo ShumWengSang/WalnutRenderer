@@ -38,6 +38,7 @@ namespace walnut
         NormalMap = 12,   // the raw tangent-space normal map (light blue = flat)
         Occlusion = 13,   // ambient occlusion map, scaled by its strength
         Emissive = 14,    // emitted light: emissive map * factor
+        SunSpecular = 15, // only the sun's GGX specular reflection (the highlights)
     };
 
     // Where the tangent frame for normal mapping comes from. Values must match scene.hlsl.
