@@ -20,6 +20,8 @@ namespace walnut
         float shadowConstantBias = 0.5f;
         float shadowSlopeBias = 1.0f;
         float shadowNormalOffset = 1.0f;
+        // Shadow edge softness: -1 = hard (one texel, yes/no), 0 = hardware 2x2 filter, r = (2r+1)^2 filtered taps.
+        int shadowFilterRadius = 1;
 
         // Unit vector from a surface towards the sun.
         DirectX::XMFLOAT3 GetSunDirection() const;

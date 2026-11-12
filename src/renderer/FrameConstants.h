@@ -28,7 +28,8 @@ namespace walnut
         float shadowConstantBias = 0.0f;   // texels: push every comparison towards the sun by this much
         float shadowSlopeBias = 0.0f;      // texels: ... plus this much times tan(angle to the sun)
         float shadowNormalOffset = 0.0f;   // texels: look up the shadow map this far out along the surface normal
-        float padding4[3] = {};
+        uint32_t shadowFilterRadius = 0;   // PCF kernel: (2r+1)^2 filtered taps; 0 = one tap; UINT32_MAX = hard (point)
+        float padding4[2] = {};
     };
     static_assert(sizeof(FrameConstants) == 224);
 }

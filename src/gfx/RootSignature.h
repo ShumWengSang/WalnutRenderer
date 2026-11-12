@@ -11,7 +11,7 @@ namespace walnut
     //   param 0  b0  root constants   kNumDrawConstants x 32-bit values, per draw (e.g. descriptor indices)
     //   param 1  b1  root CBV         per-draw data in a FrameAllocator constant buffer (e.g. a world matrix)
     //   param 2  b2  root CBV         per-frame data (e.g. camera, lights), shared by all draws
-    //   static samplers s0..s5        fixed sampler states baked into the root signature (s5: shadow comparison)
+    //   static samplers s0..s6        fixed sampler states baked into the root signature (s5/s6: shadow comparison)
     //
     // The HLSL side of this contract is shaders/common/Bindless.hlsli. Keep the two in sync.
     namespace RootParam

@@ -20,7 +20,8 @@ struct FrameConstants
     float  shadowConstantBias;   // texels
     float  shadowSlopeBias;      // texels, times tan(angle to the sun)
     float  shadowNormalOffset;   // texels, along the surface normal
-    float3 padding4;
+    uint   shadowFilterRadius;   // PCF kernel radius in texels; 0xFFFFFFFF = hard (point comparison)
+    float2 padding4;
 };
 ConstantBuffer<FrameConstants> g_frame : register(b2);
 

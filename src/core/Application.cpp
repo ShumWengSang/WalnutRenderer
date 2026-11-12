@@ -264,6 +264,8 @@ namespace walnut
             frameConstants.shadowConstantBias = m_lighting.shadowConstantBias;
             frameConstants.shadowSlopeBias = m_lighting.shadowSlopeBias;
             frameConstants.shadowNormalOffset = m_lighting.shadowNormalOffset;
+            frameConstants.shadowFilterRadius = m_lighting.shadowFilterRadius < 0 ? UINT32_MAX
+                                                                                  : static_cast<uint32_t>(m_lighting.shadowFilterRadius);
 
             {
                 PIXScopedEvent(pix::kColorCpu, L"Render");
@@ -450,6 +452,15 @@ namespace walnut
             const DirectX::XMFLOAT3 sun = m_lighting.GetSunDirection();
             ImGui::TextDisabled("Towards the sun: (%.2f, %.2f, %.2f)", sun.x, sun.y, sun.z);
             ImGui::Checkbox("Sun shadows", &m_shadowsEnabled);
+            {
+                const int r = m_lighting.shadowFilterRadius;
+                const std::string label = r < 0  ? std::string("hard (1 texel)")
+                                        : r == 0 ? std::string("2x2 hardware filter")
+                                                 : std::format("{}x{} taps (each 2x2)", 2 * r + 1, 2 * r + 1);
+                ImGui::SliderInt("Shadow softness", &m_lighting.shadowFilterRadius, -1, 4, label.c_str());
+                ImGui::SetItemTooltip("PCF kernel radius. Each step widens the soft edge by about two shadow-map texels\n"
+                                      "and costs more samples: (2r+1)^2 per pixel.");
+            }
             if (ImGui::TreeNode("Shadow bias"))
             {
                 // All three in shadow-map texels (1.8 cm each for Sponza). Zero shows the acne; large values show

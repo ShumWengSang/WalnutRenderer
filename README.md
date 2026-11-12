@@ -6,7 +6,7 @@ It loads a glTF scene (Sponza by default) and renders it with:
 - **Bindless resources**: one shader-visible descriptor heap and one shared root signature; shaders find buffers and textures through `ResourceDescriptorHeap[index]` (Shader Model 6.6).
 - **Vertex pulling**: no input layouts; vertex shaders read a merged `StructuredBuffer` of vertices. One `DrawIndexedInstanced` per instance, with the instance index as the only per-draw root constant.
 - **glTF materials**: base color factor and sRGB texture (with CPU-generated, linear-light mip chains), alpha test for `MASK` materials, double-sided materials without culling.
-- **Lighting**: a directional sun (Lambert diffuse) plus a constant ambient term, from per-frame constants.
+- **Lighting**: a directional sun (Lambert diffuse) with shadow-mapped shadows (2048² map, slope-scaled bias + normal offset, alpha-tested casters, PCF soft edges) plus a constant ambient term, from per-frame constants.
 - **HDR**: the scene renders into an FP16 target in linear light; a fullscreen pass applies exposure and a tonemap curve (ACES fitted, Reinhard, clamp) and writes the back buffer through an `_SRGB` view.
 - **Reversed-Z** depth (D32_FLOAT, infinite far plane), **Enhanced Barriers** only, a fly camera, and PIX markers throughout.
 
@@ -145,7 +145,7 @@ Example prompt: *"Survey captures\WalnutRenderer_timing_….wpix with PixMcp: fr
 4. `Renderer::BeginFrame()` waits on this frame slot's fence, resets its command allocator and per-frame upload memory, and prepares the HDR scene color target: an Enhanced Barrier from UNDEFINED to RENDER_TARGET (with DISCARD), then clears of the scene color and the depth buffer. It binds the bindless state (descriptor heap, then the shared root signature).
 5. `Renderer::SetFrameConstants()` binds the frame's camera and light data at `b2` (see `src/renderer/FrameConstants.h`); every pass can read it.
 6. The shadow pass renders depth from the sun into a 2048² shadow map (`ShadowMap`: UNDEFINED → DEPTH_STENCIL_WRITE with DISCARD, clear, depth-only draws, then DEPTH_STENCIL_WRITE → DIRECT_QUEUE_SHADER_RESOURCE so pixel shaders can read it). The sun's camera is orthographic, fitted to the scene's bounding sphere.
-7. `Renderer::BeginScenePass()` binds scene color and depth, and `ScenePass` records one draw per instance (opaque first, then alpha-tested; PSOs switch only between those groups).
+7. `Renderer::BeginScenePass()` binds scene color and depth, and `ScenePass` records one draw per instance (opaque first, then alpha-tested; PSOs switch only between those groups). Pixels are lit by the sun (Lambert, shadowed through the shadow map with slope-scaled bias, normal offset and PCF) plus an ambient term.
 8. `Renderer::BeginBackBufferPass()` records one barrier call with two transitions: scene color RENDER_TARGET → SHADER_RESOURCE (`SyncBefore = RENDER_TARGET`, `SyncAfter = PIXEL_SHADING`) and back buffer PRESENT → RENDER_TARGET. `TonemapPass` draws a fullscreen triangle that reads scene color and writes the back buffer through its `_SRGB` view.
 9. `Renderer::BeginUiPass()` switches to the back buffer's plain `UNORM` view (ImGui's colors are already sRGB), and ImGui is recorded.
 10. `Renderer::EndFrame()` records an Enhanced Barrier from RENDER_TARGET back to PRESENT (`SyncBefore = RENDER_TARGET`, `SyncAfter = NONE`) and executes the command list. It then presents and signals the frame fence.
