@@ -25,6 +25,12 @@ struct FrameConstants
     uint   shadowFilterRadius;   // PCF kernel radius in texels; 0xFFFFFFFF = hard (point comparison)
     uint   tlasIndex;            // bindless SRV of the TLAS (RaytracingAccelerationStructure)
     uint   rayAlphaTest;         // 0: shadow rays treat alpha-tested geometry as solid
+
+    row_major float4x4 inverseViewProjection; // clip space -> world (deferred: position from depth)
+    uint   vertexBufferIndex;    // the scene's buffers, for ray hits outside scene draws
+    uint   instanceBufferIndex;
+    uint   materialBufferIndex;
+    uint   indexBufferIndex;
 };
 ConstantBuffer<FrameConstants> g_frame : register(b2);
 

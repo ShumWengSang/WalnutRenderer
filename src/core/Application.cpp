@@ -173,7 +173,7 @@ namespace walnut
                                                       SwapChain::kSrgbFormat);
         m_deferredPass = std::make_unique<DeferredPass>(m_renderer->GetDevice(), *m_shaderCompiler,
                                                         m_shaderDir / "deferred.hlsl", m_renderer->GetRootSignature(),
-                                                        Renderer::kSceneColorFormat);
+                                                        Renderer::kSceneColorFormat, m_renderer->GetDevice().SupportsInlineRaytracing());
         m_shadowMap = std::make_unique<ShadowMap>(m_renderer->GetDevice(), m_renderer->GetSrvHeap(), kShadowMapSize);
 
         // Execute every upload recorded while loading, before the first frame reads that data.
@@ -261,7 +261,9 @@ namespace walnut
             // Everything the frame's shaders share: camera and lights. Colors are multiplied by their intensity here,
             // so shaders only see the resulting light amounts.
             FrameConstants frameConstants{};
-            DirectX::XMStoreFloat4x4(&frameConstants.viewProjection, m_camera.GetViewProjectionMatrix(aspect));
+            const DirectX::XMMATRIX viewProjection = m_camera.GetViewProjectionMatrix(aspect);
+            DirectX::XMStoreFloat4x4(&frameConstants.viewProjection, viewProjection);
+            DirectX::XMStoreFloat4x4(&frameConstants.inverseViewProjection, DirectX::XMMatrixInverse(nullptr, viewProjection));
             frameConstants.cameraPosition = m_camera.position;
             frameConstants.sunDirection = m_lighting.GetSunDirection();
             const auto scaled = [](const DirectX::XMFLOAT3& color, float intensity) {
@@ -287,6 +289,13 @@ namespace walnut
                                                                                   : static_cast<uint32_t>(m_lighting.shadowFilterRadius);
             frameConstants.tlasIndex = m_accelerationStructures ? m_accelerationStructures->GetTlasSrvIndex() : UINT32_MAX;
             frameConstants.rayAlphaTest = m_sceneView.alphaTest ? 1u : 0u;
+            if (m_scenePass)
+            {
+                frameConstants.vertexBufferIndex = m_scenePass->GetVertexSrvIndex();
+                frameConstants.instanceBufferIndex = m_scenePass->GetInstanceSrvIndex();
+                frameConstants.materialBufferIndex = m_scenePass->GetMaterialSrvIndex();
+                frameConstants.indexBufferIndex = m_scenePass->GetIndexSrvIndex();
+            }
 
             {
                 PIXScopedEvent(pix::kColorCpu, L"Render");
@@ -330,7 +339,8 @@ namespace walnut
                         .emissive = gbuffer.GetSrvIndex(GBuffer::Emissive),
                         .depth = m_renderer->GetDepthSrvIndex(),
                     };
-                    m_deferredPass->Render(commandList, inputs, m_sceneView.debugView);
+                    m_deferredPass->Render(commandList, inputs, m_sceneView.debugView,
+                                           m_sceneView.raytracedShadows && m_accelerationStructures);
                 }
                 else
                 {
@@ -492,16 +502,16 @@ namespace walnut
                                     "Geometric normals (no normal map)" };
             const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
 
-            // Forward or deferred. Deferred can only show what the G-buffer stores (K2: no lighting pass yet).
+            // Forward or deferred. Deferred can show everything computed from the G-buffer, but not views that need a
+            // draw's own inputs (texture coordinates, instance and material ids, the raw normal map, face orientation).
             const auto inGBuffer = [](SceneDebugView view) {
                 switch (view)
                 {
-                case SceneDebugView::BaseColor: case SceneDebugView::Normals: case SceneDebugView::GeometricNormals:
-                case SceneDebugView::Roughness: case SceneDebugView::Metallic: case SceneDebugView::Occlusion:
-                case SceneDebugView::Emissive:
-                    return true;
-                default:
+                case SceneDebugView::Texcoords: case SceneDebugView::Instances: case SceneDebugView::Materials:
+                case SceneDebugView::AlphaMode: case SceneDebugView::NormalMap:
                     return false;
+                default:
+                    return true;
                 }
             };
             {
@@ -517,7 +527,7 @@ namespace walnut
             }
             const bool deferred = m_sceneView.renderPath == RenderPath::Deferred;
             if (deferred && !inGBuffer(m_sceneView.debugView))
-                m_sceneView.debugView = SceneDebugView::BaseColor;
+                m_sceneView.debugView = SceneDebugView::Lit;
 
             const int current = static_cast<int>(m_sceneView.debugView);
             if (ImGui::BeginCombo("Show", views[current]))

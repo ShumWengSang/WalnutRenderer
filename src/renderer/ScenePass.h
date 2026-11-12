@@ -110,6 +110,11 @@ namespace walnut
         // The merged geometry, for building ray tracing acceleration structures from it.
         const Buffer& GetVertexBuffer() const { return m_vertexBuffer; }
         const Buffer& GetIndexBuffer() const { return m_indexBuffer; }
+        // Their bindless SRVs, for passes that read the scene outside its own draws (see FrameConstants).
+        uint32_t GetVertexSrvIndex() const { return m_vertexSrv.index; }
+        uint32_t GetInstanceSrvIndex() const { return m_instanceSrv.index; }
+        uint32_t GetMaterialSrvIndex() const { return m_materialSrv.index; }
+        uint32_t GetIndexSrvIndex() const { return m_indexSrv.index; }
 
     private:
         // Everything one draw call needs: which indices, and which instance (world matrix) to place them with.

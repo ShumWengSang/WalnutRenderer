@@ -1,8 +1,14 @@
-// Deferred shading's second half: a fullscreen pass that reads the G-buffer (written by PSGBuffer in scene.hlsl)
-// once per screen pixel. K2: shows one G-buffer target, decoded. The lighting pass comes in K3.
+// Deferred shading's second half: one fullscreen pass that lights every screen pixel once, from what the G-buffer
+// pass (PSGBuffer in scene.hlsl) stored. The lighting is the forward path's own code (ShadeSurface in Lighting.hlsli);
+// only where its inputs come from differs.
+
+#ifndef RAYTRACED_SHADOWS
+#define RAYTRACED_SHADOWS 0 // DeferredPass compiles a second variant with 1 (shadow rays), like ScenePass
+#endif
 
 #include "common/Bindless.hlsli"
 #include "common/GBuffer.hlsli"
+#include "common/Lighting.hlsli"
 
 // Root constants at b0. Must match DeferredDrawConstants in DeferredPass.cpp.
 struct DrawConstants
@@ -16,30 +22,36 @@ struct DrawConstants
 };
 ConstantBuffer<DrawConstants> g_draw : register(b0);
 
-static const uint kViewBaseColor        = 2; // SceneDebugView in ScenePass.h
-static const uint kViewNormals          = 3;
-static const uint kViewRoughness        = 10;
-static const uint kViewMetallic         = 11;
-static const uint kViewOcclusion        = 13;
-static const uint kViewEmissive         = 14;
-static const uint kViewGeometricNormals = 17;
-
 // One triangle that covers the whole screen (see tonemap.hlsl).
 float4 VSMain(uint vertexId : SV_VertexID) : SV_Position
 {
-    const float2 uv = float2((vertexId << 1) & 2, vertexId & 2);
-    return float4(uv * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f), 0.0f, 1.0f);
+    const float2 corner = float2((vertexId << 1) & 2, vertexId & 2);
+    return float4(corner * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f), 0.0f, 1.0f);
+}
+
+// The G-buffer doesn't store positions: the depth buffer already says how far away each pixel's surface is, and the
+// pixel's place on screen says in which direction. Undoing the camera's projection turns the two back into a point:
+//   1. pixel -> normalized device coordinates: x from -1 (left) to 1 (right), y from 1 (top) to -1 (bottom)
+//   2. (x, y, depth, 1) times the inverse view-projection matrix -> a homogeneous world position
+//   3. divide by w, undoing the perspective divide the rasterizer did
+float3 WorldPositionFromDepth(float2 pixelCenter, float depth, float2 screenSize)
+{
+    const float2 ndc = float2(pixelCenter.x / screenSize.x * 2.0f - 1.0f, 1.0f - pixelCenter.y / screenSize.y * 2.0f);
+    const float4 world = mul(float4(ndc, depth, 1.0f), g_frame.inverseViewProjection);
+    return world.xyz / world.w;
 }
 
 float4 PSMain(float4 position : SV_Position) : SV_Target
 {
     // Load, not Sample: one G-buffer texel per screen pixel, read exactly (no filtering, no sampler).
+    // SV_Position.xy is the pixel's center (x + 0.5, y + 0.5), the same point the G-buffer pass rasterized.
     const int3 pixel = int3(position.xy, 0);
 
     // Where nothing was drawn, the depth buffer still holds its clear value (0 = infinitely far, reversed-Z) and the
     // G-buffer holds garbage from earlier frames (it isn't cleared). Leave the scene color's clear color there.
     Texture2D<float> depthBuffer = ResourceDescriptorHeap[g_draw.depthIndex];
-    if (depthBuffer.Load(pixel) == 0.0f)
+    const float depth = depthBuffer.Load(pixel);
+    if (depth == 0.0f)
         discard;
 
     Texture2D<float4> baseColorTarget = ResourceDescriptorHeap[g_draw.baseColorIndex];
@@ -47,20 +59,25 @@ float4 PSMain(float4 position : SV_Position) : SV_Target
     Texture2D<float4> materialTarget = ResourceDescriptorHeap[g_draw.materialIndex];
     Texture2D<float4> emissiveTarget = ResourceDescriptorHeap[g_draw.emissiveIndex];
 
+    // Unpack the G-buffer into the same MaterialSample the forward path builds from the material's textures.
+    const float4 normals = normalsTarget.Load(pixel);
+    const float4 material = materialTarget.Load(pixel);
+    MaterialSample mat;
+    mat.baseColor = baseColorTarget.Load(pixel).rgb; // the _SRGB view decodes to linear
+    mat.normal = OctahedralDecode(normals.xy);
+    mat.geometricNormal = OctahedralDecode(normals.zw);
+    mat.roughness = material.r;
+    mat.metallic = material.g;
+    mat.occlusion = material.b;
+    mat.emissive = emissiveTarget.Load(pixel).rgb;
+
+    float width, height;
+    depthBuffer.GetDimensions(width, height);
+    const float3 worldPosition = WorldPositionFromDepth(position.xy, depth, float2(width, height));
+
+    const ShadingResult shading = ShadeSurface(worldPosition, mat, g_draw.debugView == kViewShadowDifference);
     float3 color;
-    if (g_draw.debugView == kViewNormals)
-        color = OctahedralDecode(normalsTarget.Load(pixel).xy) * 0.5f + 0.5f;
-    else if (g_draw.debugView == kViewGeometricNormals)
-        color = OctahedralDecode(normalsTarget.Load(pixel).zw) * 0.5f + 0.5f;
-    else if (g_draw.debugView == kViewRoughness)
-        color = materialTarget.Load(pixel).rrr;
-    else if (g_draw.debugView == kViewMetallic)
-        color = materialTarget.Load(pixel).ggg;
-    else if (g_draw.debugView == kViewOcclusion)
-        color = materialTarget.Load(pixel).bbb;
-    else if (g_draw.debugView == kViewEmissive)
-        color = emissiveTarget.Load(pixel).rgb;
-    else
-        color = baseColorTarget.Load(pixel).rgb; // the _SRGB view decodes to linear, like the forward pass's input
+    if (!SharedViewColor(g_draw.debugView, mat, shading, color))
+        color = float3(1.0f, 0.0f, 1.0f); // forward-only view (the UI doesn't offer it in deferred mode)
     return float4(color, 1.0f);
 }

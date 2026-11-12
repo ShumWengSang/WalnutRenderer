@@ -34,6 +34,15 @@ namespace walnut
         uint32_t shadowFilterRadius = 0;   // PCF kernel: (2r+1)^2 filtered taps; 0 = one tap; UINT32_MAX = hard (point)
         uint32_t tlasIndex = UINT32_MAX;   // bindless SRV of the ray tracing TLAS (ray-traced shadow pipelines only)
         uint32_t rayAlphaTest = 1;         // 0: shadow rays treat alpha-tested geometry as solid
+
+        // Deferred shading (K3): turns a pixel's screen position + depth back into a world position.
+        DirectX::XMFLOAT4X4 inverseViewProjection;
+        // The scene's buffers (bindless SRVs), for shaders that aren't scene draws: the deferred pass's shadow
+        // rays look up alpha-tested hits in them.
+        uint32_t vertexBufferIndex = UINT32_MAX;
+        uint32_t instanceBufferIndex = UINT32_MAX;
+        uint32_t materialBufferIndex = UINT32_MAX;
+        uint32_t indexBufferIndex = UINT32_MAX;
     };
-    static_assert(sizeof(FrameConstants) == 240);
+    static_assert(sizeof(FrameConstants) == 320);
 }
