@@ -28,6 +28,8 @@ namespace walnut
     //   renderer.BeginFrame(clearColor);   // waits for this frame slot; scene color + depth cleared
     //   renderer.SetFrameConstants(...);   // camera + lights at b2 for every pass
     //   ... shadow map pass ...            //   (its own depth target)
+    //   renderer.BeginDepthPrepass();      // optional: camera depth only, no color target
+    //   ... depth pre-pass ...
     //   renderer.BeginScenePass();         // scene color + depth bound
     //   ... draw the 3D scene ...          //   (into the HDR scene color target, not the back buffer)
     //   renderer.BeginBackBufferPass();    // scene color becomes readable; back buffer (_SRGB view) is the target
@@ -66,6 +68,8 @@ namespace walnut
         // Copies 'constants' into this frame's upload memory and binds them at b2 for every following draw.
         // Call after BeginFrame (which binds the root signature; that clears root arguments).
         void SetFrameConstants(const FrameConstants& constants);
+        // Binds only the depth buffer and a full-window viewport, for the depth pre-pass.
+        void BeginDepthPrepass();
         // Binds the scene color + depth targets and a full-window viewport (after any shadow/offscreen passes).
         void BeginScenePass();
         void BeginBackBufferPass();
@@ -102,6 +106,7 @@ namespace walnut
         };
 
         void CreateDepthBuffer(uint32_t width, uint32_t height);
+        void SetWindowViewport();
         void CreateSceneColorTarget(uint32_t width, uint32_t height);
 
         std::unique_ptr<Device> m_device;

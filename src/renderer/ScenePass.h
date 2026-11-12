@@ -60,6 +60,7 @@ namespace walnut
         bool backfaceCulling = true; // for single-sided materials; double-sided ones are never culled
         bool alphaTest = true;       // cut out alpha-mask materials; off draws them as opaque, to compare
         bool raytracedShadows = false; // sun shadows from ray queries instead of the shadow map (if supported)
+        bool depthPrepass = true;      // draw depth first, then shade each pixel once (depth EQUAL)
     };
 
     // Draws a Scene: uploads its merged vertex/index arrays and an instance buffer once, then issues one
@@ -86,6 +87,9 @@ namespace walnut
         void Render(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const;
         // Draws every instance into the bound shadow map: depth only, from the sun (frame constants' sunViewProjection).
         void RenderShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const;
+        // Draws every instance into the bound depth buffer from the camera, depth only. With settings.depthPrepass,
+        // Render() must follow with the same settings: it then shades only the fragments matching this depth.
+        void RenderDepthPrepass(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const;
 
         uint32_t GetDrawCount() const { return static_cast<uint32_t>(m_draws.size()); }
         uint32_t GetTextureCount() const { return static_cast<uint32_t>(m_textures.size()); }
@@ -110,8 +114,9 @@ namespace walnut
                                       const wchar_t* name, DescriptorHandle& srv);
         // Uploads every loaded scene texture; returns each one's bindless SRV index (kNoTexture if it wasn't loaded).
         std::vector<uint32_t> CreateTextures(UploadContext& upload, const Scene& scene);
-        // Binds the geometry and issues every draw, with the scene PSOs or the depth-only shadow PSOs.
-        void RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings, bool shadow) const;
+        enum class DrawMode { Scene, ShadowDepth, DepthPrepass };
+        // Binds the geometry and issues every draw, with the PSOs for the given pass.
+        void RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings, DrawMode mode) const;
 
         ID3D12Device10* m_device = nullptr;
         DescriptorHeap& m_srvHeap;
@@ -138,6 +143,9 @@ namespace walnut
         using PipelineTable = std::array<std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2>, 2>;
         PipelineTable m_pipelines;
         std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_shadowPipelines; // [alphaTest][cullNone]
+        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_prepassPipelines; // [alphaTest][cullNone]
+        // Scene pass after a depth pre-pass: depth EQUAL, no depth writes, no discard. [raytraced][cullNone]
+        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_equalPipelines;
         bool m_raytracingSupported = false;
         std::string m_lastError;
     };

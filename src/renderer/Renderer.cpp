@@ -114,11 +114,22 @@ namespace walnut
         BindBindlessState(m_commandList.Get());
     }
 
+    void Renderer::BeginDepthPrepass()
+    {
+        // Depth only: no render target bound, matching the depth-only PSOs (NumRenderTargets = 0).
+        m_commandList->OMSetRenderTargets(0, nullptr, FALSE, &m_dsv.cpu);
+        SetWindowViewport();
+    }
+
     void Renderer::BeginScenePass()
     {
         // A separate step from BeginFrame because other passes (the shadow map) render to their own targets first.
         m_commandList->OMSetRenderTargets(1, &m_sceneRtv.cpu, FALSE, &m_dsv.cpu);
+        SetWindowViewport();
+    }
 
+    void Renderer::SetWindowViewport()
+    {
         const CD3DX12_VIEWPORT viewport(0.0f, 0.0f, static_cast<float>(m_swapChain->GetWidth()),
                                         static_cast<float>(m_swapChain->GetHeight()));
         const CD3DX12_RECT scissor(0, 0, static_cast<LONG>(m_swapChain->GetWidth()),

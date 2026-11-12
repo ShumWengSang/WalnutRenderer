@@ -240,11 +240,14 @@ namespace walnut
         const ShaderCompileResult psAlphaTest = m_compiler.Compile({ m_shaderPath, L"PSMain", ShaderStage::Pixel, { { L"ALPHA_TEST", L"1" } } });
         const ShaderCompileResult vsShadow = m_compiler.Compile({ m_shaderPath, L"VSShadow", ShaderStage::Vertex });
         const ShaderCompileResult vsShadowAlpha = m_compiler.Compile({ m_shaderPath, L"VSShadowAlphaTest", ShaderStage::Vertex });
-        const ShaderCompileResult psShadowAlpha = m_compiler.Compile({ m_shaderPath, L"PSShadowAlphaTest", ShaderStage::Pixel });
+        const ShaderCompileResult vsPrepass = m_compiler.Compile({ m_shaderPath, L"VSDepthPrepass", ShaderStage::Vertex });
+        const ShaderCompileResult vsPrepassAlpha = m_compiler.Compile({ m_shaderPath, L"VSDepthPrepassAlphaTest", ShaderStage::Vertex });
+        const ShaderCompileResult psDepthAlpha = m_compiler.Compile({ m_shaderPath, L"PSDepthAlphaTest", ShaderStage::Pixel });
         if (!vs.Succeeded() || !ps.Succeeded() || !psAlphaTest.Succeeded() || !vsShadow.Succeeded() ||
-            !vsShadowAlpha.Succeeded() || !psShadowAlpha.Succeeded())
+            !vsShadowAlpha.Succeeded() || !vsPrepass.Succeeded() || !vsPrepassAlpha.Succeeded() || !psDepthAlpha.Succeeded())
         {
-            m_lastError = vs.errors + ps.errors + psAlphaTest.errors + vsShadow.errors + vsShadowAlpha.errors + psShadowAlpha.errors;
+            m_lastError = vs.errors + ps.errors + psAlphaTest.errors + vsShadow.errors + vsShadowAlpha.errors +
+                          vsPrepass.errors + vsPrepassAlpha.errors + psDepthAlpha.errors;
             return false;
         }
 
@@ -302,6 +305,30 @@ namespace walnut
             }
         }
 
+        // After a depth pre-pass, the depth buffer already holds the closest surface of every pixel. The scene pass
+        // then only shades fragments whose depth is EQUAL to it (exactly one per pixel), and doesn't write depth.
+        // Alpha-tested materials don't need 'discard' any more: the pre-pass already cut their holes into the depth
+        // buffer, and EQUAL rejects the see-through fragments. So the opaque pixel shader serves both, and
+        // early-Z (testing depth before the pixel shader runs) works for everything. [raytraced][cullNone]
+        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> equalPipelines;
+        desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_EQUAL;
+        desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        for (int raytraced = 0; raytraced < techniques && SUCCEEDED(hr); ++raytraced)
+        {
+            desc.PS = raytraced ? psRt[0].GetBytecode() : ps.GetBytecode();
+            for (int cullNone = 0; cullNone < 2 && SUCCEEDED(hr); ++cullNone)
+            {
+                desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
+                hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&equalPipelines[raytraced][cullNone]));
+                if (SUCCEEDED(hr))
+                    SetDebugName(equalPipelines[raytraced][cullNone].Get(),
+                                 std::format(L"ScenePSO_DepthEqual_{}_{}", raytraced ? L"RtShadow" : L"ShadowMap",
+                                             cullNone ? L"CullNone" : L"CullBack").c_str());
+            }
+        }
+        desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER;
+        desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+
         // Shadow map pipelines: depth only, no render targets. Opaque casters have no pixel shader at all: the rasterizer
         // writes depth by itself, the cheapest way to draw. Alpha-tested casters need a small pixel shader that
         // discards the see-through texels of the leaf texture. Same culling rules as the scene. [alphaTest][cullNone]
@@ -312,7 +339,7 @@ namespace walnut
         for (int alphaTest = 0; alphaTest < 2 && SUCCEEDED(hr); ++alphaTest)
         {
             desc.VS = alphaTest ? vsShadowAlpha.GetBytecode() : vsShadow.GetBytecode();
-            desc.PS = alphaTest ? psShadowAlpha.GetBytecode() : D3D12_SHADER_BYTECODE{};
+            desc.PS = alphaTest ? psDepthAlpha.GetBytecode() : D3D12_SHADER_BYTECODE{};
             for (int cullNone = 0; cullNone < 2 && SUCCEEDED(hr); ++cullNone)
             {
                 desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
@@ -320,6 +347,23 @@ namespace walnut
                 if (SUCCEEDED(hr))
                     SetDebugName(shadowPipelines[alphaTest][cullNone].Get(),
                                  std::format(L"ShadowPSO_{}_{}", alphaTest ? L"AlphaTest" : L"Opaque", cullNone ? L"CullNone" : L"CullBack").c_str());
+            }
+        }
+
+        // Depth pre-pass pipelines: the same depth-only drawing, from the camera into the scene's depth buffer.
+        desc.DSVFormat = m_dsvFormat;
+        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> prepassPipelines;
+        for (int alphaTest = 0; alphaTest < 2 && SUCCEEDED(hr); ++alphaTest)
+        {
+            desc.VS = alphaTest ? vsPrepassAlpha.GetBytecode() : vsPrepass.GetBytecode();
+            desc.PS = alphaTest ? psDepthAlpha.GetBytecode() : D3D12_SHADER_BYTECODE{};
+            for (int cullNone = 0; cullNone < 2 && SUCCEEDED(hr); ++cullNone)
+            {
+                desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
+                hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&prepassPipelines[alphaTest][cullNone]));
+                if (SUCCEEDED(hr))
+                    SetDebugName(prepassPipelines[alphaTest][cullNone].Get(),
+                                 std::format(L"DepthPrepassPSO_{}_{}", alphaTest ? L"AlphaTest" : L"Opaque", cullNone ? L"CullNone" : L"CullBack").c_str());
             }
         }
         if (FAILED(hr))
@@ -331,6 +375,8 @@ namespace walnut
 
         m_pipelines = std::move(pipelines);
         m_shadowPipelines = std::move(shadowPipelines);
+        m_equalPipelines = std::move(equalPipelines);
+        m_prepassPipelines = std::move(prepassPipelines);
         m_lastError.clear();
         return true;
     }
@@ -338,16 +384,22 @@ namespace walnut
     void ScenePass::Render(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"ScenePass");
-        RecordDraws(commandList, settings, false);
+        RecordDraws(commandList, settings, DrawMode::Scene);
     }
 
     void ScenePass::RenderShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"Shadow casters");
-        RecordDraws(commandList, settings, true);
+        RecordDraws(commandList, settings, DrawMode::ShadowDepth);
     }
 
-    void ScenePass::RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings, bool shadow) const
+    void ScenePass::RenderDepthPrepass(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const
+    {
+        PIXScopedEvent(commandList, pix::kColorGpu, L"Depth pre-pass");
+        RecordDraws(commandList, settings, DrawMode::DepthPrepass);
+    }
+
+    void ScenePass::RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings, DrawMode mode) const
     {
         // The camera and lights come from the frame constants (b2), which the renderer has already bound.
         // Everything else shared by all draws is set once here.
@@ -381,8 +433,16 @@ namespace walnut
             const bool alphaTest = settings.alphaTest && draw.alphaTest;
             const bool cullNone = !settings.backfaceCulling || draw.doubleSided;
             const bool raytraced = settings.raytracedShadows && m_raytracingSupported;
-            ID3D12PipelineState* pipeline = shadow ? m_shadowPipelines[alphaTest][cullNone].Get()
-                                                   : m_pipelines[raytraced][alphaTest][cullNone].Get();
+            ID3D12PipelineState* pipeline = nullptr;
+            switch (mode)
+            {
+            case DrawMode::ShadowDepth: pipeline = m_shadowPipelines[alphaTest][cullNone].Get(); break;
+            case DrawMode::DepthPrepass: pipeline = m_prepassPipelines[alphaTest][cullNone].Get(); break;
+            case DrawMode::Scene:
+                pipeline = settings.depthPrepass ? m_equalPipelines[raytraced][cullNone].Get()
+                                                 : m_pipelines[raytraced][alphaTest][cullNone].Get();
+                break;
+            }
             if (pipeline != currentPipeline)
             {
                 commandList->SetPipelineState(pipeline);

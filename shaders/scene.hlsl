@@ -105,6 +105,17 @@ struct PSInput
     float2 uv            : TEXCOORD0;
 };
 
+// Where a vertex lands in clip space for a camera. The depth pre-pass writes depth with one shader and the scene pass
+// tests it with EQUAL using another, so both must compute bit-identical positions. They share this function, and
+// 'precise' forbids the compiler from rearranging the math differently in each shader (fusing a multiply and an add
+// into one instruction in one shader but not the other would change the last bit, and EQUAL would fail).
+float4 ClipPosition(float3 position, float4x4 world, float4x4 viewProjection)
+{
+    precise const float4 worldPosition = mul(float4(position, 1.0f), world);
+    precise const float4 clipPosition = mul(worldPosition, viewProjection);
+    return clipPosition;
+}
+
 // For an indexed draw, SV_VertexID is the value read from the index buffer, which the loader made point straight
 // into the merged vertex buffer.
 PSInput VSMain(uint vertexId : SV_VertexID)
@@ -117,7 +128,7 @@ PSInput VSMain(uint vertexId : SV_VertexID)
     const float4 worldPosition = mul(float4(vertex.position, 1.0f), instance.world);
 
     PSInput output;
-    output.position = mul(worldPosition, g_frame.viewProjection);
+    output.position = ClipPosition(vertex.position, instance.world, g_frame.viewProjection);
     output.worldPosition = worldPosition.xyz;
     output.normal = mul(float4(vertex.normal, 0.0f), instance.normalMatrix).xyz; // w = 0: directions don't move
     // A tangent lies IN the surface (unlike the normal, which sticks out of it), so it moves with the surface:
@@ -127,39 +138,58 @@ PSInput VSMain(uint vertexId : SV_VertexID)
     return output;
 }
 
-// Shadow map pass: the same vertices, seen from the sun. Only the position is needed: the pipeline has no pixel
-// shader, so the rasterizer just writes each covered texel's depth.
-float4 VSShadow(uint vertexId : SV_VertexID) : SV_Position
+// Depth-only passes: the shadow map (seen from the sun) and the depth pre-pass (seen from the camera). Only the
+// position is needed: opaque geometry is drawn without a pixel shader, so the rasterizer just writes each covered
+// pixel's depth.
+float4 DepthOnlyPosition(uint vertexId, float4x4 viewProjection)
 {
     StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[g_draw.vertexBufferIndex];
     StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
-    const float4 worldPosition = mul(float4(vertices[vertexId].position, 1.0f), instances[g_draw.instanceIndex].world);
-    return mul(worldPosition, g_frame.sunViewProjection);
+    return ClipPosition(vertices[vertexId].position, instances[g_draw.instanceIndex].world, viewProjection);
 }
 
-// Alpha-tested shadow casters (leaves): the rectangle's depth must only be written where the leaf texture is opaque,
-// so these draws need a pixel shader after all. It writes no color (there's no render target), it only decides
-// whether the rasterizer may write this texel's depth: 'discard' skips it, exactly like in the scene pass.
-struct ShadowAlphaInput
+float4 VSShadow(uint vertexId : SV_VertexID) : SV_Position
+{
+    return DepthOnlyPosition(vertexId, g_frame.sunViewProjection);
+}
+
+float4 VSDepthPrepass(uint vertexId : SV_VertexID) : SV_Position
+{
+    return DepthOnlyPosition(vertexId, g_frame.viewProjection);
+}
+
+// Alpha-tested geometry (leaves): the rectangle's depth must only be written where the leaf texture is opaque, so
+// these draws need a pixel shader after all. It writes no color (there's no render target), it only decides whether
+// the rasterizer may write this pixel's depth: 'discard' skips it.
+struct DepthAlphaInput
 {
     float4 position : SV_Position;
     float2 uv       : TEXCOORD0;
 };
 
-ShadowAlphaInput VSShadowAlphaTest(uint vertexId : SV_VertexID)
+DepthAlphaInput DepthAlphaTestVertex(uint vertexId, float4x4 viewProjection)
 {
     StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[g_draw.vertexBufferIndex];
     StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
     const Vertex vertex = vertices[vertexId];
-    const float4 worldPosition = mul(float4(vertex.position, 1.0f), instances[g_draw.instanceIndex].world);
 
-    ShadowAlphaInput output;
-    output.position = mul(worldPosition, g_frame.sunViewProjection);
+    DepthAlphaInput output;
+    output.position = ClipPosition(vertex.position, instances[g_draw.instanceIndex].world, viewProjection);
     output.uv = vertex.uv;
     return output;
 }
 
-void PSShadowAlphaTest(ShadowAlphaInput input)
+DepthAlphaInput VSShadowAlphaTest(uint vertexId : SV_VertexID)
+{
+    return DepthAlphaTestVertex(vertexId, g_frame.sunViewProjection);
+}
+
+DepthAlphaInput VSDepthPrepassAlphaTest(uint vertexId : SV_VertexID)
+{
+    return DepthAlphaTestVertex(vertexId, g_frame.viewProjection);
+}
+
+void PSDepthAlphaTest(DepthAlphaInput input)
 {
     StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
     StructuredBuffer<Material> materials = ResourceDescriptorHeap[g_draw.materialBufferIndex];
@@ -443,7 +473,8 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     //
     // It's compiled only into the pixel shader that masked materials use. A shader that may discard can't have its
     // depth written before it runs ("early-Z"), since the GPU doesn't know yet whether the pixel survives; keeping
-    // discard out of the opaque shader keeps that optimization for everything else.
+    // discard out of the opaque shader keeps that optimization for everything else. With the depth pre-pass (K1),
+    // the scene pass doesn't use this variant at all: the pre-pass discards, and depth EQUAL does the rest.
     if (baseColor.a < material.alphaCutoff)
         discard;
 #endif

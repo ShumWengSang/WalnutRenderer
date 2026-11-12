@@ -303,7 +303,13 @@ namespace walnut
                     m_shadowMap->End(commandList);
                 }
 
-                // 2. The scene from the camera, into the HDR scene color target.
+                // 2. The scene from the camera, into the HDR scene color target. With the depth pre-pass, depth
+                //    first: the scene pass then shades only the closest surface of each pixel.
+                if (m_scenePass && m_sceneView.depthPrepass)
+                {
+                    m_renderer->BeginDepthPrepass();
+                    m_scenePass->RenderDepthPrepass(commandList, m_sceneView);
+                }
                 m_renderer->BeginScenePass();
                 if (m_scenePass)
                     m_scenePass->Render(commandList, m_sceneView);
@@ -515,6 +521,9 @@ namespace walnut
             ImGui::Checkbox("Back-face culling", &m_sceneView.backfaceCulling);
             ImGui::SameLine();
             ImGui::Checkbox("Alpha test", &m_sceneView.alphaTest);
+            ImGui::Checkbox("Depth pre-pass", &m_sceneView.depthPrepass);
+            ImGui::SetItemTooltip("Draw depth first (no pixel shading), then shade only the closest surface of each pixel\n"
+                                  "(depth test EQUAL). Off: every fragment that passes the depth test when drawn is shaded.");
         }
 
         if (ImGui::CollapsingHeader("Lighting", ImGuiTreeNodeFlags_DefaultOpen))
