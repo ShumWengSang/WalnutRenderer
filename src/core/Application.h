@@ -87,6 +87,8 @@ namespace walnut
         SceneViewSettings m_sceneView;
         SceneLighting m_lighting;
         bool m_shadowsEnabled = true;
+        float m_roughnessOverrideValue = 0.3f; // slider values kept while an override is switched off
+        float m_metallicOverrideValue = 1.0f;
         Camera m_camera;
         Camera m_homeCamera; // where "Reset camera" goes: framing the loaded scene
         FlyCameraController m_cameraController;

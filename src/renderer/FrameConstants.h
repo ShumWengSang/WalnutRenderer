@@ -21,9 +21,9 @@ namespace walnut
         uint32_t shadingModel = 1;         // ShadingModel (Lighting.h): 0 = Lambert, 1 = PBR
         // Ambient light (J4): a "hemisphere light", standing in for the sky and the light bounced off the ground.
         DirectX::XMFLOAT3 skyRadiance;     // linear color * intensity: light arriving from above the horizon
-        float padding3 = 0.0f;
+        float roughnessOverride = -1.0f;   // >= 0: every material uses this roughness (J5 comparisons)
         DirectX::XMFLOAT3 groundRadiance;  // linear color * intensity: light arriving from below it
-        float padding4 = 0.0f;
+        float metallicOverride = -1.0f;    // >= 0: every material uses this metallic
 
         // Shadow bias (H3). Sizes are in shadow-map texels: one texel covers shadowTexelWorldSize meters.
         float shadowTexelWorldSize = 0.0f; // meters covered by one shadow-map texel

@@ -54,6 +54,9 @@ namespace walnut
     {
         SceneDebugView debugView = SceneDebugView::Lit;
         NormalMapping normalMapping = NormalMapping::Mesh;
+        // Negative: use the material's value. 0..1: every material uses this instead (sent as frame constants).
+        float roughnessOverride = -1.0f;
+        float metallicOverride = -1.0f;
         bool backfaceCulling = true; // for single-sided materials; double-sided ones are never culled
         bool alphaTest = true;       // cut out alpha-mask materials; off draws them as opaque, to compare
         bool raytracedShadows = false; // sun shadows from ray queries instead of the shadow map (if supported)

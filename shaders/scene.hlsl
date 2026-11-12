@@ -473,8 +473,12 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
 
     // glTF packs both into one texture: roughness in G, metallic in B (R is unused, or occlusion in some files).
     const float4 metallicRoughness = SampleMaterialTexture(material.metallicRoughnessTexture, input.uv, 1.0f);
-    const float roughness = metallicRoughness.g * material.roughnessFactor;
-    const float metallic = saturate(metallicRoughness.b * material.metallicFactor);
+    float roughness = metallicRoughness.g * material.roughnessFactor;
+    float metallic = saturate(metallicRoughness.b * material.metallicFactor);
+    if (g_frame.roughnessOverride >= 0.0f)
+        roughness = g_frame.roughnessOverride; // View > Roughness override
+    if (g_frame.metallicOverride >= 0.0f)
+        metallic = g_frame.metallicOverride;
 
     const float3 toCamera = normalize(g_frame.cameraPosition - input.worldPosition);
     const SurfaceBrdf surface = MakeSurfaceBrdf(baseColor.rgb, metallic, roughness);

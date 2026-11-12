@@ -5,8 +5,8 @@ A small Direct3D 12 learning engine for Windows. It uses raw Win32 for the windo
 It loads a glTF scene (Sponza by default) and renders it with:
 - **Bindless resources**: one shader-visible descriptor heap and one shared root signature; shaders find buffers and textures through `ResourceDescriptorHeap[index]` (Shader Model 6.6).
 - **Vertex pulling**: no input layouts; vertex shaders read a merged `StructuredBuffer` of vertices. One `DrawIndexedInstanced` per instance, with the instance index as the only per-draw root constant.
-- **glTF materials**: base color factor and sRGB texture (with CPU-generated, linear-light mip chains), alpha test for `MASK` materials, double-sided materials without culling.
-- **Lighting**: a directional sun (Lambert diffuse) plus a constant ambient term, from per-frame constants. Sun shadows come from either:
+- **glTF materials** (metallic-roughness): base color, metallic/roughness, normal, occlusion and emissive maps (including `KHR_materials_emissive_strength`), with CPU-generated mip chains (linear-light averaging for sRGB colors, re-normalized normals for normal maps). Normal mapping uses the mesh's tangents, or derives them per pixel from screen-space derivatives. Alpha test for `MASK` materials, and double-sided materials are drawn without culling.
+- **Lighting**: PBR shading (`shaders/common/Brdf.hlsli`): Lambert diffuse plus Cook-Torrance specular (GGX distribution, height-correlated Smith visibility, Schlick Fresnel), for a directional sun and for a sky/ground hemisphere ambient (an analytic split-sum environment BRDF), with occlusion and emission. Sun shadows come from either:
   - a **shadow map** (2048², slope-scaled bias + normal offset, alpha-tested casters, PCF soft edges), or
   - **ray tracing** (DXR 1.1 inline `RayQuery` against a BLAS-per-primitive / TLAS acceleration structure, alpha-tested leaves via candidate hits), when the GPU supports raytracing tier 1.1. A difference view compares the two.
 - **HDR**: the scene renders into an FP16 target in linear light; a fullscreen pass applies exposure and a tonemap curve (ACES fitted, Reinhard, clamp) and writes the back buffer through an `_SRGB` view.
@@ -89,7 +89,8 @@ The camera starts inside large scenes like Sponza, or framing small ones from ou
 
 ```
 cmake/Dependencies.cmake  FetchContent: DirectX-Headers, Agility SDK, DXC, Dear ImGui, WinPixEventRuntime, cgltf, stb_image (all pinned)
-shaders/                  HLSL sources, compiled at runtime straight from here (a copy next to the exe is the fallback)
+shaders/                  HLSL sources, compiled at runtime straight from here (a copy next to the exe is the fallback);
+                          common/ holds the shared includes (bindless root signature + samplers, frame constants, BRDF)
 src/core/                 Application loop, Win32 Window, Input, Timer, Log
 src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, RootSignature (shared bindless),
                           Buffer, Texture, UploadContext (staging ring), FrameAllocator (per-frame constants),
@@ -149,7 +150,7 @@ Example prompt: *"Survey captures\WalnutRenderer_timing_….wpix with PixMcp: fr
 5. `Renderer::SetFrameConstants()` binds the frame's camera and light data at `b2` (see `src/renderer/FrameConstants.h`); every pass can read it.
 6. The shadow pass renders depth from the sun into a 2048² shadow map (`ShadowMap`: UNDEFINED → DEPTH_STENCIL_WRITE with DISCARD, clear, depth-only draws, then DEPTH_STENCIL_WRITE → DIRECT_QUEUE_SHADER_RESOURCE so pixel shaders can read it). The sun's camera is orthographic, fitted to the scene's bounding sphere.
    - At load (not per frame), when ray tracing is supported, `AccelerationStructures` builds one BLAS per primitive from the scene's vertex/index buffers and a TLAS over the instances.
-7. `Renderer::BeginScenePass()` binds scene color and depth, and `ScenePass` records one draw per instance (opaque first, then alpha-tested; PSOs switch only between those groups). Pixels are lit by the sun (Lambert) plus an ambient term. The sun's visibility comes from the shadow map (slope-scaled bias, normal offset, PCF) or, with **Lighting → Ray traced**, from one `RayQuery` shadow ray per pixel against the TLAS. In ray-traced mode the shadow map pass is cleared but draws nothing.
+7. `Renderer::BeginScenePass()` binds scene color and depth, and `ScenePass` records one draw per instance (opaque first, then alpha-tested; PSOs switch only between those groups). Pixels are shaded with the glTF metallic-roughness BRDF: sun (diffuse + GGX specular) plus a sky/ground ambient (diffuse + reflection, darkened by the occlusion map) plus emission. The sun's visibility comes from the shadow map (slope-scaled bias, normal offset, PCF) or, with **Lighting → Ray traced**, from one `RayQuery` shadow ray per pixel against the TLAS. In ray-traced mode the shadow map pass is cleared but draws nothing.
 8. `Renderer::BeginBackBufferPass()` records one barrier call with two transitions: scene color RENDER_TARGET → SHADER_RESOURCE (`SyncBefore = RENDER_TARGET`, `SyncAfter = PIXEL_SHADING`) and back buffer PRESENT → RENDER_TARGET. `TonemapPass` draws a fullscreen triangle that reads scene color and writes the back buffer through its `_SRGB` view.
 9. `Renderer::BeginUiPass()` switches to the back buffer's plain `UNORM` view (ImGui's colors are already sRGB), and ImGui is recorded.
 10. `Renderer::EndFrame()` records an Enhanced Barrier from RENDER_TARGET back to PRESENT (`SyncBefore = RENDER_TARGET`, `SyncAfter = NONE`) and executes the command list. It then presents and signals the frame fence.
@@ -166,6 +167,17 @@ Switch with **Lighting → Shadow map / Ray traced**; **View → Show → Shadow
 | Ray traced, leaves forced opaque | 0.00 ms | 0.57 ms | 0.60 ms |
 
 Ray-traced shadows are exact (no resolution, bias or acne) but cost about 0.5 ms here: one ray for every pixel the scene pass shades, including pixels later covered by closer geometry (overdraw). The shadow map's cost is mostly fixed (103 depth-only draws) and its quality depends on texel size.
+
+### Materials: Lambert vs PBR
+
+Everything the shader does with a material can be switched or isolated:
+- **Lighting → Lambert / PBR (GGX)**: matte-only shading (base color / π, as in steps 1–2) or the full BRDF.
+- **View → Normal mapping**: off, mesh tangents, or tangents derived from screen-space derivatives. [NormalTangentMirrorTest](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/NormalTangentMirrorTest) renders the same with both.
+- **View → Roughness / Metallic** overrides replace every material's value, to see what each one does.
+- **View → Show**: the material maps (roughness, metallic, normal map, occlusion, emissive) and the lighting terms (sun specular, ambient).
+
+Measured like the shadows above (shadow map, PCF 3×3): the scene pass went from 0.14 ms (step 2, Lambert with base color only) to 0.27 ms with PBR, normal mapping and all five maps; the GPU frame from 0.22 ms to 0.35 ms. The Lambert switch doesn't save time: it picks the result of one shader that has already sampled every map.
+
 ### Barriers
 
 The renderer uses **Enhanced Barriers** only: `ID3D12GraphicsCommandList7::Barrier`, plus `CreateCommittedResource3` with an `InitialLayout`. A barrier states three things separately:

@@ -266,6 +266,8 @@ namespace walnut
             frameConstants.sunIlluminance = scaled(m_lighting.sunColor, m_lighting.sunIntensity);
             frameConstants.skyRadiance = scaled(m_lighting.skyColor, m_lighting.ambientIntensity);
             frameConstants.groundRadiance = scaled(m_lighting.groundColor, m_lighting.ambientIntensity);
+            frameConstants.roughnessOverride = m_sceneView.roughnessOverride;
+            frameConstants.metallicOverride = m_sceneView.metallicOverride;
             frameConstants.shadingModel = static_cast<uint32_t>(m_lighting.shadingModel);
             DirectX::XMStoreFloat4x4(&frameConstants.sunViewProjection,
                                      m_lighting.GetSunViewProjection(m_scene.boundsMin, m_scene.boundsMax));
@@ -492,6 +494,24 @@ namespace walnut
                 ImGui::SetItemTooltip("Mesh: tangent frame from the glTF TANGENT attribute (derived where missing).\n"
                                       "Derived: always from screen-space derivatives of position and uv.");
             }
+            // A checkbox to switch the override on (value >= 0) or off (negative), and a slider for its value.
+            const auto overrideSlider = [](const char* label, float& value, float& lastValue) {
+                bool enabled = value >= 0.0f;
+                if (ImGui::Checkbox(label, &enabled))
+                    value = enabled ? lastValue : -1.0f;
+                ImGui::SameLine();
+                ImGui::BeginDisabled(!enabled);
+                ImGui::PushID(label);
+                float shown = enabled ? value : lastValue;
+                if (ImGui::SliderFloat("##value", &shown, 0.0f, 1.0f, "%.2f") && enabled)
+                    value = shown;
+                lastValue = shown;
+                ImGui::PopID();
+                ImGui::EndDisabled();
+            };
+            overrideSlider("Roughness##override", m_sceneView.roughnessOverride, m_roughnessOverrideValue);
+            overrideSlider("Metallic##override", m_sceneView.metallicOverride, m_metallicOverrideValue);
+            ImGui::SetItemTooltip("Replace every material's metallic / roughness, to see what each one does.");
             ImGui::Checkbox("Back-face culling", &m_sceneView.backfaceCulling);
             ImGui::SameLine();
             ImGui::Checkbox("Alpha test", &m_sceneView.alphaTest);
