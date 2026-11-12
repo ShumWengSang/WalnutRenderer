@@ -777,6 +777,9 @@ namespace walnut
                 m_renderer->SetVsync(vsync);
             ImGui::SameLine();
             ImGui::TextDisabled(swapChain.IsTearingSupported() ? "(tearing supported)" : "(tearing unsupported)");
+            ImGui::Text("G-buffer: %u targets, %.1f MB at %ux%u (used by deferred)", static_cast<uint32_t>(GBuffer::kCount),
+                        static_cast<double>(m_renderer->GetGBuffer().GetBytes()) / (1024.0 * 1024.0),
+                        swapChain.GetWidth(), swapChain.GetHeight());
             // Float + HDR: scene colors are linear light and may go above 1.0.
             ImGui::ColorEdit3("Clear color (linear)", m_clearColor, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 

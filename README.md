@@ -10,6 +10,7 @@ It loads a glTF scene (Sponza by default) and renders it with:
   - a **shadow map** (2048², slope-scaled bias + normal offset, alpha-tested casters, PCF soft edges), or
   - **ray tracing** (DXR 1.1 inline `RayQuery` against a BLAS-per-primitive / TLAS acceleration structure, alpha-tested leaves via candidate hits), when the GPU supports raytracing tier 1.1. A difference view compares the two.
 - **HDR**: the scene renders into an FP16 target in linear light; a fullscreen pass applies exposure and a tonemap curve (ACES fitted, Reinhard, clamp) and writes the back buffer through an `_SRGB` view.
+- **Depth pre-pass and deferred shading**: a depth-only pass lets the scene pass shade each pixel once (depth EQUAL). **View → Forward / Deferred** switches between shading in each draw and writing a G-buffer (base color, two octahedral normals, roughness/metallic/occlusion, emissive) that a fullscreen pass lights with the same shader code.
 - **Reversed-Z** depth (D32_FLOAT, infinite far plane), **Enhanced Barriers** only, a fly camera, and PIX markers throughout.
 
 ## Requirements
@@ -89,14 +90,15 @@ The camera starts inside large scenes like Sponza, or framing small ones from ou
 
 ```
 cmake/Dependencies.cmake  FetchContent: DirectX-Headers, Agility SDK, DXC, Dear ImGui, WinPixEventRuntime, cgltf, stb_image (all pinned)
-shaders/                  HLSL sources, compiled at runtime straight from here (a copy next to the exe is the fallback);
-                          common/ holds the shared includes (bindless root signature + samplers, frame constants, BRDF)
+shaders/                  HLSL sources, compiled at runtime straight from here (a copy next to the exe is the fallback):
+                          scene.hlsl (draws), deferred.hlsl (deferred lighting), tonemap.hlsl; common/ holds the shared
+                          includes (bindless, frame constants, scene data, BRDF, lighting, G-buffer layout, debug views)
 src/core/                 Application loop, Win32 Window, Input, Timer, Log
 src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, RootSignature (shared bindless),
                           Buffer, Texture, UploadContext (staging ring), FrameAllocator (per-frame constants),
                           MipChain, ShaderCompiler, Pix
 src/renderer/             Renderer (frames in flight, frame constants, pass setup), ScenePass, ShadowMap,
-                          AccelerationStructures (BLAS/TLAS), TonemapPass
+                          AccelerationStructures (BLAS/TLAS), GBuffer, DeferredPass, TonemapPass
 src/scene/                Camera, fly controller, lighting, glTF loading (cgltf) into a flat Scene, image decoding (stb_image)
 src/ui/                   ImGuiLayer (Win32 + DX12 backends)
 tools/                    fetch-assets.ps1 (download glTF models), pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher)
@@ -146,18 +148,22 @@ Example prompt: *"Survey captures\WalnutRenderer_timing_….wpix with PixMcp: fr
 1. `Input::BeginFrame()` resets the per-frame state. `Window::PumpMessages()` then passes Win32 messages to ImGui and to `Input`.
 2. If the window was resized, the renderer flushes the GPU and calls `ResizeBuffers` on the swapchain.
 3. ImGui starts a new frame. `Input` is told whether ImGui is using the keyboard or mouse, and ignores that device for game input while it is.
-4. `Renderer::BeginFrame()` waits on this frame slot's fence, resets its command allocator and per-frame upload memory, and prepares the HDR scene color target: an Enhanced Barrier from UNDEFINED to RENDER_TARGET (with DISCARD), then clears of the scene color and the depth buffer. It binds the bindless state (descriptor heap, then the shared root signature).
+4. `Renderer::BeginFrame()` waits on this frame slot's fence, resets its command allocator and per-frame upload memory, and prepares the HDR scene color target and the depth buffer: Enhanced Barriers from UNDEFINED to RENDER_TARGET / DEPTH_STENCIL_WRITE (with DISCARD, so it doesn't matter which layout the last frame left them in), then clears of both. It binds the bindless state (descriptor heap, then the shared root signature).
 5. `Renderer::SetFrameConstants()` binds the frame's camera and light data at `b2` (see `src/renderer/FrameConstants.h`); every pass can read it.
 6. The shadow pass renders depth from the sun into a 2048² shadow map (`ShadowMap`: UNDEFINED → DEPTH_STENCIL_WRITE with DISCARD, clear, depth-only draws, then DEPTH_STENCIL_WRITE → DIRECT_QUEUE_SHADER_RESOURCE so pixel shaders can read it). The sun's camera is orthographic, fitted to the scene's bounding sphere.
    - At load (not per frame), when ray tracing is supported, `AccelerationStructures` builds one BLAS per primitive from the scene's vertex/index buffers and a TLAS over the instances.
-7. `Renderer::BeginScenePass()` binds scene color and depth, and `ScenePass` records one draw per instance (opaque first, then alpha-tested; PSOs switch only between those groups). Pixels are shaded with the glTF metallic-roughness BRDF: sun (diffuse + GGX specular) plus a sky/ground ambient (diffuse + reflection, darkened by the occlusion map) plus emission. The sun's visibility comes from the shadow map (slope-scaled bias, normal offset, PCF) or, with **Lighting → Ray traced**, from one `RayQuery` shadow ray per pixel against the TLAS. In ray-traced mode the shadow map pass is cleared but draws nothing.
+7. The scene from the camera. `ScenePass` records one draw per instance (opaque first, then alpha-tested; PSOs switch only between those groups).
+   - **Depth pre-pass** (`Renderer::BeginDepthPrepass()`, depth only): every draw writes its depth with no pixel shader (alpha-tested ones run a small shader that only discards). Shared, `precise` vertex math keeps the depths bit-identical to the next pass's.
+   - **Forward** (`Renderer::BeginScenePass()`): the draws again, depth test EQUAL and no depth writes, so the pixel shader runs once per visible pixel. It samples the material (`SampleMaterial`) and lights it (`ShadeSurface` in `shaders/common/Lighting.hlsli`).
+   - **Deferred** (`Renderer::BeginGBufferPass()`): the same EQUAL draws write the material into four G-buffer render targets instead. `Renderer::BeginDeferredPass()` then makes the G-buffer and depth buffer readable (RENDER_TARGET / DEPTH_STENCIL_WRITE → DIRECT_QUEUE_SHADER_RESOURCE), and `DeferredPass` draws one fullscreen triangle that rebuilds each pixel's world position from depth and calls the same `ShadeSurface`.
+   - Either way, pixels are shaded with the glTF metallic-roughness BRDF: sun (diffuse + GGX specular) plus a sky/ground ambient (diffuse + reflection, darkened by the occlusion map) plus emission. The sun's visibility comes from the shadow map (slope-scaled bias, normal offset, PCF) or, with **Lighting → Ray traced**, from one `RayQuery` shadow ray per pixel against the TLAS. In ray-traced mode the shadow map pass is cleared but draws nothing.
 8. `Renderer::BeginBackBufferPass()` records one barrier call with two transitions: scene color RENDER_TARGET → SHADER_RESOURCE (`SyncBefore = RENDER_TARGET`, `SyncAfter = PIXEL_SHADING`) and back buffer PRESENT → RENDER_TARGET. `TonemapPass` draws a fullscreen triangle that reads scene color and writes the back buffer through its `_SRGB` view.
 9. `Renderer::BeginUiPass()` switches to the back buffer's plain `UNORM` view (ImGui's colors are already sRGB), and ImGui is recorded.
 10. `Renderer::EndFrame()` records an Enhanced Barrier from RENDER_TARGET back to PRESENT (`SyncBefore = RENDER_TARGET`, `SyncAfter = NONE`) and executes the command list. It then presents and signals the frame fence.
 
 ### Sun shadows: shadow map vs ray traced
 
-Switch with **Lighting → Shadow map / Ray traced**; **View → Show → Shadow difference** colors where they disagree (red: only the shadow map shadows; blue: only the ray does). Measured with PIX Timing Captures, Release, 1280×720, vsync off, RTX 3070 Ti, Sponza start view:
+Switch with **Lighting → Shadow map / Ray traced**; **View → Show → Shadow difference** colors where they disagree (red: only the shadow map shadows; blue: only the ray does). Measured in step 2 (Lambert shading, no depth pre-pass) with PIX Timing Captures, Release, 1280×720, vsync off, RTX 3070 Ti, Sponza start view:
 
 | | Shadow pass | Scene pass | GPU frame |
 |---|---|---|---|
@@ -176,7 +182,22 @@ Everything the shader does with a material can be switched or isolated:
 - **View → Roughness / Metallic** overrides replace every material's value, to see what each one does.
 - **View → Show**: the material maps (roughness, metallic, normal map, occlusion, emissive) and the lighting terms (sun specular, ambient).
 
-Measured like the shadows above (shadow map, PCF 3×3): the scene pass went from 0.14 ms (step 2, Lambert with base color only) to 0.27 ms with PBR, normal mapping and all five maps; the GPU frame from 0.22 ms to 0.35 ms. The Lambert switch doesn't save time: it picks the result of one shader that has already sampled every map.
+Measured like the shadows above (shadow map, PCF 3×3, still without the depth pre-pass): the scene pass went from 0.14 ms (step 2, Lambert with base color only) to 0.27 ms with PBR, normal mapping and all five maps; the GPU frame from 0.22 ms to 0.35 ms. The Lambert switch doesn't save time: it picks the result of one shader that has already sampled every map.
+
+### Depth pre-pass, forward vs deferred
+
+**View → Depth pre-pass** (forward only; deferred always uses it) and **View → Forward / Deferred**. The image is the same every way: with and without the pre-pass it's bit-identical, and deferred differs from forward by about 0.2 of 255 on average (the G-buffer's 8/16-bit storage; with ray-traced shadows, a pixel or two where a grazing ray lands the other way). **Renderer** shows the G-buffer's memory: 18.8 MB at 1280×720 (20 bytes per pixel, plus the depth buffer).
+
+GPU frame times, PIX Timing Captures (Release, 1280×720, vsync off, RTX 3070 Ti, p50):
+
+| | Start view, shadow map | Start view, ray traced | Upper gallery, shadow map | Upper gallery, ray traced |
+|---|---|---|---|---|
+| Forward, no pre-pass | 0.352 ms | 0.713 ms | – | – |
+| Forward + pre-pass | 0.265 ms | 0.498 ms | 0.248 ms | 0.332 ms |
+| Deferred | 0.293 ms | 0.449 ms | 0.269 ms | 0.354 ms |
+
+- **The pre-pass** costs about 0.04 ms and halves the scene pass's pixel shader invocations at the start view (PIX counters: 1,829,025 → 916,264 for 921,600 pixels): early-Z rejects hidden fragments before the shader runs. Ray tracing gains most, since every skipped fragment is also a skipped ray.
+- **Deferred** pays for writing and reading the G-buffer (the G-buffer pass costs about 85% of forward shading: sampling the material dominates, and the shadow-map lighting pass is only 0.05 ms). It wins only where lighting is expensive and the forward pass wastes it: at the start view with ray-traced shadows, where the fullscreen pass traces each ray once in fully packed 2×2 quads instead of on small triangles' partly empty ones. With one sun, forward + pre-pass is the better default; deferred pays off with many lights (light volumes or tiles) and screen-space effects that need the G-buffer anyway.
 
 ### Barriers
 
