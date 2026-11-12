@@ -264,7 +264,8 @@ namespace walnut
                 return DirectX::XMFLOAT3{ color.x * intensity, color.y * intensity, color.z * intensity };
             };
             frameConstants.sunIlluminance = scaled(m_lighting.sunColor, m_lighting.sunIntensity);
-            frameConstants.ambientRadiance = scaled(m_lighting.ambientColor, m_lighting.ambientIntensity);
+            frameConstants.skyRadiance = scaled(m_lighting.skyColor, m_lighting.ambientIntensity);
+            frameConstants.groundRadiance = scaled(m_lighting.groundColor, m_lighting.ambientIntensity);
             frameConstants.shadingModel = static_cast<uint32_t>(m_lighting.shadingModel);
             DirectX::XMStoreFloat4x4(&frameConstants.sunViewProjection,
                                      m_lighting.GetSunViewProjection(m_scene.boundsMin, m_scene.boundsMax));
@@ -452,7 +453,7 @@ namespace walnut
                                     "Texture coordinates", "Instance colors", "Material colors", "Alpha mode / back faces",
                                     "Sun shadow", "Shadow difference (ray traced vs map)",
                                     "Roughness", "Metallic", "Normal map (tangent space)", "Occlusion", "Emissive",
-                                    "Sun specular (highlights)" };
+                                    "Sun specular (highlights)", "Ambient (sky + ground, occluded)" };
             const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
             const int current = static_cast<int>(m_sceneView.debugView);
             if (ImGui::BeginCombo("Show", views[current]))
@@ -502,7 +503,9 @@ namespace walnut
             ImGui::SliderAngle("Sun elevation", &m_lighting.sunElevation, -10.0f, 90.0f);
             ImGui::ColorEdit3("Sun color", &m_lighting.sunColor.x, ImGuiColorEditFlags_Float);
             ImGui::SliderFloat("Sun intensity", &m_lighting.sunIntensity, 0.0f, 50.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
-            ImGui::ColorEdit3("Ambient color", &m_lighting.ambientColor.x, ImGuiColorEditFlags_Float);
+            ImGui::ColorEdit3("Sky color", &m_lighting.skyColor.x, ImGuiColorEditFlags_Float);
+            ImGui::ColorEdit3("Ground color", &m_lighting.groundColor.x, ImGuiColorEditFlags_Float);
+            ImGui::SetItemTooltip("Ambient light arriving from below the horizon: sunlight bounced off the ground.");
             ImGui::SliderFloat("Ambient intensity", &m_lighting.ambientIntensity, 0.0f, 5.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
             const DirectX::XMFLOAT3 sun = m_lighting.GetSunDirection();
             ImGui::TextDisabled("Towards the sun: (%.2f, %.2f, %.2f)", sun.x, sun.y, sun.z);

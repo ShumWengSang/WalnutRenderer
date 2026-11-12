@@ -19,8 +19,11 @@ namespace walnut
         uint32_t shadowsEnabled = 1;       // 0: the sun reaches everything (no shadow map lookup)
         DirectX::XMFLOAT3 sunIlluminance;  // linear color * intensity: light arriving on a surface facing the sun
         uint32_t shadingModel = 1;         // ShadingModel (Lighting.h): 0 = Lambert, 1 = PBR
-        DirectX::XMFLOAT3 ambientRadiance; // linear color * intensity: light arriving from every direction equally
+        // Ambient light (J4): a "hemisphere light", standing in for the sky and the light bounced off the ground.
+        DirectX::XMFLOAT3 skyRadiance;     // linear color * intensity: light arriving from above the horizon
         float padding3 = 0.0f;
+        DirectX::XMFLOAT3 groundRadiance;  // linear color * intensity: light arriving from below it
+        float padding4 = 0.0f;
 
         // Shadow bias (H3). Sizes are in shadow-map texels: one texel covers shadowTexelWorldSize meters.
         float shadowTexelWorldSize = 0.0f; // meters covered by one shadow-map texel
@@ -32,5 +35,5 @@ namespace walnut
         uint32_t tlasIndex = UINT32_MAX;   // bindless SRV of the ray tracing TLAS (ray-traced shadow pipelines only)
         uint32_t rayAlphaTest = 1;         // 0: shadow rays treat alpha-tested geometry as solid
     };
-    static_assert(sizeof(FrameConstants) == 224);
+    static_assert(sizeof(FrameConstants) == 240);
 }

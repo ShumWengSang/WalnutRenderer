@@ -40,6 +40,7 @@ static const uint kViewNormalMap    = 12;
 static const uint kViewOcclusion    = 13;
 static const uint kViewEmissive     = 14;
 static const uint kViewSunSpecular  = 15;
+static const uint kViewAmbient      = 16;
 
 static const uint kShadingLambert = 0; // ShadingModel in Lighting.h
 static const uint kShadingPbr     = 1;
@@ -317,6 +318,21 @@ float4 SampleMaterialTexture(uint textureIndex, float2 uv, float4 fallback)
     return texture.Sample(g_samplerAnisotropicWrap, uv);
 }
 
+// The ambient "hemisphere light": the sky's radiance from above the horizon, the ground's from below.
+//
+// Looking along a direction d with a blur of 'width', what arrives is a mix of the two, depending on how far above
+// the horizon d points (d.y = sine of its elevation):
+//   width = 1:     the whole hemisphere around d, cosine-weighted. A surface whose normal is tilted by an angle t
+//                  from straight up sees the sky over a (1 + cos t) / 2 share of it, which is exactly
+//                  lerp(ground, sky, 0.5 + 0.5 * d.y): the diffuse ambient (irradiance / pi).
+//   width -> 0:    a mirror: a sharp horizon, sky or ground.
+//   width = alpha: a GGX lobe is roughly alpha radians wide, so the reflected horizon blurs over about that much.
+float3 HemisphereLight(float3 direction, float width)
+{
+    const float skyShare = saturate(0.5f + 0.5f * direction.y / max(width, 1e-3f));
+    return lerp(g_frame.groundRadiance, g_frame.skyRadiance, skyShare);
+}
+
 // Tangent frame from screen-space derivatives, for meshes without a glTF TANGENT (or to compare with one).
 // Between this pixel and its right/lower neighbour the surface moves by dp1/dp2 and the texture coordinates by
 // duv1/duv2. Solving
@@ -441,8 +457,8 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     //   PBR (J3):     Lambert diffuse for what enters the surface + GGX specular for what bounces off it
     //
     //   sun:     BRDF * sunIlluminance * N.L * shadow
-    //   ambient: baseColor * ambientRadiance    (the same light from every direction, integrated over the
-    //            hemisphere: pi * radiance, times baseColor / pi). J4 gives it diffuse/specular parts too.
+    //   ambient: light from the sky and the ground (J4), see below
+    //   emissive: light the surface makes itself (J4)
     const float NdotL = saturate(dot(normal, g_frame.sunDirection));
     // Shadow lookups use the real surface (geometricNormal), not the normal-mapped one.
     const float geometricNdotL = saturate(dot(geometricNormal, g_frame.sunDirection));
@@ -452,7 +468,8 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     const float shadow = NdotL > 0.0f ? SunShadow(input.worldPosition, geometricNormal, geometricNdotL) : 0.0f; // facing away: dark anyway, skip the lookup
 #endif
     const float3 sunLight = g_frame.sunIlluminance * NdotL * shadow;
-    const float3 lighting = sunLight / kPi + g_frame.ambientRadiance; // what a white matte surface would show
+    // What a white matte surface would show: the sun's share plus the ambient light around the normal.
+    const float3 lighting = sunLight / kPi + HemisphereLight(normal, 1.0f);
 
     // glTF packs both into one texture: roughness in G, metallic in B (R is unused, or occlusion in some files).
     const float4 metallicRoughness = SampleMaterialTexture(material.metallicRoughnessTexture, input.uv, 1.0f);
@@ -463,20 +480,38 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     const SurfaceBrdf surface = MakeSurfaceBrdf(baseColor.rgb, metallic, roughness);
     const BrdfValue brdf = EvaluateBrdf(surface, normal, toCamera, g_frame.sunDirection);
     const float3 sunSpecular = brdf.specular * sunLight;
-    const float3 ambient = baseColor.rgb * g_frame.ambientRadiance;
+
+    // Ambient light, split like the sun's into what enters the surface and what bounces off it:
+    //   diffuse:  the hemisphere around the normal, for the light that isn't reflected
+    //   specular: what a mirror would show along the reflected view ray (sky above the horizon, ground below),
+    //             blurred by roughness, times how much the surface reflects in total (EnvironmentBrdf)
+    // Occlusion (the glTF occlusion map: 1 = open to the sky, 0 = deep in a crack) only darkens this ambient
+    // part; the sun's shadow is already computed exactly.
+    const float NdotV = max(dot(normal, toCamera), 1e-4f);
+    const float3 environmentBrdf = EnvironmentBrdf(surface, NdotV);
+    const float3 reflected = reflect(-toCamera, normal);
+    const float occlusion = lerp(1.0f, SampleMaterialTexture(material.occlusionTexture, input.uv, 1.0f).r,
+                                 material.occlusionStrength);
+    const float3 ambient = (surface.diffuseColor * (1.0f - environmentBrdf) * HemisphereLight(normal, 1.0f)
+                          + environmentBrdf * HemisphereLight(reflected, surface.alpha)) * occlusion;
+
+    // Emitted light (screens, lamps, lava) is added as is: it doesn't depend on any light arriving.
+    const float3 emissive = SampleMaterialTexture(material.emissiveTexture, input.uv, 1.0f).rgb * material.emissiveFactor;
 
     float3 color;
     if (g_draw.debugView == kViewLit)
     {
         if (g_frame.shadingModel == kShadingPbr)
-            color = (brdf.diffuse + brdf.specular) * sunLight + ambient;
+            color = (brdf.diffuse + brdf.specular) * sunLight + ambient + emissive;
         else
-            color = baseColor.rgb * lighting;
+            color = baseColor.rgb * lighting; // Lambert: matte only, no occlusion map, no emission
     }
     else if (g_draw.debugView == kViewLightingOnly)
         color = lighting;
     else if (g_draw.debugView == kViewSunSpecular)
         color = sunSpecular;
+    else if (g_draw.debugView == kViewAmbient)
+        color = ambient;
     else if (g_draw.debugView == kViewSunShadow)
         color = shadow.xxx;
     else if (g_draw.debugView == kViewShadowDifference)
@@ -513,9 +548,9 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         // Raw tangent-space normal map: (0.5, 0.5, 1) = "straight out of the surface", the typical light blue.
         color = SampleMaterialTexture(material.normalTexture, input.uv, float4(0.5f, 0.5f, 1.0f, 1.0f)).rgb;
     else if (g_draw.debugView == kViewOcclusion)
-        color = lerp(1.0f, SampleMaterialTexture(material.occlusionTexture, input.uv, 1.0f).r, material.occlusionStrength).xxx;
+        color = occlusion.xxx;
     else if (g_draw.debugView == kViewEmissive)
-        color = SampleMaterialTexture(material.emissiveTexture, input.uv, 1.0f).rgb * material.emissiveFactor;
+        color = emissive;
     else
     {
         color = material.alphaMode == kAlphaMask  ? float3(1.0f, 0.85f, 0.1f)

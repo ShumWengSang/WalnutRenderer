@@ -12,7 +12,7 @@ namespace walnut
     };
 
     // The scene's light: one sun (a directional light: infinitely far away, so every point receives it from the
-    // same direction) and a constant ambient term standing in for all the light bouncing around.
+    // same direction) and an ambient sky/ground term standing in for all the light bouncing around.
     struct SceneLighting
     {
         // Where the sun is in the sky. Elevation: angle above the horizon. Azimuth: angle around +Y, 0 = towards +Z.
@@ -20,7 +20,9 @@ namespace walnut
         float sunElevation = DirectX::XMConvertToRadians(65.0f);
         DirectX::XMFLOAT3 sunColor = { 1.0f, 0.95f, 0.85f }; // linear, slightly warm
         float sunIntensity = 8.0f;
-        DirectX::XMFLOAT3 ambientColor = { 0.55f, 0.65f, 0.85f }; // linear, sky blue
+        // Ambient: light from the sky above the horizon, and from the ground (sunlight bounced off it) below.
+        DirectX::XMFLOAT3 skyColor = { 0.55f, 0.65f, 0.85f };    // linear, sky blue
+        DirectX::XMFLOAT3 groundColor = { 0.40f, 0.35f, 0.28f }; // linear, warm stone
         float ambientIntensity = 0.25f;
         ShadingModel shadingModel = ShadingModel::Pbr;
 

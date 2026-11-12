@@ -27,6 +27,7 @@ struct SurfaceBrdf
 {
     float3 diffuseColor; // light that enters and comes back out: baseColor for non-metals, black for metals
     float3 f0;           // reflectance at normal incidence: 4% for non-metals, baseColor for metals
+    float  roughness;    // perceptual roughness (what the texture stores), after the minimum
     float  alpha;        // GGX width: roughness squared (makes the roughness slider feel even)
 };
 
@@ -37,8 +38,8 @@ SurfaceBrdf MakeSurfaceBrdf(float3 baseColor, float metallic, float roughness)
     SurfaceBrdf surface;
     surface.diffuseColor = baseColor * (1.0f - metallic);
     surface.f0 = lerp(kDielectricF0.xxx, baseColor, metallic);
-    roughness = clamp(roughness, kMinRoughness, 1.0f);
-    surface.alpha = roughness * roughness;
+    surface.roughness = clamp(roughness, kMinRoughness, 1.0f);
+    surface.alpha = surface.roughness * surface.roughness;
     return surface;
 }
 
@@ -90,6 +91,21 @@ BrdfValue EvaluateBrdf(SurfaceBrdf surface, float3 N, float3 V, float3 L)
     // What the surface reflected (F) can't also enter it.
     brdf.diffuse = (1.0f - F) * surface.diffuseColor / kPi;
     return brdf;
+}
+
+// Light from a whole environment instead of one direction ("split sum"): the reflected light is roughly
+//   (environment seen along the reflection, blurred by roughness) * (how much the specular lobe reflects in total)
+// The second factor depends only on f0, roughness and N.V: integrated offline it is a small 2D table (F0 * A + B).
+// This is an analytic fit of that table (Karis, "Physically Based Shading on Mobile", 2014). It rises towards 1 at
+// grazing angles (Fresnel) and drops for rough surfaces seen edge-on (microfacets hiding each other).
+float3 EnvironmentBrdf(SurfaceBrdf surface, float NdotV)
+{
+    const float4 c0 = float4(-1.0f, -0.0275f, -0.572f, 0.022f);
+    const float4 c1 = float4(1.0f, 0.0425f, 1.04f, -0.04f);
+    const float4 r = surface.roughness * c0 + c1;
+    const float a004 = min(r.x * r.x, exp2(-9.28f * NdotV)) * r.x + r.y;
+    const float2 AB = float2(-1.04f, 1.04f) * a004 + r.zw;
+    return surface.f0 * AB.x + AB.y;
 }
 
 #endif

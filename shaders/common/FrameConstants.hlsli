@@ -12,8 +12,10 @@ struct FrameConstants
     uint   shadowsEnabled;
     float3 sunIlluminance;  // linear
     uint   shadingModel;    // 0 = Lambert, 1 = PBR (ShadingModel in Lighting.h)
-    float3 ambientRadiance; // linear
+    float3 skyRadiance;     // linear: ambient light from above the horizon
     float  padding3;
+    float3 groundRadiance;  // linear: ambient light from below it
+    float  padding4;
 
     float  shadowTexelWorldSize; // meters per shadow-map texel
     float  shadowDepthPerMeter;  // depth change per meter towards the sun (linear: orthographic)

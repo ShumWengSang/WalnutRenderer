@@ -39,6 +39,7 @@ namespace walnut
         Occlusion = 13,   // ambient occlusion map, scaled by its strength
         Emissive = 14,    // emitted light: emissive map * factor
         SunSpecular = 15, // only the sun's GGX specular reflection (the highlights)
+        Ambient = 16,     // only the ambient light: sky/ground diffuse + reflection, times occlusion
     };
 
     // Where the tangent frame for normal mapping comes from. Values must match scene.hlsl.
