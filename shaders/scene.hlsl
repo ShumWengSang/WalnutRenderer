@@ -26,6 +26,7 @@ static const uint kViewTexcoords    = 4;
 static const uint kViewInstances    = 5;
 static const uint kViewMaterials    = 6;
 static const uint kViewAlphaMode    = 7;
+static const uint kViewSunShadow    = 8;
 
 static const float kPi = 3.14159265f;
 
@@ -105,6 +106,23 @@ float4 VSShadow(uint vertexId : SV_VertexID) : SV_Position
     return mul(worldPosition, g_frame.sunViewProjection);
 }
 
+// Is this world-space point lit by the sun? 1 = yes, 0 = something closer to the sun covers it.
+//
+// 1. Transform the point the same way the shadow pass transformed the geometry: into the sun's clip space.
+//    The projection is orthographic, so w is 1 and there's no divide: x, y in -1..1 across the map, z = depth.
+// 2. Clip space y points up, texture v points down: uv = (x * 0.5 + 0.5, -y * 0.5 + 0.5).
+// 3. SampleCmpLevelZero reads the depth the sun saw at uv and compares our depth with it (comparison sampler s5:
+//    lit if ours >= stored, reversed-Z). "LevelZero": mip 0, the only one; derivatives aren't needed.
+float SunShadow(float3 worldPosition)
+{
+    if (g_frame.shadowsEnabled == 0)
+        return 1.0f;
+    const float4 lightClip = mul(float4(worldPosition, 1.0f), g_frame.sunViewProjection);
+    const float2 uv = float2(lightClip.x * 0.5f + 0.5f, lightClip.y * -0.5f + 0.5f);
+    Texture2D<float> shadowMap = ResourceDescriptorHeap[g_frame.shadowMapIndex];
+    return shadowMap.SampleCmpLevelZero(g_samplerShadow, uv, lightClip.z);
+}
+
 // Cheap integer hash -> a stable, distinct color per index.
 float3 HashColor(uint index)
 {
@@ -169,19 +187,22 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     // direction (1 facing the sun, 0 edge-on, negative = facing away, so clamped to 0). Its BRDF is albedo / pi
     // (the pi spreads the light over the hemisphere, so a white surface never reflects more than it receives).
     //
-    //   sun:     albedo / pi * sunIlluminance * N.L
+    // The sun's light only arrives if nothing blocks it: 'shadow' is 1 (lit) or 0 (in shadow).
+    //
+    //   sun:     albedo / pi * sunIlluminance * N.L * shadow
     //   ambient: albedo * ambientRadiance    (the same light from every direction, integrated over the hemisphere:
     //                                         pi * radiance, times albedo / pi)
-    //
-    // No shadows yet: a surface facing the sun is lit even if a roof is in the way.
     const float NdotL = saturate(dot(normal, g_frame.sunDirection));
-    const float3 lighting = g_frame.sunIlluminance * NdotL / kPi + g_frame.ambientRadiance;
+    const float shadow = NdotL > 0.0f ? SunShadow(input.worldPosition) : 0.0f; // facing away: dark anyway, skip the lookup
+    const float3 lighting = g_frame.sunIlluminance * NdotL * shadow / kPi + g_frame.ambientRadiance;
 
     float3 color;
     if (g_draw.debugView == kViewLit)
         color = baseColor.rgb * lighting;
     else if (g_draw.debugView == kViewLightingOnly)
         color = lighting;
+    else if (g_draw.debugView == kViewSunShadow)
+        color = shadow.xxx;
     else if (g_draw.debugView == kViewNormals)
         color = normal * 0.5f + 0.5f;
     else if (g_draw.debugView == kViewTexcoords)

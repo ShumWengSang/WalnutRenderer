@@ -31,6 +31,7 @@ namespace walnut
         Instances = 5,    // a random color per instance (= per draw)
         Materials = 6,    // a random color per material
         AlphaMode = 7,    // opaque gray, mask yellow, blend red; back faces of double-sided materials darker
+        SunShadow = 8,    // the shadow map test: white = the sun reaches this point, black = blocked
     };
 
     struct SceneViewSettings

@@ -24,6 +24,19 @@ namespace walnut
             sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
             return sampler;
         }
+
+        // A comparison sampler: instead of returning the stored depth, SampleCmp compares the depth you pass in
+        // against it and returns 1 (test passed) or 0. With reversed-Z (larger = closer to the sun), a point is lit
+        // when its own depth is GREATER_EQUAL the closest depth the sun saw in that direction.
+        // POINT for now: one texel, a hard yes/no. Outside the map, the border color 0 = "nothing there" = lit.
+        D3D12_STATIC_SAMPLER_DESC MakeShadowSampler(UINT shaderRegister)
+        {
+            D3D12_STATIC_SAMPLER_DESC sampler = MakeStaticSampler(shaderRegister, D3D12_FILTER_COMPARISON_MIN_MAG_MIP_POINT,
+                                                                  D3D12_TEXTURE_ADDRESS_MODE_BORDER);
+            sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+            sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK;
+            return sampler;
+        }
     }
 
     ComPtr<ID3D12RootSignature> CreateBindlessRootSignature(ID3D12Device* device)
@@ -49,6 +62,7 @@ namespace walnut
             MakeStaticSampler(2, D3D12_FILTER_MIN_MAG_MIP_POINT, D3D12_TEXTURE_ADDRESS_MODE_CLAMP),     // s2
             MakeStaticSampler(3, D3D12_FILTER_MIN_MAG_MIP_LINEAR, D3D12_TEXTURE_ADDRESS_MODE_WRAP),     // s3 trilinear
             MakeStaticSampler(4, D3D12_FILTER_MIN_MAG_MIP_POINT, D3D12_TEXTURE_ADDRESS_MODE_WRAP),      // s4
+            MakeShadowSampler(5),                                                                       // s5
         };
 
         // CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED is what makes ResourceDescriptorHeap[] legal in shaders. There is no

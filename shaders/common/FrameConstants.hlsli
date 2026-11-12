@@ -7,9 +7,9 @@ struct FrameConstants
     row_major float4x4 viewProjection;
     row_major float4x4 sunViewProjection; // world -> the sun's shadow map space
     float3 cameraPosition;  // world space
-    float  padding0;
+    uint   shadowMapIndex;  // bindless SRV of the sun's shadow map (Texture2D<float>)
     float3 sunDirection;    // world space, unit length, pointing towards the sun
-    float  padding1;
+    uint   shadowsEnabled;
     float3 sunIlluminance;  // linear
     float  padding2;
     float3 ambientRadiance; // linear

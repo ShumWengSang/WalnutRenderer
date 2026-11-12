@@ -256,6 +256,8 @@ namespace walnut
             frameConstants.ambientRadiance = scaled(m_lighting.ambientColor, m_lighting.ambientIntensity);
             DirectX::XMStoreFloat4x4(&frameConstants.sunViewProjection,
                                      m_lighting.GetSunViewProjection(m_scene.boundsMin, m_scene.boundsMax));
+            frameConstants.shadowMapIndex = m_shadowMap->GetSrvIndex();
+            frameConstants.shadowsEnabled = m_shadowsEnabled ? 1u : 0u;
 
             {
                 PIXScopedEvent(pix::kColorCpu, L"Render");
@@ -421,7 +423,8 @@ namespace walnut
         if (m_scenePass && ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen))
         {
             const char* views[] = { "Lit (sun + ambient)", "Lighting only", "Base color (unlit)", "Normals (world)",
-                                    "Texture coordinates", "Instance colors", "Material colors", "Alpha mode / back faces" };
+                                    "Texture coordinates", "Instance colors", "Material colors", "Alpha mode / back faces",
+                                    "Sun shadow (shadow map test)" };
             int view = static_cast<int>(m_sceneView.debugView);
             if (ImGui::Combo("Show", &view, views, IM_ARRAYSIZE(views)))
                 m_sceneView.debugView = static_cast<SceneDebugView>(view);
@@ -440,10 +443,11 @@ namespace walnut
             ImGui::SliderFloat("Ambient intensity", &m_lighting.ambientIntensity, 0.0f, 5.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
             const DirectX::XMFLOAT3 sun = m_lighting.GetSunDirection();
             ImGui::TextDisabled("Towards the sun: (%.2f, %.2f, %.2f)", sun.x, sun.y, sun.z);
+            ImGui::Checkbox("Sun shadows", &m_shadowsEnabled);
 
             if (ImGui::TreeNode("Shadow map"))
             {
-                // The depth the sun sees: brighter = closer to the sun (reversed-Z). Not used for lighting yet.
+                // The depth the sun sees: brighter = closer to the sun (reversed-Z).
                 const float extent = GetSunShadowExtent(m_scene.boundsMin, m_scene.boundsMax);
                 const uint32_t size = m_shadowMap->GetSize();
                 ImGui::Text("%u x %u, D32. Covers %.1f m: %.1f cm per texel", size, size, extent,

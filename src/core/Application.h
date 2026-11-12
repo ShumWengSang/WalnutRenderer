@@ -84,6 +84,7 @@ namespace walnut
         TonemapSettings m_tonemapSettings;
         SceneViewSettings m_sceneView;
         SceneLighting m_lighting;
+        bool m_shadowsEnabled = true;
         Camera m_camera;
         Camera m_homeCamera; // where "Reset camera" goes: framing the loaded scene
         FlyCameraController m_cameraController;
