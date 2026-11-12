@@ -22,7 +22,7 @@ struct FrameConstants
     float  shadowNormalOffset;   // texels, along the surface normal
     uint   shadowFilterRadius;   // PCF kernel radius in texels; 0xFFFFFFFF = hard (point comparison)
     uint   tlasIndex;            // bindless SRV of the TLAS (RaytracingAccelerationStructure)
-    float  padding4;
+    uint   rayAlphaTest;         // 0: shadow rays treat alpha-tested geometry as solid
 };
 ConstantBuffer<FrameConstants> g_frame : register(b2);
 

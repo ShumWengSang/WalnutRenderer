@@ -26,7 +26,8 @@ namespace walnut
             // the inverse-transpose of it. Computed once here instead of per vertex.
             DirectX::XMFLOAT4X4 normalMatrix;
             uint32_t materialIndex;
-            uint32_t padding[3]; // keeps the stride a multiple of 16 bytes, which GPUs read most efficiently
+            uint32_t firstIndex; // where its triangles start in the index buffer (ray hits look up their UVs from it)
+            uint32_t padding[2]; // keeps the stride a multiple of 16 bytes, which GPUs read most efficiently
         };
         static_assert(sizeof(InstanceGpuData) == 144);
 
@@ -53,6 +54,7 @@ namespace walnut
             uint32_t materialBufferIndex;
             uint32_t debugView;
             uint32_t instanceIndex; // the only value that changes between draws
+            uint32_t indexBufferIndex; // the index buffer as StructuredBuffer<uint>, for ray hits
         };
         static_assert(sizeof(SceneDrawConstants) <= kNumDrawConstants * sizeof(uint32_t));
         constexpr uint32_t kInstanceIndexConstant = offsetof(SceneDrawConstants, instanceIndex) / sizeof(uint32_t);
@@ -80,6 +82,7 @@ namespace walnut
             const ScenePrimitive& primitive = scene.primitives[instance.primitiveIndex];
             const SceneMaterial& material = scene.materials[primitive.materialIndex];
             gpu.materialIndex = primitive.materialIndex;
+            gpu.firstIndex = primitive.firstIndex;
             m_draws.push_back({ primitive.indexCount, primitive.firstIndex, static_cast<uint32_t>(m_draws.size()),
                                 material.doubleSided, material.alphaMode == AlphaMode::Mask });
         }
@@ -121,6 +124,17 @@ namespace walnut
         const uint64_t indexBytes = scene.indices.size() * sizeof(uint32_t);
         m_indexBuffer = Buffer(m_device, BufferDesc{ .size = indexBytes, .heapType = D3D12_HEAP_TYPE_DEFAULT, .name = L"SceneIndices" });
         upload.UploadBuffer(m_indexBuffer, scene.indices.data(), indexBytes);
+
+        // The same index buffer is also readable by shaders: a ray that hits a triangle gets only its number, and
+        // must fetch the triangle's 3 vertex indices itself to look up their UVs (alpha-tested shadow rays).
+        D3D12_SHADER_RESOURCE_VIEW_DESC indexSrvDesc{};
+        indexSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
+        indexSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        indexSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        indexSrvDesc.Buffer.NumElements = static_cast<UINT>(scene.indices.size());
+        indexSrvDesc.Buffer.StructureByteStride = sizeof(uint32_t);
+        m_indexSrv = m_srvHeap.Allocate();
+        m_device->CreateShaderResourceView(m_indexBuffer.Get(), &indexSrvDesc, m_indexSrv.cpu);
 
         if (!ReloadShaders())
             throw std::runtime_error("Failed to build scene pipeline:\n" + m_lastError);
@@ -174,6 +188,7 @@ namespace walnut
         m_srvHeap.Free(m_vertexSrv);
         m_srvHeap.Free(m_instanceSrv);
         m_srvHeap.Free(m_materialSrv);
+        m_srvHeap.Free(m_indexSrv);
         for (const DescriptorHandle& srv : m_textureSrvs)
             m_srvHeap.Free(srv);
     }
@@ -327,6 +342,7 @@ namespace walnut
             .materialBufferIndex = m_materialSrv.index,
             .debugView = static_cast<uint32_t>(settings.debugView),
             .instanceIndex = 0,
+            .indexBufferIndex = m_indexSrv.index,
         };
         commandList->SetGraphicsRoot32BitConstants(RootParam::DrawConstants, sizeof(drawConstants) / sizeof(uint32_t),
                                                    &drawConstants, 0);

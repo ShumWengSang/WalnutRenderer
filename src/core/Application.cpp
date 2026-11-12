@@ -278,6 +278,7 @@ namespace walnut
             frameConstants.shadowFilterRadius = m_lighting.shadowFilterRadius < 0 ? UINT32_MAX
                                                                                   : static_cast<uint32_t>(m_lighting.shadowFilterRadius);
             frameConstants.tlasIndex = m_accelerationStructures ? m_accelerationStructures->GetTlasSrvIndex() : UINT32_MAX;
+            frameConstants.rayAlphaTest = m_sceneView.alphaTest ? 1u : 0u;
 
             {
                 PIXScopedEvent(pix::kColorCpu, L"Render");

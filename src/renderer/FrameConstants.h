@@ -30,7 +30,7 @@ namespace walnut
         float shadowNormalOffset = 0.0f;   // texels: look up the shadow map this far out along the surface normal
         uint32_t shadowFilterRadius = 0;   // PCF kernel: (2r+1)^2 filtered taps; 0 = one tap; UINT32_MAX = hard (point)
         uint32_t tlasIndex = UINT32_MAX;   // bindless SRV of the ray tracing TLAS (ray-traced shadow pipelines only)
-        float padding4 = 0.0f;
+        uint32_t rayAlphaTest = 1;         // 0: shadow rays treat alpha-tested geometry as solid
     };
     static_assert(sizeof(FrameConstants) == 224);
 }

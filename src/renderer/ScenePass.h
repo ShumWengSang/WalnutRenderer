@@ -108,6 +108,7 @@ namespace walnut
         DescriptorHandle m_vertexSrv;    // their slots in the bindless heap
         DescriptorHandle m_instanceSrv;
         DescriptorHandle m_materialSrv;
+        DescriptorHandle m_indexSrv;
         std::vector<Texture> m_textures;
         std::vector<DescriptorHandle> m_textureSrvs;
         uint64_t m_textureBytes = 0;
