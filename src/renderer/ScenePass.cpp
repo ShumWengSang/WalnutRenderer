@@ -62,6 +62,7 @@ namespace walnut
             uint32_t debugView;
             uint32_t instanceIndex; // the only value that changes between draws
             uint32_t indexBufferIndex; // the index buffer as StructuredBuffer<uint>, for ray hits
+            uint32_t normalMapping;    // NormalMapping
         };
         static_assert(sizeof(SceneDrawConstants) <= kNumDrawConstants * sizeof(uint32_t));
         constexpr uint32_t kInstanceIndexConstant = offsetof(SceneDrawConstants, instanceIndex) / sizeof(uint32_t);
@@ -174,7 +175,7 @@ namespace walnut
                 .width = source.mips[0].width,
                 .height = source.mips[0].height,
                 .mipLevels = static_cast<uint16_t>(source.mips.size()),
-                .format = source.srgb ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM,
+                .format = source.IsSrgb() ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM,
                 .initialLayout = D3D12_BARRIER_LAYOUT_COPY_DEST,
                 .name = ToWide(source.name),
             });
@@ -357,6 +358,7 @@ namespace walnut
             .debugView = static_cast<uint32_t>(settings.debugView),
             .instanceIndex = 0,
             .indexBufferIndex = m_indexSrv.index,
+            .normalMapping = static_cast<uint32_t>(settings.normalMapping),
         };
         commandList->SetGraphicsRoot32BitConstants(RootParam::DrawConstants, sizeof(drawConstants) / sizeof(uint32_t),
                                                    &drawConstants, 0);

@@ -40,9 +40,18 @@ namespace walnut
         Emissive = 14,    // emitted light: emissive map * factor
     };
 
+    // Where the tangent frame for normal mapping comes from. Values must match scene.hlsl.
+    enum class NormalMapping : uint32_t
+    {
+        Off = 0,     // ignore normal maps: the interpolated vertex normal only
+        Mesh = 1,    // TBN from the glTF TANGENT attribute (derived per pixel for meshes without one)
+        Derived = 2, // TBN always derived per pixel from position/uv screen-space derivatives
+    };
+
     struct SceneViewSettings
     {
         SceneDebugView debugView = SceneDebugView::Lit;
+        NormalMapping normalMapping = NormalMapping::Mesh;
         bool backfaceCulling = true; // for single-sided materials; double-sided ones are never culled
         bool alphaTest = true;       // cut out alpha-mask materials; off draws them as opaque, to compare
         bool raytracedShadows = false; // sun shadows from ray queries instead of the shadow map (if supported)

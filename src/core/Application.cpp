@@ -479,6 +479,14 @@ namespace walnut
                 ImGui::SameLine(0.0f, 4.0f);
                 ImGui::TextDisabled("= only the ray shadows");
             }
+            {
+                const char* modes[] = { "Off", "Mesh tangents", "Derived tangents" };
+                int mode = static_cast<int>(m_sceneView.normalMapping);
+                if (ImGui::Combo("Normal mapping", &mode, modes, IM_ARRAYSIZE(modes)))
+                    m_sceneView.normalMapping = static_cast<NormalMapping>(mode);
+                ImGui::SetItemTooltip("Mesh: tangent frame from the glTF TANGENT attribute (derived where missing).\n"
+                                      "Derived: always from screen-space derivatives of position and uv.");
+            }
             ImGui::Checkbox("Back-face culling", &m_sceneView.backfaceCulling);
             ImGui::SameLine();
             ImGui::Checkbox("Alpha test", &m_sceneView.alphaTest);

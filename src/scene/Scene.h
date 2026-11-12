@@ -22,14 +22,17 @@ namespace walnut
 
     inline constexpr uint32_t kNoTexture = UINT32_MAX;
 
-    // A decoded image with its full mip chain, ready to upload. 'srgb' says how its bytes are encoded: color
-    // images (base color, emissive) are sRGB; data images (normals, metallic-roughness) are linear.
+    // A decoded image with its full mip chain, ready to upload. 'content' says what its bytes mean: color images
+    // (base color, emissive) are sRGB; data images (metallic-roughness, occlusion) linear; normal maps are linear
+    // vectors whose mips are renormalized.
     struct SceneTexture
     {
         std::string name;
-        bool srgb = true;
+        MipContent content = MipContent::Srgb;
         std::vector<ImageRgba8> mips; // [0] = full size; empty if the image failed to load (see 'error')
         std::string error;
+
+        bool IsSrgb() const { return content == MipContent::Srgb; }
     };
 
     // How a material's alpha is used (glTF alphaMode). Values must match scene.hlsl.

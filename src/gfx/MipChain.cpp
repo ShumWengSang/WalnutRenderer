@@ -38,8 +38,9 @@ namespace walnut
             return static_cast<uint8_t>(std::clamp(value * 255.0f + 0.5f, 0.0f, 255.0f));
         }
 
-        ImageRgba8 Downsample(const ImageRgba8& source, bool srgb)
+        ImageRgba8 Downsample(const ImageRgba8& source, MipContent content)
         {
+            const bool srgb = content == MipContent::Srgb;
             ImageRgba8 result;
             result.width = std::max(1u, source.width / 2);
             result.height = std::max(1u, source.height / 2);
@@ -58,11 +59,26 @@ namespace walnut
             {
                 for (uint32_t x = 0; x < result.width; ++x)
                 {
+                    float average[4];
+                    for (int channel = 0; channel < 4; ++channel)
+                        average[channel] = 0.25f * (texel(2 * x, 2 * y, channel) + texel(2 * x + 1, 2 * y, channel) +
+                                                    texel(2 * x, 2 * y + 1, channel) + texel(2 * x + 1, 2 * y + 1, channel));
+                    if (content == MipContent::NormalMap)
+                    {
+                        // 0..1 -> -1..1, back to length 1, -> 0..1. (A zero-length average keeps "straight out".)
+                        float n[3] = { average[0] * 2.0f - 1.0f, average[1] * 2.0f - 1.0f, average[2] * 2.0f - 1.0f };
+                        const float length = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+                        if (length > 1e-6f)
+                            for (float& c : n)
+                                c /= length;
+                        else
+                            n[0] = n[1] = 0.0f, n[2] = 1.0f;
+                        for (int c = 0; c < 3; ++c)
+                            average[c] = n[c] * 0.5f + 0.5f;
+                    }
                     for (int channel = 0; channel < 4; ++channel)
                     {
-                        const float average = 0.25f * (texel(2 * x, 2 * y, channel) + texel(2 * x + 1, 2 * y, channel) +
-                                                       texel(2 * x, 2 * y + 1, channel) + texel(2 * x + 1, 2 * y + 1, channel));
-                        const float encoded = (srgb && channel < 3) ? LinearToSrgb(average) : average;
+                        const float encoded = (srgb && channel < 3) ? LinearToSrgb(average[channel]) : average[channel];
                         result.pixels[(static_cast<size_t>(y) * result.width + x) * 4 + channel] = ToByte(encoded);
                     }
                 }
@@ -76,14 +92,14 @@ namespace walnut
         return static_cast<uint16_t>(std::bit_width(std::max(width, height))); // floor(log2(n)) + 1
     }
 
-    std::vector<ImageRgba8> GenerateMipChain(ImageRgba8 mip0, bool srgb)
+    std::vector<ImageRgba8> GenerateMipChain(ImageRgba8 mip0, MipContent content)
     {
         const uint16_t mipCount = CalcMipCount(mip0.width, mip0.height);
         std::vector<ImageRgba8> chain;
         chain.reserve(mipCount);
         chain.push_back(std::move(mip0));
         while (chain.size() < mipCount)
-            chain.push_back(Downsample(chain.back(), srgb));
+            chain.push_back(Downsample(chain.back(), content));
         return chain;
     }
 }

@@ -173,19 +173,19 @@ namespace walnut
         using namespace DirectX;
         Scene scene;
 
-        // Each (image, color space) pair becomes one SceneTexture, created the first time a material uses it.
-        std::map<std::pair<const cgltf_image*, bool>, uint32_t> textureOfImage;
+        // Each (image, content) pair becomes one SceneTexture, created the first time a material uses it.
+        std::map<std::pair<const cgltf_image*, MipContent>, uint32_t> textureOfImage;
         std::vector<const cgltf_image*> textureImages; // parallel to scene.textures
-        auto useTexture = [&](const cgltf_texture_view& view, bool srgb) -> uint32_t {
+        auto useTexture = [&](const cgltf_texture_view& view, MipContent content) -> uint32_t {
             if (!view.texture || !view.texture->image)
                 return kNoTexture;
             if (view.texcoord != 0)
                 log::Warn("A texture uses TEXCOORD_{}; only TEXCOORD_0 is loaded", view.texcoord);
-            const auto [it, inserted] = textureOfImage.try_emplace({ view.texture->image, srgb }, static_cast<uint32_t>(scene.textures.size()));
+            const auto [it, inserted] = textureOfImage.try_emplace({ view.texture->image, content }, static_cast<uint32_t>(scene.textures.size()));
             if (inserted)
             {
                 const cgltf_image& image = *view.texture->image;
-                scene.textures.push_back({ .name = image.name ? image.name : (image.uri ? image.uri : "embedded"), .srgb = srgb });
+                scene.textures.push_back({ .name = image.name ? image.name : (image.uri ? image.uri : "embedded"), .content = content });
                 textureImages.push_back(&image);
             }
             return it->second;
@@ -200,18 +200,18 @@ namespace walnut
             {
                 const cgltf_pbr_metallic_roughness& pbr = source.pbr_metallic_roughness;
                 material.baseColorFactor = { pbr.base_color_factor[0], pbr.base_color_factor[1], pbr.base_color_factor[2], pbr.base_color_factor[3] };
-                material.baseColorTexture = useTexture(pbr.base_color_texture, true /*srgb: it's a color*/);
-                material.metallicRoughnessTexture = useTexture(pbr.metallic_roughness_texture, false /*data, not color*/);
+                material.baseColorTexture = useTexture(pbr.base_color_texture, MipContent::Srgb /*it's a color*/);
+                material.metallicRoughnessTexture = useTexture(pbr.metallic_roughness_texture, MipContent::Linear /*data*/);
                 material.metallicFactor = pbr.metallic_factor;
                 material.roughnessFactor = pbr.roughness_factor;
             }
             // Normals, occlusion and metallic-roughness are measurements stored in the image, so they're read as
             // linear numbers. Only base color and emissive are colors and use sRGB.
-            material.normalTexture = useTexture(source.normal_texture, false);
+            material.normalTexture = useTexture(source.normal_texture, MipContent::NormalMap);
             material.normalScale = source.normal_texture.texture ? source.normal_texture.scale : 1.0f;
-            material.occlusionTexture = useTexture(source.occlusion_texture, false);
+            material.occlusionTexture = useTexture(source.occlusion_texture, MipContent::Linear);
             material.occlusionStrength = source.occlusion_texture.texture ? source.occlusion_texture.scale : 1.0f;
-            material.emissiveTexture = useTexture(source.emissive_texture, true);
+            material.emissiveTexture = useTexture(source.emissive_texture, MipContent::Srgb);
             material.emissiveFactor = { source.emissive_factor[0], source.emissive_factor[1], source.emissive_factor[2] };
             if (source.has_emissive_strength) // KHR_materials_emissive_strength: lets emissive go above 1.0
             {
@@ -260,7 +260,7 @@ namespace walnut
             }
 
             if (std::optional<ImageRgba8> image = DecodeImage(encoded, texture.error))
-                texture.mips = GenerateMipChain(std::move(*image), texture.srgb);
+                texture.mips = GenerateMipChain(std::move(*image), texture.content);
         });
         const double decodeMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - decodeStart).count();
 

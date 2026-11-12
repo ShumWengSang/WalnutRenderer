@@ -19,6 +19,7 @@ struct DrawConstants
     uint debugView;           // SceneDebugView in ScenePass.h
     uint instanceIndex;       // which instance this draw is
     uint indexBufferIndex;    // descriptor heap slot of the index buffer as StructuredBuffer<uint> (ray hits)
+    uint normalMapping;       // NormalMapping in ScenePass.h
 };
 ConstantBuffer<DrawConstants> g_draw : register(b0);
 
@@ -39,6 +40,10 @@ static const uint kViewOcclusion    = 13;
 static const uint kViewEmissive     = 14;
 
 static const float kPi = 3.14159265f;
+
+static const uint kNormalMappingOff     = 0; // NormalMapping in ScenePass.h
+static const uint kNormalMappingMesh    = 1;
+static const uint kNormalMappingDerived = 2;
 
 static const uint kNoTexture = 0xFFFFFFFF;
 
@@ -92,6 +97,7 @@ struct PSInput
     float4 position      : SV_Position;
     float3 worldPosition : POSITION;
     float3 normal        : NORMAL;
+    float4 tangent       : TANGENT;   // xyz: world-space direction of increasing u; w: bitangent sign (+1/-1)
     float2 uv            : TEXCOORD0;
 };
 
@@ -110,6 +116,9 @@ PSInput VSMain(uint vertexId : SV_VertexID)
     output.position = mul(worldPosition, g_frame.viewProjection);
     output.worldPosition = worldPosition.xyz;
     output.normal = mul(float4(vertex.normal, 0.0f), instance.normalMatrix).xyz; // w = 0: directions don't move
+    // A tangent lies IN the surface (unlike the normal, which sticks out of it), so it moves with the surface:
+    // the world matrix itself, not the normal matrix.
+    output.tangent = float4(mul(float4(vertex.tangent.xyz, 0.0f), instance.world).xyz, vertex.tangent.w);
     output.uv = vertex.uv;
     return output;
 }
@@ -305,6 +314,30 @@ float4 SampleMaterialTexture(uint textureIndex, float2 uv, float4 fallback)
     return texture.Sample(g_samplerAnisotropicWrap, uv);
 }
 
+// Tangent frame from screen-space derivatives, for meshes without a glTF TANGENT (or to compare with one).
+// Between this pixel and its right/lower neighbour the surface moves by dp1/dp2 and the texture coordinates by
+// duv1/duv2. Solving
+//   dp1 = T * duv1.x + V * duv1.y
+//   dp2 = T * duv2.x + V * duv2.y
+// gives T = dP/du (the tangent) and V = dP/dv. glTF normal maps have green = "up in the image", and v grows
+// downwards, so the bitangent points along -V: w is whichever sign makes cross(N, T) * w do that. (In the engine's
+// mirrored space that's -1 for an ordinary mesh, matching the loader's flipped TANGENT.w.)
+float4 DerivedTangent(float3 worldPosition, float2 uv, float3 normal)
+{
+    const float3 dp1 = ddx(worldPosition);
+    const float3 dp2 = ddy(worldPosition);
+    const float2 duv1 = ddx(uv);
+    const float2 duv2 = ddy(uv);
+    const float det = duv1.x * duv2.y - duv1.y * duv2.x;
+    if (det == 0.0f)
+        return 0.0f; // no texture stretch to measure (constant uv): no frame
+    const float3 T = (dp1 * duv2.y - dp2 * duv1.y) / det;
+    const float3 V = (dp2 * duv1.x - dp1 * duv2.x) / det;
+    const float3 t = T - normal * dot(normal, T);
+    const float w = dot(cross(normal, t), -V) >= 0.0f ? 1.0f : -1.0f;
+    return float4(t, w);
+}
+
 // Cheap integer hash -> a stable, distinct color per index.
 float3 HashColor(uint index)
 {
@@ -333,14 +366,46 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     float3 flatNormal = normalize(cross(ddy(input.worldPosition), ddx(input.worldPosition)));
     if (dot(flatNormal, g_frame.cameraPosition - input.worldPosition) < 0.0f)
         flatNormal = -flatNormal; // we see this side, so it faces us
-    if (dot(normal, normal) > 1e-12f)
+    const bool hasVertexNormal = dot(normal, normal) > 1e-12f;
+    normal = hasVertexNormal ? normalize(normal) : flatNormal; // interpolation shortens normals, so normalize again
+
+    // The surface itself, before any normal map: used for shadow lookups (bias and ray offsets need the real
+    // surface; a bumped normal can tilt into it and bring back acne / self-intersection).
+    float3 geometricNormal = normal;
+    if (hasVertexNormal && !isFrontFace)
+        geometricNormal = -geometricNormal;
+
+    // Normal mapping: the normal map stores small tilts of the surface, relative to the surface itself ("tangent
+    // space": x along the texture's u, y along v, z straight out). To use one, build that frame at this pixel and
+    // turn the stored direction into a world-space one:
+    //   T (tangent)   = the direction u increases in, from the mesh (glTF TANGENT) ...
+    //   B (bitangent) = cross(N, T) * w  (w picks which way: textures can be mirrored)
+    //   N (normal)    = the surface normal
+    //   world normal  = T * n.x + B * n.y + N * n.z
+    // ... or, for meshes without tangents, worked out from how position and uv change between neighbouring pixels
+    // (screen-space derivatives), which is what DerivedTangent does. Computed outside the 'if' below because
+    // derivatives need the whole 2x2 pixel group.
+    const float4 derivedTangent = DerivedTangent(input.worldPosition, input.uv, normal);
+    if (g_draw.normalMapping != kNormalMappingOff && material.normalTexture != kNoTexture)
     {
-        normal = normalize(normal); // interpolation shortens normals, so normalize again
-        if (!isFrontFace)
-            normal = -normal;
+        float4 tangent = input.tangent;
+        tangent.xyz -= normal * dot(normal, tangent.xyz); // interpolation bends it: make it perpendicular again
+        const bool hasTangent = dot(tangent.xyz, tangent.xyz) > 1e-12f && tangent.w != 0.0f;
+        if (g_draw.normalMapping == kNormalMappingDerived || !hasTangent)
+            tangent = derivedTangent;
+
+        if (dot(tangent.xyz, tangent.xyz) > 1e-12f)
+        {
+            const float3 T = normalize(tangent.xyz);
+            const float3 B = cross(normal, T) * tangent.w;
+            Texture2D<float4> normalMap = ResourceDescriptorHeap[material.normalTexture];
+            float3 n = normalMap.Sample(g_samplerAnisotropicWrap, input.uv).xyz * 2.0f - 1.0f; // 0..1 -> -1..1
+            n.xy *= material.normalScale;
+            normal = normalize(T * n.x + B * n.y + normal * n.z);
+        }
     }
-    else
-        normal = flatNormal;
+    if (hasVertexNormal && !isFrontFace)
+        normal = -normal;
 
     // Base color = constant factor * texture. The texture is _SRGB, so Sample() returns linear values.
     // The texture index comes from the material, which comes from a root constant, so it's the same for every
@@ -375,10 +440,12 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     //   ambient: albedo * ambientRadiance    (the same light from every direction, integrated over the hemisphere:
     //                                         pi * radiance, times albedo / pi)
     const float NdotL = saturate(dot(normal, g_frame.sunDirection));
+    // Shadow lookups use the real surface (geometricNormal), not the normal-mapped one.
+    const float geometricNdotL = saturate(dot(geometricNormal, g_frame.sunDirection));
 #if RAYTRACED_SHADOWS
-    const float shadow = NdotL > 0.0f ? RayTracedSunShadow(input.worldPosition, normal) : 0.0f;
+    const float shadow = NdotL > 0.0f ? RayTracedSunShadow(input.worldPosition, geometricNormal) : 0.0f;
 #else
-    const float shadow = NdotL > 0.0f ? SunShadow(input.worldPosition, normal, NdotL) : 0.0f; // facing away: dark anyway, skip the lookup
+    const float shadow = NdotL > 0.0f ? SunShadow(input.worldPosition, geometricNormal, geometricNdotL) : 0.0f; // facing away: dark anyway, skip the lookup
 #endif
     const float3 lighting = g_frame.sunIlluminance * NdotL * shadow / kPi + g_frame.ambientRadiance;
 
@@ -395,7 +462,7 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
         // Both answers for the same pixel: the ray (exact) and the shadow map (what H1-H5 produce). Gray where they
         // agree; red where only the shadow map says "shadow" (acne, bias, blur spilling into lit areas); blue where only
         // the ray says "shadow" (light leaking: peter-panning, thin casters the map's texels missed).
-        const float mapShadow = NdotL > 0.0f ? SunShadow(input.worldPosition, normal, NdotL) : 0.0f;
+        const float mapShadow = NdotL > 0.0f ? SunShadow(input.worldPosition, geometricNormal, geometricNdotL) : 0.0f;
         const float difference = mapShadow - shadow; // + : map lit, ray shadow (blue)   - : map shadow, ray lit (red)
         color = lerp(0.35f, 0.9f, shadow).xxx * 0.5f;
         color = lerp(color, float3(1.0f, 0.1f, 0.05f), saturate(-difference));
