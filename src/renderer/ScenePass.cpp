@@ -208,9 +208,12 @@ namespace walnut
         const ShaderCompileResult ps = m_compiler.Compile({ m_shaderPath, L"PSMain", ShaderStage::Pixel });
         const ShaderCompileResult psAlphaTest = m_compiler.Compile({ m_shaderPath, L"PSMain", ShaderStage::Pixel, { { L"ALPHA_TEST", L"1" } } });
         const ShaderCompileResult vsShadow = m_compiler.Compile({ m_shaderPath, L"VSShadow", ShaderStage::Vertex });
-        if (!vs.Succeeded() || !ps.Succeeded() || !psAlphaTest.Succeeded() || !vsShadow.Succeeded())
+        const ShaderCompileResult vsShadowAlpha = m_compiler.Compile({ m_shaderPath, L"VSShadowAlphaTest", ShaderStage::Vertex });
+        const ShaderCompileResult psShadowAlpha = m_compiler.Compile({ m_shaderPath, L"PSShadowAlphaTest", ShaderStage::Pixel });
+        if (!vs.Succeeded() || !ps.Succeeded() || !psAlphaTest.Succeeded() || !vsShadow.Succeeded() ||
+            !vsShadowAlpha.Succeeded() || !psShadowAlpha.Succeeded())
         {
-            m_lastError = vs.errors + ps.errors + psAlphaTest.errors + vsShadow.errors;
+            m_lastError = vs.errors + ps.errors + psAlphaTest.errors + vsShadow.errors + vsShadowAlpha.errors + psShadowAlpha.errors;
             return false;
         }
 
@@ -250,20 +253,25 @@ namespace walnut
             }
         }
 
-        // Shadow map pipelines: depth only. No pixel shader and no render targets: the rasterizer writes depth by
-        // itself, which is the cheapest way to draw. Same culling rules as the scene. [cullNone]
-        desc.VS = vsShadow.GetBytecode();
-        desc.PS = {};
+        // Shadow map pipelines: depth only, no render targets. Opaque casters have no pixel shader at all: the rasterizer
+        // writes depth by itself, the cheapest way to draw. Alpha-tested casters need a small pixel shader that
+        // discards the see-through texels of the leaf texture. Same culling rules as the scene. [alphaTest][cullNone]
         desc.NumRenderTargets = 0;
         desc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
         desc.DSVFormat = ShadowMap::kDepthFormat;
-        std::array<ComPtr<ID3D12PipelineState>, 2> shadowPipelines;
-        for (int cullNone = 0; cullNone < 2 && SUCCEEDED(hr); ++cullNone)
+        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> shadowPipelines;
+        for (int alphaTest = 0; alphaTest < 2 && SUCCEEDED(hr); ++alphaTest)
         {
-            desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
-            hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&shadowPipelines[cullNone]));
-            if (SUCCEEDED(hr))
-                SetDebugName(shadowPipelines[cullNone].Get(), cullNone ? L"ShadowPSO_CullNone" : L"ShadowPSO_CullBack");
+            desc.VS = alphaTest ? vsShadowAlpha.GetBytecode() : vsShadow.GetBytecode();
+            desc.PS = alphaTest ? psShadowAlpha.GetBytecode() : D3D12_SHADER_BYTECODE{};
+            for (int cullNone = 0; cullNone < 2 && SUCCEEDED(hr); ++cullNone)
+            {
+                desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
+                hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&shadowPipelines[alphaTest][cullNone]));
+                if (SUCCEEDED(hr))
+                    SetDebugName(shadowPipelines[alphaTest][cullNone].Get(),
+                                 std::format(L"ShadowPSO_{}_{}", alphaTest ? L"AlphaTest" : L"Opaque", cullNone ? L"CullNone" : L"CullBack").c_str());
+            }
         }
         if (FAILED(hr))
         {
@@ -321,7 +329,7 @@ namespace walnut
             // sorted by these two flags, so each PSO is set once.
             const bool alphaTest = settings.alphaTest && draw.alphaTest;
             const bool cullNone = !settings.backfaceCulling || draw.doubleSided;
-            ID3D12PipelineState* pipeline = shadow ? m_shadowPipelines[cullNone].Get() : m_pipelines[alphaTest][cullNone].Get();
+            ID3D12PipelineState* pipeline = shadow ? m_shadowPipelines[alphaTest][cullNone].Get() : m_pipelines[alphaTest][cullNone].Get();
             if (pipeline != currentPipeline)
             {
                 commandList->SetPipelineState(pipeline);

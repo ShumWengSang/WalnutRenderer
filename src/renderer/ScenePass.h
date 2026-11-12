@@ -108,8 +108,8 @@ namespace walnut
         uint64_t m_textureBytes = 0;
         std::vector<DrawItem> m_draws;
 
-        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_pipelines; // [alphaTest][cullNone]
-        std::array<ComPtr<ID3D12PipelineState>, 2> m_shadowPipelines;          // [cullNone]
+        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_pipelines;       // [alphaTest][cullNone]
+        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_shadowPipelines; // [alphaTest][cullNone]
         std::string m_lastError;
     };
 }

@@ -106,6 +106,44 @@ float4 VSShadow(uint vertexId : SV_VertexID) : SV_Position
     return mul(worldPosition, g_frame.sunViewProjection);
 }
 
+// Alpha-tested shadow casters (leaves): the rectangle's depth must only be written where the leaf texture is opaque,
+// so these draws need a pixel shader after all. It writes no color (there's no render target), it only decides
+// whether the rasterizer may write this texel's depth: 'discard' skips it, exactly like in the scene pass.
+struct ShadowAlphaInput
+{
+    float4 position : SV_Position;
+    float2 uv       : TEXCOORD0;
+};
+
+ShadowAlphaInput VSShadowAlphaTest(uint vertexId : SV_VertexID)
+{
+    StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[g_draw.vertexBufferIndex];
+    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
+    const Vertex vertex = vertices[vertexId];
+    const float4 worldPosition = mul(float4(vertex.position, 1.0f), instances[g_draw.instanceIndex].world);
+
+    ShadowAlphaInput output;
+    output.position = mul(worldPosition, g_frame.sunViewProjection);
+    output.uv = vertex.uv;
+    return output;
+}
+
+void PSShadowAlphaTest(ShadowAlphaInput input)
+{
+    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
+    StructuredBuffer<Material> materials = ResourceDescriptorHeap[g_draw.materialBufferIndex];
+    const Material material = materials[instances[g_draw.instanceIndex].materialIndex];
+
+    float alpha = material.baseColorFactor.a;
+    if (material.baseColorTexture != kNoTexture)
+    {
+        Texture2D<float4> baseColorTexture = ResourceDescriptorHeap[material.baseColorTexture];
+        alpha *= baseColorTexture.Sample(g_samplerAnisotropicWrap, input.uv).a;
+    }
+    if (alpha < material.alphaCutoff)
+        discard;
+}
+
 // Is this world-space point lit by the sun? 1 = yes, 0 = something closer to the sun covers it.
 //
 // 1. Transform the point the same way the shadow pass transformed the geometry: into the sun's clip space.
