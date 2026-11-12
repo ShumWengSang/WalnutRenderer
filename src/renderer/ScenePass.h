@@ -39,6 +39,7 @@ namespace walnut
         SceneDebugView debugView = SceneDebugView::Lit;
         bool backfaceCulling = true; // for single-sided materials; double-sided ones are never culled
         bool alphaTest = true;       // cut out alpha-mask materials; off draws them as opaque, to compare
+        bool raytracedShadows = false; // sun shadows from ray queries instead of the shadow map (if supported)
     };
 
     // Draws a Scene: uploads its merged vertex/index arrays and an instance buffer once, then issues one
@@ -59,6 +60,7 @@ namespace walnut
         // The old PSOs are released on success, so the GPU must be idle before calling this.
         bool ReloadShaders();
         const std::string& GetLastError() const { return m_lastError; }
+        bool SupportsRaytracedShadows() const { return m_raytracingSupported; }
 
         // Expects the bindless state (descriptor heap + root signature) and the frame constants to be bound already.
         void Render(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const;
@@ -111,8 +113,11 @@ namespace walnut
         uint64_t m_textureBytes = 0;
         std::vector<DrawItem> m_draws;
 
-        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_pipelines;       // [alphaTest][cullNone]
+        // [raytracedShadows][alphaTest][cullNone]; the ray-traced half stays empty without ray tracing support.
+        using PipelineTable = std::array<std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2>, 2>;
+        PipelineTable m_pipelines;
         std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_shadowPipelines; // [alphaTest][cullNone]
+        bool m_raytracingSupported = false;
         std::string m_lastError;
     };
 }

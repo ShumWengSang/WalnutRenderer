@@ -277,6 +277,7 @@ namespace walnut
             frameConstants.shadowNormalOffset = m_lighting.shadowNormalOffset;
             frameConstants.shadowFilterRadius = m_lighting.shadowFilterRadius < 0 ? UINT32_MAX
                                                                                   : static_cast<uint32_t>(m_lighting.shadowFilterRadius);
+            frameConstants.tlasIndex = m_accelerationStructures ? m_accelerationStructures->GetTlasSrvIndex() : UINT32_MAX;
 
             {
                 PIXScopedEvent(pix::kColorCpu, L"Render");
@@ -284,11 +285,12 @@ namespace walnut
                 m_renderer->SetFrameConstants(frameConstants);
                 ID3D12GraphicsCommandList7* commandList = m_renderer->GetCommandList();
 
-                // 1. Depth from the sun's point of view, into the shadow map.
+                // 1. Depth from the sun's point of view, into the shadow map. Still rendered with ray-traced shadows on,
+                //    only without casters: the clear + barriers keep it valid for the UI's shadow map view.
                 {
                     PIXScopedEvent(commandList, pix::kColorGpu, L"ShadowMap");
                     m_shadowMap->Begin(commandList);
-                    if (m_scenePass)
+                    if (m_scenePass && !m_sceneView.raytracedShadows)
                         m_scenePass->RenderShadowDepth(commandList, m_sceneView);
                     m_shadowMap->End(commandList);
                 }
@@ -463,6 +465,21 @@ namespace walnut
             const DirectX::XMFLOAT3 sun = m_lighting.GetSunDirection();
             ImGui::TextDisabled("Towards the sun: (%.2f, %.2f, %.2f)", sun.x, sun.y, sun.z);
             ImGui::Checkbox("Sun shadows", &m_shadowsEnabled);
+            {
+                // Ray-traced shadows need the TLAS, which exists only with inline ray tracing support.
+                const bool canTrace = m_scenePass && m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
+                ImGui::BeginDisabled(!canTrace);
+                int technique = m_sceneView.raytracedShadows && canTrace ? 1 : 0;
+                // "##technique" makes the ID unique: the "Shadow map" tree node below has the same visible label,
+                // and ImGui derives IDs from labels (text after ## is part of the ID but not displayed).
+                ImGui::RadioButton("Shadow map##technique", &technique, 0);
+                ImGui::SameLine();
+                ImGui::RadioButton("Ray traced##technique", &technique, 1);
+                m_sceneView.raytracedShadows = technique == 1;
+                ImGui::EndDisabled();
+                if (!canTrace)
+                    ImGui::SetItemTooltip("Needs DirectX Raytracing tier 1.1 (inline ray tracing).");
+            }
             {
                 const int r = m_lighting.shadowFilterRadius;
                 const std::string label = r < 0  ? std::string("hard (1 texel)")

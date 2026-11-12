@@ -21,7 +21,8 @@ struct FrameConstants
     float  shadowSlopeBias;      // texels, times tan(angle to the sun)
     float  shadowNormalOffset;   // texels, along the surface normal
     uint   shadowFilterRadius;   // PCF kernel radius in texels; 0xFFFFFFFF = hard (point comparison)
-    float2 padding4;
+    uint   tlasIndex;            // bindless SRV of the TLAS (RaytracingAccelerationStructure)
+    float  padding4;
 };
 ConstantBuffer<FrameConstants> g_frame : register(b2);
 

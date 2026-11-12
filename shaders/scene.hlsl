@@ -6,6 +6,9 @@
 #ifndef ALPHA_TEST
 #define ALPHA_TEST 0 // ScenePass compiles the pixel shader twice: with ALPHA_TEST=1 for alpha-mask materials
 #endif
+#ifndef RAYTRACED_SHADOWS
+#define RAYTRACED_SHADOWS 0 // 1: sun shadows from a ray query against the TLAS instead of the shadow map
+#endif
 
 // Root constants at b0. Must match SceneDrawConstants in ScenePass.cpp.
 struct DrawConstants
@@ -199,6 +202,39 @@ float SunShadow(float3 worldPosition, float3 normal, float NdotL)
     return lit / float((2 * r + 1) * (2 * r + 1));
 }
 
+#if RAYTRACED_SHADOWS
+// The same question as SunShadow, answered by tracing a ray: is anything between this point and the sun?
+//
+// RayQuery is "inline ray tracing" (DXR 1.1): any shader can trace a ray and get the answer back right away, without
+// the separate ray-generation/hit shaders and shader tables of full DXR. The hardware walks the TLAS and BLAS boxes.
+//
+// For a shadow ray we don't need the closest hit, only whether there is ANY hit, so the flags let the hardware stop
+// at the first one found and skip work it would need for shading a hit.
+float RayTracedSunShadow(float3 worldPosition, float3 normal)
+{
+    if (g_frame.shadowsEnabled == 0)
+        return 1.0f;
+
+    RaytracingAccelerationStructure scene = ResourceDescriptorHeap[g_frame.tlasIndex];
+
+    RayDesc ray;
+    // Start a little above the surface: from exactly on it, floating-point rounding could make the ray hit the very
+    // triangle it starts on ("self-intersection", the ray tracing cousin of shadow acne). 1 cm here.
+    ray.Origin = worldPosition + normal * 0.01f;
+    ray.Direction = g_frame.sunDirection;
+    ray.TMin = 0.0f;
+    ray.TMax = 1.0e4f; // "far enough": the sun is infinitely far away; anything in the scene counts as a blocker
+
+    // ACCEPT_FIRST_HIT_AND_END_SEARCH: any hit means shadow, no need to find the closest one.
+    // FORCE_OPAQUE: treat the alpha-tested leaves as solid for now (step I3 lets them be see-through).
+    // SKIP_PROCEDURAL_PRIMITIVES: the scene only has triangles; lets the compiler drop that path.
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
+    query.TraceRayInline(scene, RAY_FLAG_NONE, 0xFF /*instance mask: all*/, ray);
+    query.Proceed(); // with FORCE_OPAQUE there are no candidates to decide on: one call does the whole traversal
+    return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0f : 1.0f;
+}
+#endif
+
 // Cheap integer hash -> a stable, distinct color per index.
 float3 HashColor(uint index)
 {
@@ -269,7 +305,11 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     //   ambient: albedo * ambientRadiance    (the same light from every direction, integrated over the hemisphere:
     //                                         pi * radiance, times albedo / pi)
     const float NdotL = saturate(dot(normal, g_frame.sunDirection));
+#if RAYTRACED_SHADOWS
+    const float shadow = NdotL > 0.0f ? RayTracedSunShadow(input.worldPosition, normal) : 0.0f;
+#else
     const float shadow = NdotL > 0.0f ? SunShadow(input.worldPosition, normal, NdotL) : 0.0f; // facing away: dark anyway, skip the lookup
+#endif
     const float3 lighting = g_frame.sunIlluminance * NdotL * shadow / kPi + g_frame.ambientRadiance;
 
     float3 color;

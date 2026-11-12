@@ -62,7 +62,8 @@ namespace walnut
                          std::filesystem::path shaderPath, ID3D12RootSignature* rootSignature,
                          DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat, const Scene& scene)
         : m_device(device.Get()), m_srvHeap(srvHeap), m_compiler(compiler), m_shaderPath(std::move(shaderPath)),
-          m_rootSignature(rootSignature), m_rtvFormat(rtvFormat), m_dsvFormat(dsvFormat)
+          m_rootSignature(rootSignature), m_rtvFormat(rtvFormat), m_dsvFormat(dsvFormat),
+          m_raytracingSupported(device.SupportsInlineRaytracing())
     {
         using namespace DirectX;
 
@@ -237,19 +238,37 @@ namespace walnut
         desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
         desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER; // reversed-Z: greater = closer
 
-        // Every combination of pixel shader and cull mode: [alphaTest][cullNone].
-        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> pipelines;
-        HRESULT hr = S_OK;
-        for (int alphaTest = 0; alphaTest < 2 && SUCCEEDED(hr); ++alphaTest)
+        // Every combination of pixel shader and cull mode: [alphaTest][cullNone], once per shadow technique
+        // [raytraced]. The ray-traced pixel shaders contain RayQuery, so they're only built where it's supported.
+        const int techniques = m_raytracingSupported ? 2 : 1;
+        ShaderCompileResult psRt[2];
+        for (int alphaTest = 0; alphaTest < 2 && m_raytracingSupported; ++alphaTest)
         {
-            for (int cullNone = 0; cullNone < 2 && SUCCEEDED(hr); ++cullNone)
+            psRt[alphaTest] = m_compiler.Compile({ m_shaderPath, L"PSMain", ShaderStage::Pixel,
+                                                   { { L"ALPHA_TEST", alphaTest ? L"1" : L"0" }, { L"RAYTRACED_SHADOWS", L"1" } } });
+            if (!psRt[alphaTest].Succeeded())
             {
-                desc.PS = alphaTest ? psAlphaTest.GetBytecode() : ps.GetBytecode();
-                desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
-                hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipelines[alphaTest][cullNone]));
-                if (SUCCEEDED(hr))
-                    SetDebugName(pipelines[alphaTest][cullNone].Get(),
-                                 std::format(L"ScenePSO_{}_{}", alphaTest ? L"AlphaTest" : L"Opaque", cullNone ? L"CullNone" : L"CullBack").c_str());
+                m_lastError = psRt[alphaTest].errors;
+                return false;
+            }
+        }
+
+        PipelineTable pipelines;
+        HRESULT hr = S_OK;
+        for (int raytraced = 0; raytraced < techniques && SUCCEEDED(hr); ++raytraced)
+        {
+            for (int alphaTest = 0; alphaTest < 2 && SUCCEEDED(hr); ++alphaTest)
+            {
+                for (int cullNone = 0; cullNone < 2 && SUCCEEDED(hr); ++cullNone)
+                {
+                    desc.PS = raytraced ? psRt[alphaTest].GetBytecode() : (alphaTest ? psAlphaTest.GetBytecode() : ps.GetBytecode());
+                    desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
+                    hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipelines[raytraced][alphaTest][cullNone]));
+                    if (SUCCEEDED(hr))
+                        SetDebugName(pipelines[raytraced][alphaTest][cullNone].Get(),
+                                     std::format(L"ScenePSO_{}_{}_{}", raytraced ? L"RtShadow" : L"ShadowMap",
+                                                 alphaTest ? L"AlphaTest" : L"Opaque", cullNone ? L"CullNone" : L"CullBack").c_str());
+                }
             }
         }
 
@@ -329,7 +348,9 @@ namespace walnut
             // sorted by these two flags, so each PSO is set once.
             const bool alphaTest = settings.alphaTest && draw.alphaTest;
             const bool cullNone = !settings.backfaceCulling || draw.doubleSided;
-            ID3D12PipelineState* pipeline = shadow ? m_shadowPipelines[alphaTest][cullNone].Get() : m_pipelines[alphaTest][cullNone].Get();
+            const bool raytraced = settings.raytracedShadows && m_raytracingSupported;
+            ID3D12PipelineState* pipeline = shadow ? m_shadowPipelines[alphaTest][cullNone].Get()
+                                                   : m_pipelines[raytraced][alphaTest][cullNone].Get();
             if (pipeline != currentPipeline)
             {
                 commandList->SetPipelineState(pipeline);
