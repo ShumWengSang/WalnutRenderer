@@ -305,6 +305,13 @@ namespace walnut
             frameConstants.clusteredLighting = m_lighting.clusteredLighting ? 1u : 0u;
             frameConstants.pointShadowMapIndex = m_pointShadowMaps->GetCubeArraySrvIndex();
             frameConstants.pointShadowNearScale = PointShadowMaps::kNearScale;
+            // Ray-traced shadows need the TLAS; without it, rays fall back to the shadow map / cube maps.
+            const bool canTrace = m_accelerationStructures != nullptr;
+            if (m_lighting.pointShadowTechnique == PointShadowTechnique::RayTraced && !canTrace)
+                m_lighting.pointShadowTechnique = PointShadowTechnique::CubeMaps;
+            m_sceneView.raytracedPointShadows = m_lighting.pointShadowTechnique == PointShadowTechnique::RayTraced;
+            frameConstants.sunShadowRaytraced = m_sceneView.raytracedShadows && canTrace ? 1u : 0u;
+            frameConstants.pointShadowTechnique = static_cast<uint32_t>(m_lighting.pointShadowTechnique);
             frameConstants.cameraPosition = m_camera.position;
             frameConstants.sunDirection = m_lighting.GetSunDirection();
             const auto scaled = [](const DirectX::XMFLOAT3& color, float intensity) {
@@ -350,8 +357,10 @@ namespace walnut
                 // the edge of their light, so a lamp lighting the space around the camera always qualifies).
                 m_shadowedLights.clear();
                 {
-                    const uint32_t budget = std::min<uint32_t>(static_cast<uint32_t>(std::max(m_lighting.pointShadowBudget, 0)),
-                                                               PointShadowMaps::kMaxShadowedLights);
+                    // Only the cube-map technique uses slots (rays shadow every lamp; off shadows none).
+                    const uint32_t budget = m_lighting.pointShadowTechnique != PointShadowTechnique::CubeMaps ? 0u :
+                        std::min<uint32_t>(static_cast<uint32_t>(std::max(m_lighting.pointShadowBudget, 0)),
+                                           PointShadowMaps::kMaxShadowedLights);
                     std::vector<std::pair<float, uint32_t>> byDistance;
                     byDistance.reserve(m_pointLightData.size());
                     for (uint32_t i = 0; i < m_pointLightData.size(); ++i)
@@ -440,7 +449,8 @@ namespace walnut
                         .depth = m_renderer->GetDepthSrvIndex(),
                     };
                     m_deferredPass->Render(commandList, inputs, m_sceneView.debugView,
-                                           m_sceneView.raytracedShadows && m_accelerationStructures);
+                                           (m_sceneView.raytracedShadows || m_sceneView.raytracedPointShadows) &&
+                                               m_accelerationStructures);
                 }
                 else
                 {
@@ -749,8 +759,25 @@ namespace walnut
                 ImGui::SetItemTooltip("Each lamp's light fades smoothly to zero at this distance.");
                 ImGui::SliderFloat("Intensity##point", &m_lighting.pointLightIntensity, 0.0f, 1000.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
                 ImGui::SetItemTooltip("Light received 1 m from a lamp, facing it. Falls off as 1 / distance^2.");
+                {
+                    int technique = static_cast<int>(m_lighting.pointShadowTechnique);
+                    ImGui::RadioButton("Off##pointShadows", &technique, static_cast<int>(PointShadowTechnique::Off));
+                    ImGui::SameLine();
+                    ImGui::RadioButton("Cube maps##pointShadows", &technique, static_cast<int>(PointShadowTechnique::CubeMaps));
+                    ImGui::SameLine();
+                    ImGui::BeginDisabled(!m_accelerationStructures);
+                    ImGui::RadioButton("Ray traced##pointShadows", &technique, static_cast<int>(PointShadowTechnique::RayTraced));
+                    ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("Shadows");
+                    ImGui::SetItemTooltip("Cube maps: the nearest lamps (the budget below) render a cube shadow map each.\n"
+                                          "Ray traced: every lamp, one shadow ray per lamp that reaches the pixel.");
+                    m_lighting.pointShadowTechnique = static_cast<PointShadowTechnique>(technique);
+                }
+                ImGui::BeginDisabled(m_lighting.pointShadowTechnique != PointShadowTechnique::CubeMaps);
                 ImGui::SliderInt("Shadowed lamps", &m_lighting.pointShadowBudget, 0,
                                  static_cast<int>(PointShadowMaps::kMaxShadowedLights));
+                ImGui::EndDisabled();
                 ImGui::SetItemTooltip("The lamps nearest the camera get a cube shadow map (6 x %u^2 depth faces each).",
                                       PointShadowMaps::kFaceSize);
                 ImGui::TextDisabled("%zu cube maps, %zu faces, %u shadow draws (%.0f MB for %u cubes)", m_shadowedLights.size(),

@@ -4,6 +4,14 @@
 
 namespace walnut
 {
+    // Where point lights get their shadows. Values must match Lighting.hlsli.
+    enum class PointShadowTechnique : uint32_t
+    {
+        Off = 0,       // lamps light through everything
+        CubeMaps = 1,  // the nearest lamps (the budget) get a cube shadow map
+        RayTraced = 2, // every lamp: one shadow ray per lamp that reaches the pixel (needs inline ray tracing)
+    };
+
     // How surfaces respond to light. Values must match scene.hlsl.
     enum class ShadingModel : uint32_t
     {
@@ -38,6 +46,7 @@ namespace walnut
         // Point light shadows (Step 6): the lamps nearest the camera get a cube shadow map, up to this many
         // (at most PointShadowMaps::kMaxShadowedLights). 0: no point light shadows.
         int pointShadowBudget = 16;
+        PointShadowTechnique pointShadowTechnique = PointShadowTechnique::CubeMaps;
 
         // Shadow-map bias, in shadow-map texels (see SunShadow in scene.hlsl).
         float shadowConstantBias = 0.5f;

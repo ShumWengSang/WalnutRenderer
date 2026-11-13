@@ -514,7 +514,8 @@ namespace walnut
             // sorted by these two flags, so each PSO is set once.
             const bool alphaTest = settings.alphaTest && draw.alphaTest;
             const bool cullNone = !settings.backfaceCulling || draw.doubleSided;
-            const bool raytraced = settings.raytracedShadows && m_raytracingSupported;
+            // The ray-traced variant traces whichever shadows are set to rays (frame constants pick sun / points).
+            const bool raytraced = (settings.raytracedShadows || settings.raytracedPointShadows) && m_raytracingSupported;
             ID3D12PipelineState* pipeline = nullptr;
             switch (mode)
             {

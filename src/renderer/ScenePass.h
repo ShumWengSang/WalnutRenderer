@@ -72,6 +72,7 @@ namespace walnut
         bool backfaceCulling = true; // for single-sided materials; double-sided ones are never culled
         bool alphaTest = true;       // cut out alpha-mask materials; off draws them as opaque, to compare
         bool raytracedShadows = false; // sun shadows from ray queries instead of the shadow map (if supported)
+        bool raytracedPointShadows = false; // point light shadows from ray queries (also needs the ray-traced variant)
         bool depthPrepass = true;      // draw depth first, then shade each pixel once (depth EQUAL)
     };
 

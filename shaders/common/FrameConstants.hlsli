@@ -46,6 +46,10 @@ struct FrameConstants
     uint   clusterLightIndicesIndex; // StructuredBuffer<uint>
     uint   clusteredLighting;    // 1: point lights from the pixel's cluster list; 0: every light (brute force)
     uint   padding6;
+
+    uint   sunShadowRaytraced;   // 1: the sun's shadow from a ray (ray-traced variant only); 0: from its shadow map
+    uint   pointShadowTechnique; // 0 off, 1 cube maps, 2 ray traced (PointShadowTechnique in Lighting.h)
+    uint2  padding7;
 };
 ConstantBuffer<FrameConstants> g_frame : register(b2);
 

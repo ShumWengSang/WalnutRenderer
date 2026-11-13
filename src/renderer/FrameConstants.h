@@ -61,6 +61,11 @@ namespace walnut
         uint32_t clusterLightIndicesIndex = UINT32_MAX; // StructuredBuffer<uint>: the clusters' light indices
         uint32_t clusteredLighting = 1; // 1: shade point lights from the pixel's cluster list; 0: brute force
         uint32_t padding6 = 0;
+
+        // Shadow techniques (M3). One ray-traced shader variant serves any mix, so these choose at run time.
+        uint32_t sunShadowRaytraced = 0;   // 1: sun shadow from a ray; 0: from the shadow map
+        uint32_t pointShadowTechnique = 1; // PointShadowTechnique (Lighting.h)
+        uint32_t padding7[2] = {};
     };
-    static_assert(sizeof(FrameConstants) == 432);
+    static_assert(sizeof(FrameConstants) == 448);
 }

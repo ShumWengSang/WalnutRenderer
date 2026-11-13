@@ -128,20 +128,17 @@ bool IsOpaqueHit(uint instanceIndex, uint triangleIndex, float2 barycentrics)
 // Opaque triangles are accepted by the hardware on its own. Alpha-tested ones (built without the OPAQUE flag in I1)
 // come back to the shader as "candidates": Proceed() pauses on each one, the shader checks the texture, and commits
 // the hit only if the ray really hits leaf. Otherwise the traversal continues as if that triangle weren't there.
-float RayTracedSunShadow(float3 worldPosition, float3 normal)
+//
+// Shared by the sun (to infinity) and the point lights (up to the lamp, M3): 1 = nothing in the way, 0 = blocked.
+float TraceShadowRay(float3 origin, float3 direction, float maxDistance)
 {
-    if (g_frame.shadowsEnabled == 0)
-        return 1.0f;
-
     RaytracingAccelerationStructure scene = ResourceDescriptorHeap[g_frame.tlasIndex];
 
     RayDesc ray;
-    // Start a little above the surface: from exactly on it, floating-point rounding could make the ray hit the very
-    // triangle it starts on ("self-intersection", the ray tracing cousin of shadow acne). 1 cm here.
-    ray.Origin = worldPosition + normal * 0.01f;
-    ray.Direction = g_frame.sunDirection;
+    ray.Origin = origin;
+    ray.Direction = direction;
     ray.TMin = 0.0f;
-    ray.TMax = 1.0e4f; // "far enough": the sun is infinitely far away; anything in the scene counts as a blocker
+    ray.TMax = maxDistance;
 
     // ACCEPT_FIRST_HIT_AND_END_SEARCH: any hit means shadow, no need to find the closest one.
     // SKIP_PROCEDURAL_PRIMITIVES: the scene only has triangles; lets the compiler drop that path.
@@ -155,6 +152,30 @@ float RayTracedSunShadow(float3 worldPosition, float3 normal)
             query.CommitNonOpaqueTriangleHit(); // with ACCEPT_FIRST_HIT this also ends the search
     }
     return query.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0.0f : 1.0f;
+}
+
+float RayTracedSunShadow(float3 worldPosition, float3 normal)
+{
+    if (g_frame.shadowsEnabled == 0)
+        return 1.0f;
+    // Start a little above the surface: from exactly on it, floating-point rounding could make the ray hit the very
+    // triangle it starts on ("self-intersection", the ray tracing cousin of shadow acne). 1 cm here.
+    // TMax "far enough": the sun is infinitely far away; anything in the scene counts as a blocker.
+    return TraceShadowRay(worldPosition + normal * 0.01f, g_frame.sunDirection, 1.0e4f);
+}
+
+// The same question for a point light (M3): is anything between this point and the lamp? The ray stops at the lamp
+// (TMax = its distance): geometry behind the lamp can't block it. Lamps are points, not geometry in the TLAS, so
+// nothing at the end gets in the way.
+float RayTracedPointShadow(float3 worldPosition, float3 geometricNormal, float3 lightPosition)
+{
+    const float3 toLight = lightPosition - worldPosition;
+    // Lift the origin 1 cm off the surface on the lamp's side, like the sun's rays.
+    const float3 n = dot(geometricNormal, toLight) < 0.0f ? -geometricNormal : geometricNormal;
+    const float3 origin = worldPosition + n * 0.01f;
+    const float3 toLightFromOrigin = lightPosition - origin;
+    const float distance = length(toLightFromOrigin);
+    return TraceShadowRay(origin, toLightFromOrigin / distance, distance);
 }
 #endif
 
@@ -199,6 +220,9 @@ float PointLightFalloff(float distanceSquared, float range)
 // (PointShadowMaps.cpp). Sampling a cube with a direction makes the hardware pick the face and the texel the ray from
 // the lamp's center passes through; SampleCmp then compares our depth with the depth stored there, like SunShadow.
 static const uint  kNoShadowSlot = 0xFFFFFFFF;
+static const uint  kPointShadowOff       = 0; // PointShadowTechnique in Lighting.h
+static const uint  kPointShadowCubeMaps  = 1;
+static const uint  kPointShadowRayTraced = 2;
 static const float kPointShadowFaceSize = 256.0f;     // PointShadowMaps::kFaceSize
 static const float kPointShadowNormalOffset = 1.5f;   // texels, along the surface normal (towards the lamp)
 static const float kPointShadowDepthBias = 1.0f;      // texels, towards the lamp
@@ -252,8 +276,23 @@ void AddPointLight(PointLight light, float3 worldPosition, MaterialSample mat, f
     const float NdotL = saturate(dot(mat.normal, L));
     if (NdotL <= 0.0f)
         return;
-    const float shadow = PointShadow(light, worldPosition, mat.geometricNormal);
-    if (light.shadowSlot != kNoShadowSlot)
+    // The point shadow technique (Lighting > Point lights): cube maps for the lamps with a slot, or a ray for every
+    // lamp (only in the ray-traced shader variant, which the UI selects when this is on).
+    float shadow;
+    bool shadowed;
+#if RAYTRACED_SHADOWS
+    if (g_frame.pointShadowTechnique == kPointShadowRayTraced)
+    {
+        shadow = RayTracedPointShadow(worldPosition, mat.geometricNormal, light.position);
+        shadowed = true;
+    }
+    else
+#endif
+    {
+        shadow = PointShadow(light, worldPosition, mat.geometricNormal);
+        shadowed = light.shadowSlot != kNoShadowSlot;
+    }
+    if (shadowed)
     {
         shadowSum += shadow;
         ++shadowCount;
@@ -300,8 +339,17 @@ ShadingResult ShadeSurface(float3 worldPosition, MaterialSample mat, bool compar
     // Shadow lookups use the real surface (geometricNormal), not the normal-mapped one.
     const float geometricNdotL = saturate(dot(mat.geometricNormal, g_frame.sunDirection));
 #if RAYTRACED_SHADOWS
-    result.shadow = NdotL > 0.0f ? RayTracedSunShadow(worldPosition, mat.geometricNormal) : 0.0f;
-    result.mapShadow = compareShadowMap && NdotL > 0.0f ? SunShadow(worldPosition, mat.geometricNormal, geometricNdotL) : 0.0f;
+    // This variant also runs when only the point lights are ray traced: then the sun still uses its map.
+    if (g_frame.sunShadowRaytraced != 0)
+    {
+        result.shadow = NdotL > 0.0f ? RayTracedSunShadow(worldPosition, mat.geometricNormal) : 0.0f;
+        result.mapShadow = compareShadowMap && NdotL > 0.0f ? SunShadow(worldPosition, mat.geometricNormal, geometricNdotL) : 0.0f;
+    }
+    else
+    {
+        result.shadow = NdotL > 0.0f ? SunShadow(worldPosition, mat.geometricNormal, geometricNdotL) : 0.0f;
+        result.mapShadow = result.shadow;
+    }
 #else
     result.shadow = NdotL > 0.0f ? SunShadow(worldPosition, mat.geometricNormal, geometricNdotL) : 0.0f; // facing away: dark anyway, skip the lookup
     result.mapShadow = result.shadow;
