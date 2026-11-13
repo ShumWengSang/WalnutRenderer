@@ -84,6 +84,8 @@ set(WALNUT_SOURCES
     src/renderer/Renderer.h
     src/renderer/SceneGpuData.cpp
     src/renderer/SceneGpuData.h
+    src/renderer/SceneRenderer.cpp
+    src/renderer/SceneRenderer.h
     src/renderer/ScenePass.cpp
     src/renderer/ScenePass.h
     src/renderer/ShadowMap.cpp

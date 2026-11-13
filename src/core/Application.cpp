@@ -5,7 +5,12 @@
 #include "core/Window.h"
 #include "gfx/Pix.h"
 #include "gfx/ShaderCompiler.h"
+#include "renderer/AccelerationStructures.h"
+#include "renderer/ClusterGrid.h"
+#include "renderer/PointShadowMaps.h"
 #include "renderer/Renderer.h"
+#include "renderer/SceneGpuData.h"
+#include "renderer/ShadowMap.h"
 #include "ui/ImGuiLayer.h"
 
 #include <imgui.h>
@@ -47,6 +52,7 @@ namespace walnut
     Application::Application(const AppOptions& options)
         : m_options(options), m_exeDir(GetExecutableDirectory())
     {
+        m_liveObjectReport.enabled = options.debugLayer || options.gpuValidation;
         // The GPU capturer hooks D3D12 creation, so it has to be in the process before the device exists.
         if (options.pixGpuCapturer)
             pix::LoadGpuCapturer();
@@ -108,13 +114,9 @@ namespace walnut
             m_shaderDir = m_exeDir / "shaders";
         log::Info("Compiling shaders from {}", ToUtf8(m_shaderDir.wstring()));
         m_shaderCompiler = std::make_unique<ShaderCompiler>(kShaderDebugInfo, m_shaderDir);
-        m_scenePass = std::make_unique<ScenePass>(m_renderer->GetDevice(), *m_shaderCompiler, m_shaderDir / "scene.hlsl",
-                                                  m_renderer->GetRootSignature(), Renderer::kSceneColorFormat,
-                                                  Renderer::kDepthFormat);
-        if (!m_scene.instances.empty())
+        m_sceneRenderer = std::make_unique<SceneRenderer>(*m_renderer, *m_shaderCompiler, m_shaderDir, m_scene);
+        if (m_sceneRenderer->HasScene())
         {
-            m_sceneData = std::make_unique<SceneGpuData>(m_renderer->GetDevice(), m_renderer->GetUploadContext(),
-                                                         m_renderer->GetSrvHeap(), m_scene);
             // The pixels were copied into the upload ring, so the CPU copy (~130 MB for Sponza) can go.
             for (SceneTexture& texture : m_scene.textures)
                 texture.mips = {};
@@ -130,35 +132,6 @@ namespace walnut
             m_lighting.pointLightRange = 0.07f * diameter;
             m_lighting.pointLightIntensity = 0.3f * m_lighting.pointLightRange * m_lighting.pointLightRange;
         }
-        m_tonemapPass = std::make_unique<TonemapPass>(m_renderer->GetDevice(), *m_shaderCompiler,
-                                                      m_shaderDir / "tonemap.hlsl", m_renderer->GetRootSignature(),
-                                                      SwapChain::kSrgbFormat);
-        m_deferredPass = std::make_unique<DeferredPass>(m_renderer->GetDevice(), *m_shaderCompiler,
-                                                        m_shaderDir / "deferred.hlsl", m_renderer->GetRootSignature(),
-                                                        Renderer::kSceneColorFormat, m_renderer->GetDevice().SupportsInlineRaytracing());
-        m_lightBuffer = std::make_unique<LightBuffer>(m_renderer->GetDevice(), m_renderer->GetSrvHeap(), Renderer::kFramesInFlight);
-        m_pointShadowMaps = std::make_unique<PointShadowMaps>(m_renderer->GetDevice(), m_renderer->GetSrvHeap());
-        m_clusterGrid = std::make_unique<ClusterGrid>(m_renderer->GetDevice(), m_renderer->GetSrvHeap(), *m_shaderCompiler,
-                                                      m_shaderDir / "clusters.hlsl", m_renderer->GetRootSignature(),
-                                                      Renderer::kFramesInFlight);
-        m_lightMarkerPass = std::make_unique<LightMarkerPass>(m_renderer->GetDevice(), *m_shaderCompiler,
-                                                              m_shaderDir / "lightmarkers.hlsl", m_renderer->GetRootSignature(),
-                                                              Renderer::kSceneColorFormat, Renderer::kDepthFormat);
-        m_shadowMap = std::make_unique<ShadowMap>(m_renderer->GetDevice(), m_renderer->GetSrvHeap(), kShadowMapSize);
-
-        // Execute every upload recorded while loading, before the first frame reads that data.
-        m_renderer->GetUploadContext().Flush();
-
-        // Ray tracing acceleration structures are built from the uploaded geometry, so after the flush.
-        if (m_sceneData && m_renderer->GetDevice().SupportsInlineRaytracing())
-        {
-            m_accelerationStructures = std::make_unique<AccelerationStructures>(
-                m_renderer->GetDevice(), m_renderer->GetDirectQueue(), m_renderer->GetSrvHeap(), m_scene, *m_sceneData);
-        }
-        else if (m_sceneData)
-            log::Warn("Inline ray tracing (tier 1.1) not supported: ray-traced features disabled");
-        m_caps.raytracing = m_accelerationStructures != nullptr;
-
         m_imgui = std::make_unique<ImGuiLayer>(*m_window, *m_renderer);
 
         // Reproducible starts: camera and settings from the command line, after the scene-based defaults above.
@@ -235,29 +208,17 @@ namespace walnut
 
     Application::~Application()
     {
+        // Members are destroyed in reverse order of declaration (Application.h): the UI and the scene renderer before
+        // the renderer, the renderer before the window, and the live-object report last of all.
         if (m_renderer)
             m_renderer->WaitForGpu();
-
-        // Tear down in dependency order: everything that holds GPU objects goes before the renderer.
-        m_imgui.reset();
-        m_accelerationStructures.reset();
-        m_scenePass.reset();
-        m_sceneData.reset();
-        m_shadowMap.reset();
-        m_tonemapPass.reset();
-        m_deferredPass.reset();
-        m_lightBuffer.reset();
-        m_lightMarkerPass.reset();
-        m_clusterGrid.reset();
-        m_pointShadowMaps.reset();
-        m_shaderCompiler.reset();
-        m_renderer.reset();
-        m_window.reset();
-
-        if (m_options.debugLayer || m_options.gpuValidation)
-            ReportLiveObjects();
     }
 
+    Application::LiveObjectReport::~LiveObjectReport()
+    {
+        if (enabled)
+            ReportLiveObjects();
+    }
     int Application::Run()
     {
         if (m_options.listSettings)
@@ -309,156 +270,26 @@ namespace walnut
             }
 
             // This frame's decisions, from the settings the UI just changed.
-            const FrameSettings frame = ResolveFrameSettings(m_renderSettings, m_debugSettings, m_caps);
-
-            // The aspect ratio comes from the back buffer, so the image doesn't stretch when the window resizes.
-            const SwapChain& swapChain = m_renderer->GetSwapChain();
-            const float aspect = static_cast<float>(swapChain.GetWidth()) / static_cast<float>(swapChain.GetHeight());
+            const FrameSettings frame = ResolveFrameSettings(m_renderSettings, m_debugSettings, m_sceneRenderer->GetCaps());
 
             {
                 PIXScopedEvent(pix::kColorCpu, L"Render");
                 m_renderer->BeginFrame(m_debugSettings.clearColor);
-                // The point lights go into this frame's upload memory, which BeginFrame just made reusable.
-                if (m_sceneData)
+                // This frame's point lights (animated), then the 3D frame up to the tonemapped back buffer.
+                if (m_sceneRenderer->HasScene())
                     m_pointLights.Update(GetAnimationTime(), static_cast<uint32_t>(m_lighting.pointLightCount),
                                          m_lighting.pointLightRange, m_lighting.pointLightIntensity,
                                          m_lighting.animatePointLights, m_pointLightData);
-                // Which lamps get a cube shadow map: the ones closest to the camera (by how far the camera is from
-                // the edge of their light, so a lamp lighting the space around the camera always qualifies).
-                m_shadowedLights.clear();
-                {
-                    // Only the cube-map technique uses slots (rays shadow every lamp; off shadows none).
-                    const uint32_t budget = frame.cubeShadowBudget;
-                    std::vector<std::pair<float, uint32_t>> byDistance;
-                    byDistance.reserve(m_pointLightData.size());
-                    for (uint32_t i = 0; i < m_pointLightData.size(); ++i)
-                    {
-                        const PointLightGpu& light = m_pointLightData[i];
-                        const float dx = light.position.x - m_camera.position.x, dy = light.position.y - m_camera.position.y,
-                                    dz = light.position.z - m_camera.position.z;
-                        byDistance.emplace_back(std::max(std::sqrt(dx * dx + dy * dy + dz * dz) - light.range, 0.0f), i);
-                    }
-                    const size_t count = std::min<size_t>(budget, byDistance.size());
-                    std::partial_sort(byDistance.begin(), byDistance.begin() + count, byDistance.end());
-                    for (size_t slot = 0; slot < count; ++slot)
-                    {
-                        m_pointLightData[byDistance[slot].second].shadowSlot = static_cast<uint32_t>(slot);
-                        m_shadowedLights.push_back(byDistance[slot].second);
-                    }
-                }
-                const uint32_t pointLightBufferIndex = m_lightBuffer->Upload(m_renderer->GetFrameAllocator(),
-                                                                             m_renderer->GetFrameIndex(), m_pointLightData);
-
-                // Everything the frame's shaders share: camera, lights, settings and where the frame's resources are.
-                m_renderer->SetFrameConstants(BuildFrameConstants({
-                    .camera = m_camera,
-                    .aspect = aspect,
-                    .lighting = m_lighting,
-                    .settings = m_renderSettings,
-                    .debug = m_debugSettings,
-                    .frame = frame,
-                    .sceneBounds = m_scene.bounds,
-                    .shadowMapIndex = m_shadowMap->GetSrvIndex(),
-                    .shadowMapSize = m_shadowMap->GetSize(),
-                    .tlasIndex = m_accelerationStructures ? m_accelerationStructures->GetTlasSrvIndex() : UINT32_MAX,
-                    .sceneBindings = m_sceneData ? m_sceneData->GetBindings() : SceneGpuData::Bindings{ UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX },
-                    .pointLightBufferIndex = pointLightBufferIndex,
-                    .pointLightCount = static_cast<uint32_t>(m_pointLightData.size()),
-                    .pointShadowMapIndex = m_pointShadowMaps->GetCubeArraySrvIndex(),
-                    .clusterGridIndex = m_clusterGrid->GetGridSrvIndex(),
-                    .clusterLightIndicesIndex = m_clusterGrid->GetIndicesSrvIndex(),
-                }));
-                ID3D12GraphicsCommandList7* commandList = m_renderer->GetCommandList();
-
-                // 0. Sort the point lights into the cluster grid (compute), before anything reads it (skipped when
-                //    nothing reads it: see FrameSettings::buildClusters).
-                if (m_sceneData && frame.buildClusters)
-                    m_clusterGrid->Build(commandList, m_renderer->GetFrameIndex());
-
-                // 1. Depth from the sun's point of view, into the shadow map. With ray-traced shadows the casters are
-                //    skipped (nothing reads the map), except for the difference view, which compares both. The pass
-                //    still clears + transitions it, which keeps it valid for the UI's shadow map view.
-                {
-                    PIXScopedEvent(commandList, pix::kColorGpu, L"ShadowMap");
-                    m_shadowMap->Begin(commandList);
-                    if (m_sceneData && frame.drawSunCasters)
-                        m_scenePass->RenderShadowDepth(commandList, *m_sceneData, frame);
-                    m_shadowMap->End(commandList);
-                }
-
-                // 1b. Cube shadow maps for the shadowed point lights: six 90-degree depth renders per lamp, each with
-                //     only the meshes whose bounds reach the lamp's sphere.
-                {
-                    PIXScopedEvent(commandList, pix::kColorGpu, L"Point shadows");
-                    m_pointShadowMaps->Begin(commandList);
-                    m_pointShadowDraws = 0;
-                    for (uint32_t slot = 0; slot < m_shadowedLights.size(); ++slot)
-                    {
-                        const PointLightGpu& light = m_pointLightData[m_shadowedLights[slot]];
-                        for (uint32_t face = 0; face < PointShadowMaps::kFaceCount; ++face)
-                        {
-                            DirectX::XMFLOAT4X4 faceViewProjection;
-                            DirectX::XMStoreFloat4x4(&faceViewProjection,
-                                                     PointShadowMaps::GetFaceViewProjection(light.position, light.range, face));
-                            m_pointShadowMaps->BeginFace(commandList, slot, face);
-                            m_pointShadowDraws += m_scenePass->RenderPointShadowDepth(
-                                commandList, *m_sceneData, frame, m_renderer->GetFrameAllocator().AllocateConstants(faceViewProjection),
-                                light.position, light.range);
-                        }
-                    }
-                    m_pointShadowMaps->End(commandList);
-                }
-
-                // 2. The scene from the camera, into the HDR scene color target. With the depth pre-pass, depth
-                //    first: the scene pass then shades only the closest surface of each pixel.
-                const bool deferred = m_sceneData && frame.deferred;
-                if (m_sceneData && frame.depthPrepass)
-                {
-                    m_renderer->BeginDepthPrepass();
-                    m_scenePass->RenderDepthPrepass(commandList, *m_sceneData, frame);
-                }
-                if (deferred)
-                {
-                    // Deferred: the draws write each visible pixel's material into the G-buffer, then one
-                    // fullscreen pass reads it back.
-                    m_renderer->BeginGBufferPass();
-                    m_scenePass->RenderGBuffer(commandList, *m_sceneData, frame);
-                    m_renderer->BeginDeferredPass();
-                    const GBuffer& gbuffer = m_renderer->GetGBuffer();
-                    const DeferredInputs inputs{
-                        .baseColor = gbuffer.GetSrvIndex(GBuffer::BaseColor),
-                        .normals = gbuffer.GetSrvIndex(GBuffer::Normals),
-                        .material = gbuffer.GetSrvIndex(GBuffer::Material),
-                        .emissive = gbuffer.GetSrvIndex(GBuffer::Emissive),
-                        .depth = m_renderer->GetDepthSrvIndex(),
-                    };
-                    m_deferredPass->Render(commandList, inputs, frame.view, frame.raytracedVariant);
-                }
-                else
-                {
-                    m_renderer->BeginScenePass();
-                    if (m_sceneData)
-                        m_scenePass->Render(commandList, *m_sceneData, frame);
-                }
-
-                // Markers at the point lights: on top of the shaded scene, hidden behind closer geometry.
-                if (m_sceneData && m_debugSettings.lightMarkers && !m_pointLightData.empty())
-                {
-                    m_renderer->BeginOverlayPass();
-                    m_lightMarkerPass->Render(commandList, static_cast<uint32_t>(m_pointLightData.size()),
-                                              0.04f * m_lighting.pointLightRange);
-                }
-
-                // The 3D scene is done; from here on we draw into the back buffer.
-                m_renderer->BeginBackBufferPass();
-                m_tonemapPass->Render(commandList, m_renderer->GetSceneColorSrvIndex(), m_tonemapSettings);
+                m_sceneRenderer->Record({ .camera = m_camera, .lighting = m_lighting, .settings = m_renderSettings,
+                                          .debug = m_debugSettings, .frame = frame, .tonemap = m_tonemapSettings },
+                                        m_pointLightData);
                 // --screenshot: the frame as tonemapped, before the UI is drawn over it.
                 const bool screenshotFrame = !m_options.screenshot.empty() &&
                                              m_renderer->GetFrameCount() + 1 == m_options.screenshotFrame;
                 if (screenshotFrame)
                     m_renderer->CaptureBackBuffer();
                 m_renderer->BeginUiPass();
-                m_imgui->Render(commandList);
+                m_imgui->Render(m_renderer->GetCommandList());
                 m_renderer->EndFrame();
                 if (screenshotFrame)
                 {
@@ -502,15 +333,10 @@ namespace walnut
         // The old PSOs may still be referenced by in-flight frames.
         m_renderer->WaitForGpu();
         bool allOk = true;
-        for (ShaderReloadable* pass : GetShaderReloadables())
+        for (ShaderReloadable* pass : m_sceneRenderer->GetShaderReloadables())
             allOk &= pass->ReloadShaders();
         if (allOk)
             log::Info("Shaders reloaded");
-    }
-
-    std::vector<ShaderReloadable*> Application::GetShaderReloadables() const
-    {
-        return { m_scenePass.get(), m_tonemapPass.get(), m_deferredPass.get(), m_lightMarkerPass.get(), m_clusterGrid.get() };
     }
 
     void Application::RequestGpuCapture()
@@ -566,8 +392,8 @@ namespace walnut
             const SwapChain& swapChain = m_renderer->GetSwapChain();
             ImGui::Text("%.2f ms  (%.0f FPS)", m_smoothedFrameMs, m_smoothedFrameMs > 0.0f ? 1000.0f / m_smoothedFrameMs : 0.0f);
             ImGui::Text("%u x %u%s", swapChain.GetWidth(), swapChain.GetHeight(), m_renderer->GetVsync() ? ", vsync" : "");
-            if (m_sceneData)
-                ImGui::Text("%u draws, %.2f M triangles", m_sceneData->GetDrawCount(),
+            if (m_sceneRenderer->HasScene())
+                ImGui::Text("%u draws, %.2f M triangles", m_sceneRenderer->GetSceneData()->GetDrawCount(),
                             static_cast<double>(m_scene.indices.size() / 3) / 1e6);
             ImGui::Text("Camera (%.1f, %.1f, %.1f)", m_camera.position.x, m_camera.position.y, m_camera.position.z);
             ImGui::TextDisabled("F1: hide UI");
@@ -594,7 +420,7 @@ namespace walnut
         ImGui::Begin("Settings");
 
         // Shader errors first: they would otherwise be easy to miss inside a closed section.
-        for (const ShaderReloadable* pass : GetShaderReloadables())
+        for (const ShaderReloadable* pass : m_sceneRenderer->GetShaderReloadables())
         {
             const std::string& error = pass->GetLastError();
             if (error.empty())
@@ -606,9 +432,9 @@ namespace walnut
 
         // --- What you tweak most: open by default ----------------------------------------------------------------
 
-        if (m_sceneData && ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen))
+        if (m_sceneRenderer->HasScene() && ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            const bool canTrace = m_caps.raytracing;
+            const bool canTrace = m_sceneRenderer->GetCaps().raytracing;
 
             // Forward or deferred. Deferred can show everything computed from the G-buffer, but not views that need a
             // draw's own inputs (kDebugViewForwardOnly in shaders/shared/DebugViewList.h).
@@ -721,7 +547,7 @@ namespace walnut
                 m_lighting.sunIntensity = defaults.sunIntensity;
                 m_lighting.ambientIntensity = defaults.ambientIntensity;
             }
-            if (m_sceneData && ImGui::TreeNodeEx("Point lights", ImGuiTreeNodeFlags_DefaultOpen))
+            if (m_sceneRenderer->HasScene() && ImGui::TreeNodeEx("Point lights", ImGuiTreeNodeFlags_DefaultOpen))
             {
                 ImGui::SliderInt("Count", &m_lighting.pointLightCount, 0, static_cast<int>(PointLights::kMaxLights), "%d",
                                  ImGuiSliderFlags_Logarithmic);
@@ -735,7 +561,7 @@ namespace walnut
                     ImGui::SameLine();
                     ImGui::RadioButton("Cube maps##pointShadows", &technique, static_cast<int>(PointShadowTechnique::CubeMaps));
                     ImGui::SameLine();
-                    ImGui::BeginDisabled(!m_caps.raytracing);
+                    ImGui::BeginDisabled(!m_sceneRenderer->GetCaps().raytracing);
                     ImGui::RadioButton("Ray traced##pointShadows", &technique, static_cast<int>(PointShadowTechnique::RayTraced));
                     ImGui::EndDisabled();
                     ImGui::SameLine();
@@ -750,21 +576,21 @@ namespace walnut
                 ImGui::EndDisabled();
                 ImGui::SetItemTooltip("The lamps nearest the camera get a cube shadow map (6 x %u^2 depth faces each).",
                                       PointShadowMaps::kFaceSize);
-                ImGui::TextDisabled("%zu cube maps, %zu faces, %u shadow draws (%.0f MB for %u cubes)", m_shadowedLights.size(),
-                                    m_shadowedLights.size() * PointShadowMaps::kFaceCount, m_pointShadowDraws,
-                                    static_cast<double>(m_pointShadowMaps->GetBytes()) / (1024.0 * 1024.0),
+                ImGui::TextDisabled("%zu cube maps, %zu faces, %u shadow draws (%.0f MB for %u cubes)", m_sceneRenderer->GetShadowedLights().size(),
+                                    m_sceneRenderer->GetShadowedLights().size() * PointShadowMaps::kFaceCount, m_sceneRenderer->GetPointShadowDraws(),
+                                    static_cast<double>(m_sceneRenderer->GetPointShadowMaps().GetBytes()) / (1024.0 * 1024.0),
                                     PointShadowMaps::kMaxShadowedLights);
-                if (!m_shadowedLights.empty() && ImGui::TreeNode("Cube shadow map"))
+                if (!m_sceneRenderer->GetShadowedLights().empty() && ImGui::TreeNode("Cube shadow map"))
                 {
-                    m_pointShadowViewSlot = std::clamp(m_pointShadowViewSlot, 0, static_cast<int>(m_shadowedLights.size()) - 1);
-                    ImGui::SliderInt("Cube", &m_pointShadowViewSlot, 0, static_cast<int>(m_shadowedLights.size()) - 1);
+                    m_pointShadowViewSlot = std::clamp(m_pointShadowViewSlot, 0, static_cast<int>(m_sceneRenderer->GetShadowedLights().size()) - 1);
+                    ImGui::SliderInt("Cube", &m_pointShadowViewSlot, 0, static_cast<int>(m_sceneRenderer->GetShadowedLights().size()) - 1);
                     // The six faces as an unfolded cube: -X +Z +X -Z in a row, +Y above +Z, -Y below it.
                     // Reversed-Z perspective depth: bright = close to the lamp, dark = towards its range.
                     const float size = std::min(ImGui::GetContentRegionAvail().x / 4.0f - 4.0f, 96.0f);
                     const uint32_t slot = static_cast<uint32_t>(m_pointShadowViewSlot);
                     static constexpr const char* kFaceNames[PointShadowMaps::kFaceCount] = { "+X", "-X", "+Y", "-Y", "+Z", "-Z" };
                     const auto face = [&](uint32_t f) {
-                        ImGui::Image(static_cast<ImTextureID>(m_pointShadowMaps->GetFaceDebugSrv(slot, f).ptr), ImVec2(size, size));
+                        ImGui::Image(static_cast<ImTextureID>(m_sceneRenderer->GetPointShadowMaps().GetFaceDebugSrv(slot, f).ptr), ImVec2(size, size));
                         ImGui::SetItemTooltip("%s", kFaceNames[f]);
                     };
                     ImGui::Dummy(ImVec2(size, size)); ImGui::SameLine(); face(2);
@@ -786,7 +612,7 @@ namespace walnut
                                           "every pixel visits only its cluster's list.");
                     m_renderSettings.clusteredLighting = clustered != 0;
                 }
-                const uint32_t used = m_clusterGrid->GetUsedIndices();
+                const uint32_t used = m_sceneRenderer->GetClusterGrid().GetUsedIndices();
                 ImGui::Text("Clusters: %ux%ux%u, %u light entries (%.1f per cluster, %.0f%% of the list)",
                             kClusterCountX, kClusterCountY, kClusterCountZ, used,
                             static_cast<double>(used) / kClusterCount,
@@ -807,7 +633,7 @@ namespace walnut
             ImGui::Checkbox("Sun shadows", &m_renderSettings.sunShadows.enabled);
             {
                 // Ray-traced shadows need the TLAS, which exists only with inline ray tracing support.
-                const bool canTrace = m_caps.raytracing;
+                const bool canTrace = m_sceneRenderer->GetCaps().raytracing;
                 ImGui::BeginDisabled(!canTrace);
                 int technique = m_renderSettings.sunShadows.raytraced && canTrace ? 1 : 0;
                 // "##technique" makes the ID unique: the "Shadow map" tree node below has the same visible label,
@@ -858,11 +684,11 @@ namespace walnut
             {
                 // The depth the sun sees: brighter = closer to the sun (reversed-Z).
                 const float extent = GetSunShadowExtent(m_scene.bounds);
-                const uint32_t size = m_shadowMap->GetSize();
+                const uint32_t size = m_sceneRenderer->GetShadowMap().GetSize();
                 ImGui::Text("%u x %u, D32. Covers %.1f m: %.1f cm per texel", size, size, extent,
                             100.0f * extent / static_cast<float>(size));
                 const float width = std::min(ImGui::GetContentRegionAvail().x, 400.0f);
-                ImGui::Image(static_cast<ImTextureID>(m_shadowMap->GetDebugSrvGpuHandle().ptr), ImVec2(width, width));
+                ImGui::Image(static_cast<ImTextureID>(m_sceneRenderer->GetShadowMap().GetDebugSrvGpuHandle().ptr), ImVec2(width, width));
                 ImGui::TreePop();
             }
         }
@@ -919,15 +745,15 @@ namespace walnut
                 const DirectX::XMFLOAT3& hi = m_scene.bounds.max;
                 ImGui::Text("Size %.1f x %.1f x %.1f", hi.x - lo.x, hi.y - lo.y, hi.z - lo.z);
                 ImGui::SetItemTooltip("World bounds (%.2f, %.2f, %.2f) to (%.2f, %.2f, %.2f)", lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
-                if (m_sceneData)
+                if (m_sceneRenderer->HasScene())
                 {
                     ImGui::Text("GPU: %.1f MB of buffers, %u textures (%.1f MB with mips)",
-                                static_cast<double>(m_sceneData->GetBufferBytes()) / (1024.0 * 1024.0), m_sceneData->GetTextureCount(),
-                                static_cast<double>(m_sceneData->GetTextureBytes()) / (1024.0 * 1024.0));
+                                static_cast<double>(m_sceneRenderer->GetSceneData()->GetBufferBytes()) / (1024.0 * 1024.0), m_sceneRenderer->GetSceneData()->GetTextureCount(),
+                                static_cast<double>(m_sceneRenderer->GetSceneData()->GetTextureBytes()) / (1024.0 * 1024.0));
                 }
-                if (m_accelerationStructures)
+                if (const AccelerationStructures* accelerationStructures = m_sceneRenderer->GetAccelerationStructures())
                 {
-                    const AccelerationStructures::Stats& rt = m_accelerationStructures->GetStats();
+                    const AccelerationStructures::Stats& rt = accelerationStructures->GetStats();
                     constexpr double kMB = 1024.0 * 1024.0;
                     ImGui::Text("Ray tracing: %u BLASes %.1f MB (compactable to %.1f MB)", rt.blasCount,
                                 static_cast<double>(rt.blasBytes) / kMB, static_cast<double>(rt.blasCompactedBytes) / kMB);
