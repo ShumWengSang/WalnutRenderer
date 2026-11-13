@@ -38,35 +38,9 @@ namespace walnut
         if (options.pixGpuCapturer)
             pix::LoadGpuCapturer();
 
-        // Converted into the engine's Scene and kept on the CPU; the GPU doesn't see it yet. The glTF document is
-        // freed right after, since everything needed was copied out of it.
-        m_sceneFile.path = ResolveAssetPath(options.scene);
-        if (!std::filesystem::is_regular_file(m_sceneFile.path))
-        {
-            m_sceneFile.error = "not found: run tools\\fetch-assets.ps1";
-            log::Warn("Scene not found: {} (run tools\\fetch-assets.ps1 to download Sponza)", ToUtf8(m_sceneFile.path.wstring()));
-        }
-        else
-        {
-            const auto loadStart = std::chrono::steady_clock::now();
-            const std::unique_ptr<GltfDocument> document = GltfDocument::Load(m_sceneFile.path, m_sceneFile.error);
-            m_sceneFile.loadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - loadStart).count();
-            if (document)
-            {
-                m_sceneFile.summary = SummarizeGltf(document->GetData());
-                log::Info("Scene: {} (parsed in {:.1f} ms)", ToUtf8(m_sceneFile.path.wstring()), m_sceneFile.loadMs);
-                LogGltfSummary(*m_sceneFile.summary);
-
-                const auto buildStart = std::chrono::steady_clock::now();
-                m_scene = BuildSceneFromGltf(document->GetData(), m_sceneFile.path.parent_path());
-                m_sceneFile.buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - buildStart).count();
-                log::Info("Scene built in {:.1f} ms:", m_sceneFile.buildMs);
-                LogSceneStats(m_scene);
-            }
-            else
-                log::Error("Scene {} failed to load: {}", ToUtf8(m_sceneFile.path.wstring()), m_sceneFile.error);
-        }
-
+        LoadedScene loaded = LoadSceneFile(ResolveAssetPath(options.scene));
+        m_scene = std::move(loaded.scene);
+        m_sceneFile = std::move(loaded.info);
         m_window = std::make_unique<Window>(WindowDesc{ L"WalnutRenderer", 1280, 720 });
 
         // Register input before ImGui so input always sees every message, even ones ImGui consumes.
@@ -104,14 +78,9 @@ namespace walnut
             PlaceStartCamera(m_homeCamera, m_scene.bounds);
             m_camera = m_homeCamera;
             // Cross the scene's bounding sphere in about 8 seconds.
-            const float diameter = m_scene.bounds.Diagonal();
-            m_cameraController.moveSpeed = std::clamp(diameter / 8.0f, 0.1f, 100.0f);
-
-            // Lamps scaled to the scene: Sponza (37 m across) gets ~2.6 m of range, small pools of light that only
-            // overlap where lamps are close. Intensity grows with range^2, so the pools look the same at any scale.
+            m_cameraController.moveSpeed = std::clamp(m_scene.bounds.Diagonal() / 8.0f, 0.1f, 100.0f);
             m_pointLights.Generate(m_scene.bounds);
-            m_lighting.pointLightRange = 0.07f * diameter;
-            m_lighting.pointLightIntensity = 0.3f * m_lighting.pointLightRange * m_lighting.pointLightRange;
+            m_lighting.FitToScene(m_scene.bounds);
         }
         m_imgui = std::make_unique<ImGuiLayer>(*m_window, *m_renderer);
         m_settingsPanel = std::make_unique<SettingsPanel>(SettingsPanel::Context{

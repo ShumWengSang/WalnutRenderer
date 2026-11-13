@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -67,4 +68,24 @@ namespace walnut
     // primitive and one SceneInstance per (node, primitive) pair, all in the engine's left-handed space. Images
     // that materials use are decoded (relative URIs resolved against 'baseDirectory') and given mip chains.
     Scene BuildSceneFromGltf(const cgltf_data& data, const std::filesystem::path& baseDirectory);
+
+    // A scene file after loading: what it contained (for the log and the UI) and how long it took.
+    struct SceneFileInfo
+    {
+        std::filesystem::path path;
+        std::optional<GltfSummary> summary; // set when the file parsed
+        std::string error;                  // why it didn't, otherwise
+        double loadMs = 0.0;  // parsing the file
+        double buildMs = 0.0; // converting it into a Scene (decoding images included)
+    };
+
+    struct LoadedScene
+    {
+        Scene scene; // empty if the file couldn't be loaded
+        SceneFileInfo info;
+    };
+
+    // Parses a glTF file, logs what it contains and converts it into a Scene, kept on the CPU (the GPU doesn't see it
+    // yet). The glTF document is freed before returning: everything needed was copied out of it.
+    LoadedScene LoadSceneFile(const std::filesystem::path& path);
 }

@@ -27,6 +27,11 @@ namespace walnut
         float pointLightIntensity = 8.0f; // at 1 m, a surface facing the lamp receives this much (falls off as 1/d^2)
         bool animatePointLights = true;
 
+        // Scales the point lights' range and intensity to the scene: Sponza (37 m across) gets ~2.6 m of range, small
+        // pools of light that only overlap where lamps are close. Intensity grows with range^2, so the pools look
+        // the same at any scale.
+        void FitToScene(const Aabb& bounds);
+
         // Unit vector from a surface towards the sun.
         DirectX::XMFLOAT3 GetSunDirection() const;
 

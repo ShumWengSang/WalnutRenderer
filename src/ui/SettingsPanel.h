@@ -19,15 +19,6 @@ namespace walnut
     struct SceneLighting;
     struct TonemapSettings;
 
-    // The loaded scene file, for the Scene section.
-    struct SceneFileInfo
-    {
-        std::filesystem::path path;        // the --scene argument resolved against the asset directory
-        std::optional<GltfSummary> summary; // set when the file parsed
-        std::string error;                 // why it didn't, otherwise
-        double loadMs = 0.0;
-        double buildMs = 0.0;
-    };
 
     // The "Settings" window (one function per section) and the stats overlay. It edits the settings structs in
     // place; the frame reads them afterwards.

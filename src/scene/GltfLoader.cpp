@@ -529,4 +529,36 @@ namespace walnut
             extensions += (extensions.empty() ? "" : ", ") + extension;
         log::Info("  Extensions used: {}", extensions.empty() ? "none" : extensions);
     }
+
+    LoadedScene LoadSceneFile(const std::filesystem::path& path)
+    {
+        LoadedScene loaded;
+        SceneFileInfo& info = loaded.info;
+        info.path = path;
+        if (!std::filesystem::is_regular_file(path))
+        {
+            info.error = "not found: run tools\\fetch-assets.ps1";
+            log::Warn("Scene not found: {} (run tools\\fetch-assets.ps1 to download Sponza)", ToUtf8(path.wstring()));
+            return loaded;
+        }
+
+        const auto loadStart = std::chrono::steady_clock::now();
+        const std::unique_ptr<GltfDocument> document = GltfDocument::Load(path, info.error);
+        info.loadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - loadStart).count();
+        if (!document)
+        {
+            log::Error("Scene {} failed to load: {}", ToUtf8(path.wstring()), info.error);
+            return loaded;
+        }
+        info.summary = SummarizeGltf(document->GetData());
+        log::Info("Scene: {} (parsed in {:.1f} ms)", ToUtf8(path.wstring()), info.loadMs);
+        LogGltfSummary(*info.summary);
+
+        const auto buildStart = std::chrono::steady_clock::now();
+        loaded.scene = BuildSceneFromGltf(document->GetData(), path.parent_path());
+        info.buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - buildStart).count();
+        log::Info("Scene built in {:.1f} ms:", info.buildMs);
+        LogSceneStats(loaded.scene);
+        return loaded;
+    }
 }

@@ -14,6 +14,12 @@ namespace walnut
         return { cosElevation * std::sin(sunAzimuth), std::sin(sunElevation), cosElevation * std::cos(sunAzimuth) };
     }
 
+    void SceneLighting::FitToScene(const Aabb& bounds)
+    {
+        pointLightRange = 0.07f * bounds.Diagonal();
+        pointLightIntensity = 0.3f * pointLightRange * pointLightRange;
+    }
+
     float GetSunShadowExtent(const Aabb& bounds)
     {
         return std::max(bounds.Diagonal(), 0.01f);
