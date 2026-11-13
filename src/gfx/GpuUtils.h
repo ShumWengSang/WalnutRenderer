@@ -2,6 +2,7 @@
 
 #include "gfx/D3D12Common.h"
 
+#include <cstdint>
 #include <format>
 #include <source_location>
 #include <stdexcept>
