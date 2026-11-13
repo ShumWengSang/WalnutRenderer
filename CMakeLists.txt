@@ -77,6 +77,8 @@ set(WALNUT_SOURCES
     src/renderer/LightMarkerPass.h
     src/renderer/PointShadowMaps.cpp
     src/renderer/PointShadowMaps.h
+    src/renderer/RenderSettings.cpp
+    src/renderer/RenderSettings.h
     src/renderer/Renderer.cpp
     src/renderer/Renderer.h
     src/renderer/SceneGpuData.cpp

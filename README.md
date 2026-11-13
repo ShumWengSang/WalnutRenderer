@@ -122,7 +122,8 @@ src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapCha
                           Buffer, Texture, UploadContext (staging ring), FrameAllocator (per-frame constants),
                           MipChain, ShaderCompiler, PipelineBuilder (+ ShaderReloadable: F5), Pix, Views (view descriptions), Barriers (named barrier states +
                           BarrierBatch)
-src/renderer/             Renderer (frames in flight, frame constants, pass setup), SceneGpuData (the scene's buffers,
+src/renderer/             Renderer (frames in flight, frame constants, pass setup), RenderSettings (settings, and
+                          ResolveFrameSettings: each frame's decisions), SceneGpuData (the scene's buffers,
                           textures and draws), ScenePass (its PSOs, one recipe per way of drawing it), DebugViews, ShadowMap,
                           AccelerationStructures (BLAS/TLAS), GBuffer, DeferredPass, LightBuffer, ClusterGrid,
                           LightMarkerPass, PointShadowMaps, TonemapPass

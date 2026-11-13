@@ -208,45 +208,45 @@ namespace walnut
     }
 
     void ScenePass::Render(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
-                           const SceneViewSettings& settings) const
+                           const FrameSettings& frame) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"ScenePass");
-        RecordDraws(commandList, scene, settings, settings.depthPrepass ? Kind::ForwardAfterPrepass : Kind::Forward);
+        RecordDraws(commandList, scene, frame, frame.depthPrepass ? Kind::ForwardAfterPrepass : Kind::Forward);
     }
 
     void ScenePass::RenderShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
-                                      const SceneViewSettings& settings) const
+                                      const FrameSettings& frame) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"Shadow casters");
-        RecordDraws(commandList, scene, settings, Kind::SunShadow);
+        RecordDraws(commandList, scene, frame, Kind::SunShadow);
     }
 
     void ScenePass::RenderDepthPrepass(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
-                                       const SceneViewSettings& settings) const
+                                       const FrameSettings& frame) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"Depth pre-pass");
-        RecordDraws(commandList, scene, settings, Kind::DepthPrepass);
+        RecordDraws(commandList, scene, frame, Kind::DepthPrepass);
     }
 
     void ScenePass::RenderGBuffer(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
-                                  const SceneViewSettings& settings) const
+                                  const FrameSettings& frame) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"G-buffer");
-        RecordDraws(commandList, scene, settings, Kind::GBuffer);
+        RecordDraws(commandList, scene, frame, Kind::GBuffer);
     }
 
     uint32_t ScenePass::RenderPointShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
-                                               const SceneViewSettings& settings,
+                                               const FrameSettings& frame,
                                                D3D12_GPU_VIRTUAL_ADDRESS faceViewProjection,
                                                const DirectX::XMFLOAT3& lightPosition, float lightRange) const
     {
         commandList->SetGraphicsRootConstantBufferView(RootParam::DrawData, faceViewProjection);
         const CullSphere cull{ lightPosition, lightRange };
-        return RecordDraws(commandList, scene, settings, Kind::PointShadow, &cull);
+        return RecordDraws(commandList, scene, frame, Kind::PointShadow, &cull);
     }
 
     uint32_t ScenePass::RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
-                                    const SceneViewSettings& settings, Kind kind, const CullSphere* cull) const
+                                    const FrameSettings& frame, Kind kind, const CullSphere* cull) const
     {
         // The camera and lights come from the frame constants (b2), which the renderer has already bound.
         // Everything else shared by all draws is set once here.
@@ -255,10 +255,10 @@ namespace walnut
             .vertexBufferIndex = bindings.vertices,
             .instanceBufferIndex = bindings.instances,
             .materialBufferIndex = bindings.materials,
-            .debugView = static_cast<uint32_t>(settings.debugView),
+            .debugView = static_cast<uint32_t>(frame.view),
             .instanceIndex = 0,
             .indexBufferIndex = bindings.indices,
-            .normalMapping = static_cast<uint32_t>(settings.normalMapping),
+            .normalMapping = static_cast<uint32_t>(frame.normalMapping),
         };
         commandList->SetGraphicsRoot32BitConstants(RootParam::DrawConstants, sizeof(drawConstants) / sizeof(uint32_t),
                                                    &drawConstants, 0);
@@ -280,9 +280,9 @@ namespace walnut
             // are set to rays (the frame constants pick sun / points).
             const PipelineKey key = Normalize({
                 .kind = kind,
-                .raytraced = settings.raytracedShadows || settings.raytracedPointShadows,
-                .alphaTest = settings.alphaTest && draw.alphaTest,
-                .cullNone = !settings.backfaceCulling || draw.doubleSided,
+                .raytraced = frame.raytracedVariant,
+                .alphaTest = frame.alphaTest && draw.alphaTest,
+                .cullNone = !frame.backfaceCulling || draw.doubleSided,
             });
             ID3D12PipelineState* pipeline = m_pipelines[SlotOf(key)].Get();
             if (pipeline != currentPipeline)

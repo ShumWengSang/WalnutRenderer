@@ -7,16 +7,16 @@
 
 WALNUT_NAMESPACE_BEGIN
 
-// ShadingModel (scene/Lighting.h): how surfaces respond to light.
+// ShadingModel (renderer/RenderSettings.h): how surfaces respond to light.
 WALNUT_CONST(kShadingLambert, 0);
 WALNUT_CONST(kShadingPbr, 1);
 
-// PointShadowTechnique (scene/Lighting.h): where point lights get their shadows.
+// PointShadowTechnique (renderer/RenderSettings.h): where point lights get their shadows.
 WALNUT_CONST(kPointShadowOff, 0);
 WALNUT_CONST(kPointShadowCubeMaps, 1);
 WALNUT_CONST(kPointShadowRayTraced, 2);
 
-// NormalMapping (renderer/ScenePass.h): where the tangent frame for normal mapping comes from.
+// NormalMapping (renderer/RenderSettings.h): where the tangent frame for normal mapping comes from.
 WALNUT_CONST(kNormalMappingOff, 0);
 WALNUT_CONST(kNormalMappingMesh, 1);
 WALNUT_CONST(kNormalMappingDerived, 2);

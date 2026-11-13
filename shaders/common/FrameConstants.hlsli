@@ -11,7 +11,7 @@ struct FrameConstants
     float3 sunDirection;    // world space, unit length, pointing towards the sun
     uint   shadowsEnabled;
     float3 sunIlluminance;  // linear
-    uint   shadingModel;    // 0 = Lambert, 1 = PBR (ShadingModel in Lighting.h)
+    uint   shadingModel;    // 0 = Lambert, 1 = PBR (ShadingModel in RenderSettings.h)
     float3 skyRadiance;     // linear: ambient light from above the horizon
     float  roughnessOverride; // >= 0: replaces every material's roughness
     float3 groundRadiance;  // linear: ambient light from below it
@@ -48,7 +48,7 @@ struct FrameConstants
     uint   padding6;
 
     uint   sunShadowRaytraced;   // 1: the sun's shadow from a ray (ray-traced variant only); 0: from its shadow map
-    uint   pointShadowTechnique; // 0 off, 1 cube maps, 2 ray traced (PointShadowTechnique in Lighting.h)
+    uint   pointShadowTechnique; // 0 off, 1 cube maps, 2 ray traced (PointShadowTechnique in RenderSettings.h)
     uint2  padding7;
 };
 ConstantBuffer<FrameConstants> g_frame : register(b2);

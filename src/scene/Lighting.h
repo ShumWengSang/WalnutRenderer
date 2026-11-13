@@ -1,28 +1,12 @@
 #pragma once
 
 #include "scene/Bounds.h"
-#include "shared/Constants.h"
 
 #include <DirectXMath.h>
 
 namespace walnut
 {
-    // Where point lights get their shadows. Values shared with the shaders (shared/Constants.h).
-    enum class PointShadowTechnique : uint32_t
-    {
-        Off = kPointShadowOff,             // lamps light through everything
-        CubeMaps = kPointShadowCubeMaps,   // the nearest lamps (the budget) get a cube shadow map
-        RayTraced = kPointShadowRayTraced, // every lamp: one shadow ray per lamp that reaches the pixel (needs inline ray tracing)
-    };
-
-    // How surfaces respond to light. Values shared with the shaders (shared/Constants.h).
-    enum class ShadingModel : uint32_t
-    {
-        Lambert = kShadingLambert, // matte only: baseColor / pi (Step 1-2)
-        Pbr = kShadingPbr,         // glTF metallic-roughness: Lambert diffuse + Cook-Torrance GGX specular (Brdf.hlsli)
-    };
-
-    // The scene's light: one sun (a directional light: infinitely far away, so every point receives it from the
+    // The scene's light (what the world contains; how it's rendered is RenderSettings): one sun (a directional light: infinitely far away, so every point receives it from the
     // same direction) and an ambient sky/ground term standing in for all the light bouncing around.
     struct SceneLighting
     {
@@ -35,7 +19,6 @@ namespace walnut
         DirectX::XMFLOAT3 skyColor = { 0.55f, 0.65f, 0.85f };    // linear, sky blue
         DirectX::XMFLOAT3 groundColor = { 0.40f, 0.35f, 0.28f }; // linear, warm stone
         float ambientIntensity = 0.25f;
-        ShadingModel shadingModel = ShadingModel::Pbr;
 
         // Point lights (PointLights): how many of the generated lamps to use, and their shared range and intensity.
         // Range and intensity are set to fit the scene's size when it loads.
@@ -43,20 +26,6 @@ namespace walnut
         float pointLightRange = 4.0f;     // meters
         float pointLightIntensity = 8.0f; // at 1 m, a surface facing the lamp receives this much (falls off as 1/d^2)
         bool animatePointLights = true;
-        bool showPointLightMarkers = true; // a small glowing dot at each lamp
-        bool clusteredLighting = true;     // each pixel visits only its cluster's lights (false: every light)
-
-        // Point light shadows (Step 6): the lamps nearest the camera get a cube shadow map, up to this many
-        // (at most PointShadowMaps::kMaxShadowedLights). 0: no point light shadows.
-        int pointShadowBudget = 16;
-        PointShadowTechnique pointShadowTechnique = PointShadowTechnique::CubeMaps;
-
-        // Shadow-map bias, in shadow-map texels (see SunShadow in shaders/common/SunShadow.hlsli).
-        float shadowConstantBias = 0.5f;
-        float shadowSlopeBias = 1.0f;
-        float shadowNormalOffset = 1.0f;
-        // Shadow edge softness: -1 = hard (one texel, yes/no), 0 = hardware 2x2 filter, r = (2r+1)^2 filtered taps.
-        int shadowFilterRadius = 1;
 
         // Unit vector from a surface towards the sun.
         DirectX::XMFLOAT3 GetSunDirection() const;

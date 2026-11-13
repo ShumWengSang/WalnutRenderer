@@ -64,7 +64,7 @@ namespace walnut
 
         // Shadow techniques (M3). One ray-traced shader variant serves any mix, so these choose at run time.
         uint32_t sunShadowRaytraced = 0;   // 1: sun shadow from a ray; 0: from the shadow map
-        uint32_t pointShadowTechnique = 1; // PointShadowTechnique (Lighting.h)
+        uint32_t pointShadowTechnique = 1; // PointShadowTechnique (RenderSettings.h)
         uint32_t padding7[2] = {};
     };
     static_assert(sizeof(FrameConstants) == 448);

@@ -2,8 +2,7 @@
 
 #include "gfx/D3D12Common.h"
 #include "gfx/PipelineBuilder.h"
-#include "renderer/DebugViews.h"
-#include "shared/Constants.h"
+#include "renderer/RenderSettings.h"
 
 #include <DirectXMath.h>
 
@@ -16,36 +15,6 @@ namespace walnut
     class Device;
     class SceneGpuData;
     class ShaderCompiler;
-
-    // Where the tangent frame for normal mapping comes from. Values shared with scene.hlsl (shared/Constants.h).
-    enum class NormalMapping : uint32_t
-    {
-        Off = kNormalMappingOff,         // ignore normal maps: the interpolated vertex normal only
-        Mesh = kNormalMappingMesh,       // TBN from the glTF TANGENT attribute (derived per pixel for meshes without one)
-        Derived = kNormalMappingDerived, // TBN always derived per pixel from position/uv screen-space derivatives
-    };
-
-    // How the scene's pixels get their color.
-    enum class RenderPath : uint32_t
-    {
-        Forward,  // one pass: each draw's pixel shader samples the material and lights it
-        Deferred, // the draws only write the material to the G-buffer; a fullscreen pass reads it (K2/K3)
-    };
-
-    struct SceneViewSettings
-    {
-        RenderPath renderPath = RenderPath::Forward;
-        SceneDebugView debugView = SceneDebugView::Lit;
-        NormalMapping normalMapping = NormalMapping::Mesh;
-        // Negative: use the material's value. 0..1: every material uses this instead (sent as frame constants).
-        float roughnessOverride = -1.0f;
-        float metallicOverride = -1.0f;
-        bool backfaceCulling = true; // for single-sided materials; double-sided ones are never culled
-        bool alphaTest = true;       // cut out alpha-mask materials; off draws them as opaque, to compare
-        bool raytracedShadows = false; // sun shadows from ray queries instead of the shadow map (if supported)
-        bool raytracedPointShadows = false; // point light shadows from ray queries (also needs the ray-traced variant)
-        bool depthPrepass = true;      // draw depth first, then shade each pixel once (depth EQUAL)
-    };
 
     // Draws a scene's GPU data (SceneGpuData) in each way the frame needs: forward shading, the G-buffer, the depth
     // pre-pass and the shadow depth passes. It owns the PSOs for all of them; the vertex shader pulls vertices and
@@ -72,22 +41,22 @@ namespace walnut
 
         // All of these expect the bindless state (descriptor heap + root signature) and the frame constants to be
         // bound already.
-        void Render(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene, const SceneViewSettings& settings) const;
+        void Render(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene, const FrameSettings& frame) const;
         // Every instance into the bound shadow map: depth only, from the sun (frame constants' sunViewProjection).
         void RenderShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
-                               const SceneViewSettings& settings) const;
-        // Every instance into the bound depth buffer from the camera, depth only. With settings.depthPrepass,
-        // Render() must follow with the same settings: it then shades only the fragments matching this depth.
+                               const FrameSettings& frame) const;
+        // Every instance into the bound depth buffer from the camera, depth only. With frame.depthPrepass, Render()
+        // must follow with the same settings: it then shades only the fragments matching this depth.
         void RenderDepthPrepass(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
-                                const SceneViewSettings& settings) const;
+                                const FrameSettings& frame) const;
         // Deferred shading: writes every visible pixel's material into the bound G-buffer. Needs the depth pre-pass
         // first (it tests depth EQUAL).
         void RenderGBuffer(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
-                           const SceneViewSettings& settings) const;
+                           const FrameSettings& frame) const;
         // One face of a point light's cube shadow map (M1): depth only, with the face camera's view-projection at b1.
         // Draws only the instances whose bounds reach the light's sphere. Returns how many draws it recorded.
         uint32_t RenderPointShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
-                                        const SceneViewSettings& settings, D3D12_GPU_VIRTUAL_ADDRESS faceViewProjection,
+                                        const FrameSettings& frame, D3D12_GPU_VIRTUAL_ADDRESS faceViewProjection,
                                         const DirectX::XMFLOAT3& lightPosition, float lightRange) const;
 
     private:
@@ -115,7 +84,7 @@ namespace walnut
         // Binds the geometry and issues every draw (or those touching 'cull'), with the PSOs of the given kind.
         // Returns how many draws it recorded.
         uint32_t RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
-                             const SceneViewSettings& settings, Kind kind, const CullSphere* cull = nullptr) const;
+                             const FrameSettings& frame, Kind kind, const CullSphere* cull = nullptr) const;
 
         DXGI_FORMAT m_rtvFormat;
         DXGI_FORMAT m_dsvFormat;

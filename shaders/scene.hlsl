@@ -24,7 +24,7 @@ struct DrawConstants
     uint debugView;           // SceneDebugView (shared/DebugViewList.h)
     uint instanceIndex;       // which instance this draw is
     uint indexBufferIndex;    // descriptor heap slot of the index buffer as StructuredBuffer<uint> (ray hits)
-    uint normalMapping;       // NormalMapping in ScenePass.h (values: kNormalMapping*)
+    uint normalMapping;       // NormalMapping in RenderSettings.h (values: kNormalMapping*)
 };
 ConstantBuffer<DrawConstants> g_draw : register(b0);
 

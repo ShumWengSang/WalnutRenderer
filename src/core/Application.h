@@ -13,6 +13,7 @@
 #include "renderer/LightBuffer.h"
 #include "renderer/LightMarkerPass.h"
 #include "renderer/PointShadowMaps.h"
+#include "renderer/RenderSettings.h"
 #include "renderer/TonemapPass.h"
 #include "scene/Assets.h"
 #include "scene/Camera.h"
@@ -88,10 +89,11 @@ namespace walnut
         std::unique_ptr<ImGuiLayer> m_imgui;
         Timer m_timer;
 
-        // Demo state
-        float m_clearColor[4] = {}; // starts as Renderer::kDefaultClearColor (the scene target's fast-clear color)
+        // Settings (renderer/RenderSettings.h) and what the scene contains
+        RenderSettings m_renderSettings;
+        DebugSettings m_debugSettings;
+        RenderCaps m_caps;
         TonemapSettings m_tonemapSettings;
-        SceneViewSettings m_sceneView;
         SceneLighting m_lighting;
         PointLights m_pointLights;
         std::vector<PointLightGpu> m_pointLightData; // this frame's lights, rebuilt every frame
@@ -99,7 +101,6 @@ namespace walnut
         uint32_t m_pointShadowDraws = 0;             // draws recorded into the cube shadow maps last frame
         int m_pointShadowViewSlot = 0;               // which cube the UI shows
 
-        bool m_shadowsEnabled = true;
         float m_roughnessOverrideValue = 0.3f; // slider values kept while an override is switched off
         float m_metallicOverrideValue = 1.0f;
         Camera m_camera;

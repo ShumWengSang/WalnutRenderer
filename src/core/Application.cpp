@@ -94,7 +94,7 @@ namespace walnut
         rendererDesc.device.enableGpuValidation = options.gpuValidation;
         rendererDesc.vsync = true;
         m_renderer = std::make_unique<Renderer>(*m_window, rendererDesc);
-        std::copy(std::begin(Renderer::kDefaultClearColor), std::end(Renderer::kDefaultClearColor), m_clearColor);
+        std::copy(std::begin(Renderer::kDefaultClearColor), std::end(Renderer::kDefaultClearColor), m_debugSettings.clearColor);
 
 #ifdef _DEBUG
         constexpr bool kShaderDebugInfo = true;
@@ -157,6 +157,7 @@ namespace walnut
         }
         else if (m_sceneData)
             log::Warn("Inline ray tracing (tier 1.1) not supported: ray-traced features disabled");
+        m_caps.raytracing = m_accelerationStructures != nullptr;
 
         m_imgui = std::make_unique<ImGuiLayer>(*m_window, *m_renderer);
 
@@ -184,41 +185,41 @@ namespace walnut
         std::vector<E> views;
         for (const DebugViewInfo& view : kDebugViews)
             views.push_back({ view.setting, static_cast<int>(view.view) });
-        s.AddEnum("view.show", &m_sceneView.debugView, std::move(views));
-        s.AddEnum("view.path", &m_sceneView.renderPath, { E{ "forward", 0 }, E{ "deferred", 1 } });
-        s.AddBool("view.prepass", &m_sceneView.depthPrepass);
-        s.AddEnum("view.normalMapping", &m_sceneView.normalMapping, { E{ "off", 0 }, E{ "mesh", 1 }, E{ "derived", 2 } });
-        s.AddBool("view.alphaTest", &m_sceneView.alphaTest);
-        s.AddBool("view.backfaceCulling", &m_sceneView.backfaceCulling);
-        s.AddFloat("view.roughnessOverride", &m_sceneView.roughnessOverride);
-        s.AddFloat("view.metallicOverride", &m_sceneView.metallicOverride);
+        s.AddEnum("view.show", &m_debugSettings.view, std::move(views));
+        s.AddEnum("view.path", &m_renderSettings.path, { E{ "forward", 0 }, E{ "deferred", 1 } });
+        s.AddBool("view.prepass", &m_renderSettings.depthPrepass);
+        s.AddEnum("view.normalMapping", &m_renderSettings.normalMapping, { E{ "off", 0 }, E{ "mesh", 1 }, E{ "derived", 2 } });
+        s.AddBool("view.alphaTest", &m_renderSettings.alphaTest);
+        s.AddBool("view.backfaceCulling", &m_renderSettings.backfaceCulling);
+        s.AddFloat("view.roughnessOverride", &m_debugSettings.roughnessOverride);
+        s.AddFloat("view.metallicOverride", &m_debugSettings.metallicOverride);
 
-        s.AddEnum("lighting.shading", &m_lighting.shadingModel, { E{ "lambert", 0 }, E{ "pbr", 1 } });
+        s.AddEnum("lighting.shading", &m_renderSettings.shading, { E{ "lambert", 0 }, E{ "pbr", 1 } });
         s.AddAngle("sun.azimuth", &m_lighting.sunAzimuth);
         s.AddAngle("sun.elevation", &m_lighting.sunElevation);
         s.AddFloat("sun.intensity", &m_lighting.sunIntensity);
-        s.AddBool("sun.shadows", &m_shadowsEnabled);
+        s.AddBool("sun.shadows", &m_renderSettings.sunShadows.enabled);
         s.AddCustom("sun.technique",
                     [this](std::string_view v) {
-                        if (v == "map") { m_sceneView.raytracedShadows = false; return true; }
-                        if (v == "ray") { m_sceneView.raytracedShadows = true; return true; }
+                        if (v == "map") { m_renderSettings.sunShadows.raytraced = false; return true; }
+                        if (v == "ray") { m_renderSettings.sunShadows.raytraced = true; return true; }
                         return false;
                     },
-                    [this] { return std::string(m_sceneView.raytracedShadows ? "ray" : "map"); });
-        s.AddFloat("sun.constantBias", &m_lighting.shadowConstantBias);
-        s.AddFloat("sun.slopeBias", &m_lighting.shadowSlopeBias);
-        s.AddFloat("sun.normalOffset", &m_lighting.shadowNormalOffset);
-        s.AddInt("sun.softness", &m_lighting.shadowFilterRadius, -1, 4);
+                    [this] { return std::string(m_renderSettings.sunShadows.raytraced ? "ray" : "map"); });
+        s.AddFloat("sun.constantBias", &m_renderSettings.sunShadows.constantBias);
+        s.AddFloat("sun.slopeBias", &m_renderSettings.sunShadows.slopeBias);
+        s.AddFloat("sun.normalOffset", &m_renderSettings.sunShadows.normalOffset);
+        s.AddInt("sun.softness", &m_renderSettings.sunShadows.filterRadius, -1, 4);
         s.AddFloat("ambient.intensity", &m_lighting.ambientIntensity);
 
         s.AddInt("points.count", &m_lighting.pointLightCount, 0, static_cast<int>(PointLights::kMaxLights));
         s.AddFloat("points.range", &m_lighting.pointLightRange);
         s.AddFloat("points.intensity", &m_lighting.pointLightIntensity);
         s.AddBool("points.animate", &m_lighting.animatePointLights);
-        s.AddBool("points.markers", &m_lighting.showPointLightMarkers);
-        s.AddBool("points.clustered", &m_lighting.clusteredLighting);
-        s.AddEnum("points.shadows", &m_lighting.pointShadowTechnique, { E{ "off", 0 }, E{ "cube", 1 }, E{ "ray", 2 } });
-        s.AddInt("points.budget", &m_lighting.pointShadowBudget, 0, static_cast<int>(PointShadowMaps::kMaxShadowedLights));
+        s.AddBool("points.markers", &m_debugSettings.lightMarkers);
+        s.AddBool("points.clustered", &m_renderSettings.clusteredLighting);
+        s.AddEnum("points.shadows", &m_renderSettings.pointShadows.technique, { E{ "off", 0 }, E{ "cube", 1 }, E{ "ray", 2 } });
+        s.AddInt("points.budget", &m_renderSettings.pointShadows.budget, 0, static_cast<int>(PointShadowMaps::kMaxShadowedLights));
 
         s.AddFloat("tonemap.exposure", &m_tonemapSettings.exposureStops);
         s.AddEnum("tonemap.curve", &m_tonemapSettings.op, { E{ "clamp", 0 }, E{ "reinhard", 1 }, E{ "aces", 2 } });
@@ -307,6 +308,9 @@ namespace walnut
                 DrawUI(deltaSeconds);
             }
 
+            // This frame's decisions, from the settings the UI just changed.
+            const FrameSettings frame = ResolveFrameSettings(m_renderSettings, m_debugSettings, m_caps);
+
             // The aspect ratio comes from the back buffer, so the image doesn't stretch when the window resizes.
             const SwapChain& swapChain = m_renderer->GetSwapChain();
             const float aspect = static_cast<float>(swapChain.GetWidth()) / static_cast<float>(swapChain.GetHeight());
@@ -326,21 +330,11 @@ namespace walnut
             frameConstants.clusterFar = std::max(m_camera.nearZ * 2.0f, m_scene.bounds.FarthestCornerDistance(m_camera.position));
             frameConstants.clusterGridIndex = m_clusterGrid->GetGridSrvIndex();
             frameConstants.clusterLightIndicesIndex = m_clusterGrid->GetIndicesSrvIndex();
-            frameConstants.clusteredLighting = m_lighting.clusteredLighting ? 1u : 0u;
+            frameConstants.clusteredLighting = m_renderSettings.clusteredLighting ? 1u : 0u;
             frameConstants.pointShadowMapIndex = m_pointShadowMaps->GetCubeArraySrvIndex();
             frameConstants.pointShadowNearScale = PointShadowMaps::kNearScale;
-            // Ray-traced shadows need the TLAS; without it, rays fall back to the shadow map / cube maps.
-            const bool canTrace = m_accelerationStructures != nullptr;
-            if (m_lighting.pointShadowTechnique == PointShadowTechnique::RayTraced && !canTrace)
-                m_lighting.pointShadowTechnique = PointShadowTechnique::CubeMaps;
-            // The point shadow difference view lights with cube maps and also traces rays to compare: cube maps for
-            // this frame, in the ray-traced shader variant.
-            const bool pointShadowDifference = canTrace && m_sceneView.debugView == SceneDebugView::PointShadowDifference;
-            const PointShadowTechnique pointShadowTechnique = pointShadowDifference ? PointShadowTechnique::CubeMaps
-                                                                                     : m_lighting.pointShadowTechnique;
-            m_sceneView.raytracedPointShadows = pointShadowDifference || pointShadowTechnique == PointShadowTechnique::RayTraced;
-            frameConstants.sunShadowRaytraced = m_sceneView.raytracedShadows && canTrace ? 1u : 0u;
-            frameConstants.pointShadowTechnique = static_cast<uint32_t>(pointShadowTechnique);
+            frameConstants.sunShadowRaytraced = frame.sunRaytraced ? 1u : 0u;
+            frameConstants.pointShadowTechnique = static_cast<uint32_t>(frame.pointShadows);
             frameConstants.cameraPosition = m_camera.position;
             frameConstants.sunDirection = m_lighting.GetSunDirection();
             const auto scaled = [](const DirectX::XMFLOAT3& color, float intensity) {
@@ -349,23 +343,23 @@ namespace walnut
             frameConstants.sunIlluminance = scaled(m_lighting.sunColor, m_lighting.sunIntensity);
             frameConstants.skyRadiance = scaled(m_lighting.skyColor, m_lighting.ambientIntensity);
             frameConstants.groundRadiance = scaled(m_lighting.groundColor, m_lighting.ambientIntensity);
-            frameConstants.roughnessOverride = m_sceneView.roughnessOverride;
-            frameConstants.metallicOverride = m_sceneView.metallicOverride;
-            frameConstants.shadingModel = static_cast<uint32_t>(m_lighting.shadingModel);
+            frameConstants.roughnessOverride = m_debugSettings.roughnessOverride;
+            frameConstants.metallicOverride = m_debugSettings.metallicOverride;
+            frameConstants.shadingModel = static_cast<uint32_t>(frame.shading);
             DirectX::XMStoreFloat4x4(&frameConstants.sunViewProjection,
                                      m_lighting.GetSunViewProjection(m_scene.bounds));
             frameConstants.shadowMapIndex = m_shadowMap->GetSrvIndex();
-            frameConstants.shadowsEnabled = m_shadowsEnabled ? 1u : 0u;
+            frameConstants.shadowsEnabled = frame.sunShadows ? 1u : 0u;
             const float shadowExtent = GetSunShadowExtent(m_scene.bounds);
             frameConstants.shadowTexelWorldSize = shadowExtent / static_cast<float>(m_shadowMap->GetSize());
             frameConstants.shadowDepthPerMeter = 1.0f / shadowExtent;
-            frameConstants.shadowConstantBias = m_lighting.shadowConstantBias;
-            frameConstants.shadowSlopeBias = m_lighting.shadowSlopeBias;
-            frameConstants.shadowNormalOffset = m_lighting.shadowNormalOffset;
-            frameConstants.shadowFilterRadius = m_lighting.shadowFilterRadius < 0 ? UINT32_MAX
-                                                                                  : static_cast<uint32_t>(m_lighting.shadowFilterRadius);
+            frameConstants.shadowConstantBias = m_renderSettings.sunShadows.constantBias;
+            frameConstants.shadowSlopeBias = m_renderSettings.sunShadows.slopeBias;
+            frameConstants.shadowNormalOffset = m_renderSettings.sunShadows.normalOffset;
+            frameConstants.shadowFilterRadius = m_renderSettings.sunShadows.filterRadius < 0 ? UINT32_MAX
+                                                                                  : static_cast<uint32_t>(m_renderSettings.sunShadows.filterRadius);
             frameConstants.tlasIndex = m_accelerationStructures ? m_accelerationStructures->GetTlasSrvIndex() : UINT32_MAX;
-            frameConstants.rayAlphaTest = m_sceneView.alphaTest ? 1u : 0u;
+            frameConstants.rayAlphaTest = frame.alphaTest ? 1u : 0u;
             if (m_sceneData)
             {
                 const SceneGpuData::Bindings bindings = m_sceneData->GetBindings();
@@ -377,7 +371,7 @@ namespace walnut
 
             {
                 PIXScopedEvent(pix::kColorCpu, L"Render");
-                m_renderer->BeginFrame(m_clearColor);
+                m_renderer->BeginFrame(m_debugSettings.clearColor);
                 // The point lights go into this frame's upload memory, which BeginFrame just made reusable.
                 if (m_sceneData)
                     m_pointLights.Update(GetAnimationTime(), static_cast<uint32_t>(m_lighting.pointLightCount),
@@ -388,9 +382,7 @@ namespace walnut
                 m_shadowedLights.clear();
                 {
                     // Only the cube-map technique uses slots (rays shadow every lamp; off shadows none).
-                    const uint32_t budget = pointShadowTechnique != PointShadowTechnique::CubeMaps ? 0u :
-                        std::min<uint32_t>(static_cast<uint32_t>(std::max(m_lighting.pointShadowBudget, 0)),
-                                           PointShadowMaps::kMaxShadowedLights);
+                    const uint32_t budget = frame.cubeShadowBudget;
                     std::vector<std::pair<float, uint32_t>> byDistance;
                     byDistance.reserve(m_pointLightData.size());
                     for (uint32_t i = 0; i < m_pointLightData.size(); ++i)
@@ -414,9 +406,9 @@ namespace walnut
                 m_renderer->SetFrameConstants(frameConstants);
                 ID3D12GraphicsCommandList7* commandList = m_renderer->GetCommandList();
 
-                // 0. Sort the point lights into the cluster grid (compute), before anything reads it. Brute force
-                //    doesn't read it (except the heat map view), so it's skipped there: a fair comparison.
-                if (m_sceneData && (m_lighting.clusteredLighting || m_sceneView.debugView == SceneDebugView::ClusterLights))
+                // 0. Sort the point lights into the cluster grid (compute), before anything reads it (skipped when
+                //    nothing reads it: see FrameSettings::buildClusters).
+                if (m_sceneData && frame.buildClusters)
                     m_clusterGrid->Build(commandList, m_renderer->GetFrameIndex());
 
                 // 1. Depth from the sun's point of view, into the shadow map. With ray-traced shadows the casters are
@@ -425,10 +417,8 @@ namespace walnut
                 {
                     PIXScopedEvent(commandList, pix::kColorGpu, L"ShadowMap");
                     m_shadowMap->Begin(commandList);
-                    const bool needShadowMap = !m_sceneView.raytracedShadows ||
-                                               m_sceneView.debugView == SceneDebugView::ShadowDifference;
-                    if (m_sceneData && needShadowMap)
-                        m_scenePass->RenderShadowDepth(commandList, *m_sceneData, m_sceneView);
+                    if (m_sceneData && frame.drawSunCasters)
+                        m_scenePass->RenderShadowDepth(commandList, *m_sceneData, frame);
                     m_shadowMap->End(commandList);
                 }
 
@@ -448,7 +438,7 @@ namespace walnut
                                                      PointShadowMaps::GetFaceViewProjection(light.position, light.range, face));
                             m_pointShadowMaps->BeginFace(commandList, slot, face);
                             m_pointShadowDraws += m_scenePass->RenderPointShadowDepth(
-                                commandList, *m_sceneData, m_sceneView, m_renderer->GetFrameAllocator().AllocateConstants(faceViewProjection),
+                                commandList, *m_sceneData, frame, m_renderer->GetFrameAllocator().AllocateConstants(faceViewProjection),
                                 light.position, light.range);
                         }
                     }
@@ -457,18 +447,18 @@ namespace walnut
 
                 // 2. The scene from the camera, into the HDR scene color target. With the depth pre-pass, depth
                 //    first: the scene pass then shades only the closest surface of each pixel.
-                const bool deferred = m_sceneData && m_sceneView.renderPath == RenderPath::Deferred;
-                if (m_sceneData && (m_sceneView.depthPrepass || deferred))
+                const bool deferred = m_sceneData && frame.deferred;
+                if (m_sceneData && frame.depthPrepass)
                 {
                     m_renderer->BeginDepthPrepass();
-                    m_scenePass->RenderDepthPrepass(commandList, *m_sceneData, m_sceneView);
+                    m_scenePass->RenderDepthPrepass(commandList, *m_sceneData, frame);
                 }
                 if (deferred)
                 {
                     // Deferred: the draws write each visible pixel's material into the G-buffer, then one
                     // fullscreen pass reads it back.
                     m_renderer->BeginGBufferPass();
-                    m_scenePass->RenderGBuffer(commandList, *m_sceneData, m_sceneView);
+                    m_scenePass->RenderGBuffer(commandList, *m_sceneData, frame);
                     m_renderer->BeginDeferredPass();
                     const GBuffer& gbuffer = m_renderer->GetGBuffer();
                     const DeferredInputs inputs{
@@ -478,19 +468,17 @@ namespace walnut
                         .emissive = gbuffer.GetSrvIndex(GBuffer::Emissive),
                         .depth = m_renderer->GetDepthSrvIndex(),
                     };
-                    m_deferredPass->Render(commandList, inputs, m_sceneView.debugView,
-                                           (m_sceneView.raytracedShadows || m_sceneView.raytracedPointShadows) &&
-                                               m_accelerationStructures);
+                    m_deferredPass->Render(commandList, inputs, frame.view, frame.raytracedVariant);
                 }
                 else
                 {
                     m_renderer->BeginScenePass();
                     if (m_sceneData)
-                        m_scenePass->Render(commandList, *m_sceneData, m_sceneView);
+                        m_scenePass->Render(commandList, *m_sceneData, frame);
                 }
 
                 // Markers at the point lights: on top of the shaded scene, hidden behind closer geometry.
-                if (m_sceneData && m_lighting.showPointLightMarkers && !m_pointLightData.empty())
+                if (m_sceneData && m_debugSettings.lightMarkers && !m_pointLightData.empty())
                 {
                     m_renderer->BeginOverlayPass();
                     m_lightMarkerPass->Render(commandList, static_cast<uint32_t>(m_pointLightData.size()),
@@ -656,12 +644,12 @@ namespace walnut
 
         if (m_sceneData && ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
+            const bool canTrace = m_caps.raytracing;
 
             // Forward or deferred. Deferred can show everything computed from the G-buffer, but not views that need a
             // draw's own inputs (kDebugViewForwardOnly in shaders/shared/DebugViewList.h).
             {
-                int path = static_cast<int>(m_sceneView.renderPath);
+                int path = static_cast<int>(m_renderSettings.path);
                 ImGui::RadioButton("Forward##path", &path, static_cast<int>(RenderPath::Forward));
                 ImGui::SameLine();
                 ImGui::RadioButton("Deferred##path", &path, static_cast<int>(RenderPath::Deferred));
@@ -669,13 +657,13 @@ namespace walnut
                 ImGui::TextDisabled("Rendering");
                 ImGui::SetItemTooltip("Forward: each draw samples its material and lights it.\n"
                                       "Deferred: the draws store the material in the G-buffer; a fullscreen pass reads it.");
-                m_sceneView.renderPath = static_cast<RenderPath>(path);
+                m_renderSettings.path = static_cast<RenderPath>(path);
             }
-            const bool deferred = m_sceneView.renderPath == RenderPath::Deferred;
-            if (deferred && (GetDebugViewInfo(m_sceneView.debugView).flags & kDebugViewForwardOnly))
-                m_sceneView.debugView = SceneDebugView::Lit;
+            const bool deferred = m_renderSettings.path == RenderPath::Deferred;
+            if (deferred && (GetDebugViewInfo(m_debugSettings.view).flags & kDebugViewForwardOnly))
+                m_debugSettings.view = SceneDebugView::Lit;
 
-            if (ImGui::BeginCombo("Show", GetDebugViewInfo(m_sceneView.debugView).label))
+            if (ImGui::BeginCombo("Show", GetDebugViewInfo(m_debugSettings.view).label))
             {
                 for (const DebugViewInfo& view : kDebugViews)
                 {
@@ -684,16 +672,16 @@ namespace walnut
                     const bool unavailable = ((view.flags & kDebugViewNeedsRayTracing) && !canTrace) ||
                                              (deferred && (view.flags & kDebugViewForwardOnly));
                     ImGui::BeginDisabled(unavailable);
-                    if (ImGui::Selectable(view.label, view.view == m_sceneView.debugView))
-                        m_sceneView.debugView = view.view;
+                    if (ImGui::Selectable(view.label, view.view == m_debugSettings.view))
+                        m_debugSettings.view = view.view;
                     ImGui::EndDisabled();
                 }
                 ImGui::EndCombo();
             }
-            if (m_sceneView.debugView == SceneDebugView::ShadowDifference)
+            if (m_debugSettings.view == SceneDebugView::ShadowDifference)
             {
-                // The comparison is computed in the ray-traced shader, which also samples the shadow map.
-                m_sceneView.raytracedShadows = true;
+                // The comparison is computed in the ray-traced shader, which also samples the shadow map (just for
+                // this view: see ResolveFrameSettings).
                 ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.2f, 1.0f), "red");
                 ImGui::SameLine(0.0f, 4.0f);
                 ImGui::TextDisabled("= only the shadow map shadows   ");
@@ -704,9 +692,9 @@ namespace walnut
             }
             {
                 const char* modes[] = { "Off", "Mesh tangents", "Derived tangents" };
-                int mode = static_cast<int>(m_sceneView.normalMapping);
+                int mode = static_cast<int>(m_renderSettings.normalMapping);
                 if (ImGui::Combo("Normal mapping", &mode, modes, IM_ARRAYSIZE(modes)))
-                    m_sceneView.normalMapping = static_cast<NormalMapping>(mode);
+                    m_renderSettings.normalMapping = static_cast<NormalMapping>(mode);
                 ImGui::SetItemTooltip("Mesh: tangent frame from the glTF TANGENT attribute (derived where missing).\n"
                                       "Derived: always from screen-space derivatives of position and uv.");
             }
@@ -725,18 +713,18 @@ namespace walnut
                 ImGui::PopID();
                 ImGui::EndDisabled();
             };
-            overrideSlider("Roughness##override", m_sceneView.roughnessOverride, m_roughnessOverrideValue);
-            overrideSlider("Metallic##override", m_sceneView.metallicOverride, m_metallicOverrideValue);
+            overrideSlider("Roughness##override", m_debugSettings.roughnessOverride, m_roughnessOverrideValue);
+            overrideSlider("Metallic##override", m_debugSettings.metallicOverride, m_metallicOverrideValue);
             ImGui::SetItemTooltip("Replace every material's metallic / roughness, to see what each one does.");
-            ImGui::Checkbox("Back-face culling", &m_sceneView.backfaceCulling);
+            ImGui::Checkbox("Back-face culling", &m_renderSettings.backfaceCulling);
             ImGui::SameLine();
-            ImGui::Checkbox("Alpha test", &m_sceneView.alphaTest);
+            ImGui::Checkbox("Alpha test", &m_renderSettings.alphaTest);
             {
                 // Deferred always draws the pre-pass first (its G-buffer pass tests depth EQUAL).
-                bool prepass = m_sceneView.depthPrepass || deferred;
+                bool prepass = m_renderSettings.depthPrepass || deferred;
                 ImGui::BeginDisabled(deferred);
                 if (ImGui::Checkbox("Depth pre-pass", &prepass))
-                    m_sceneView.depthPrepass = prepass;
+                    m_renderSettings.depthPrepass = prepass;
                 ImGui::EndDisabled();
                 ImGui::SetItemTooltip("Draw depth first (no pixel shading), then shade only the closest surface of each pixel\n"
                                       "(depth test EQUAL). Off: every fragment that passes the depth test when drawn is shaded.\n"
@@ -778,22 +766,22 @@ namespace walnut
                 ImGui::SliderFloat("Intensity##point", &m_lighting.pointLightIntensity, 0.0f, 1000.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
                 ImGui::SetItemTooltip("Light received 1 m from a lamp, facing it. Falls off as 1 / distance^2.");
                 {
-                    int technique = static_cast<int>(m_lighting.pointShadowTechnique);
+                    int technique = static_cast<int>(m_renderSettings.pointShadows.technique);
                     ImGui::RadioButton("Off##pointShadows", &technique, static_cast<int>(PointShadowTechnique::Off));
                     ImGui::SameLine();
                     ImGui::RadioButton("Cube maps##pointShadows", &technique, static_cast<int>(PointShadowTechnique::CubeMaps));
                     ImGui::SameLine();
-                    ImGui::BeginDisabled(!m_accelerationStructures);
+                    ImGui::BeginDisabled(!m_caps.raytracing);
                     ImGui::RadioButton("Ray traced##pointShadows", &technique, static_cast<int>(PointShadowTechnique::RayTraced));
                     ImGui::EndDisabled();
                     ImGui::SameLine();
                     ImGui::TextDisabled("Shadows");
                     ImGui::SetItemTooltip("Cube maps: the nearest lamps (the budget below) render a cube shadow map each.\n"
                                           "Ray traced: every lamp, one shadow ray per lamp that reaches the pixel.");
-                    m_lighting.pointShadowTechnique = static_cast<PointShadowTechnique>(technique);
+                    m_renderSettings.pointShadows.technique = static_cast<PointShadowTechnique>(technique);
                 }
-                ImGui::BeginDisabled(m_lighting.pointShadowTechnique != PointShadowTechnique::CubeMaps);
-                ImGui::SliderInt("Shadowed lamps", &m_lighting.pointShadowBudget, 0,
+                ImGui::BeginDisabled(m_renderSettings.pointShadows.technique != PointShadowTechnique::CubeMaps);
+                ImGui::SliderInt("Shadowed lamps", &m_renderSettings.pointShadows.budget, 0,
                                  static_cast<int>(PointShadowMaps::kMaxShadowedLights));
                 ImGui::EndDisabled();
                 ImGui::SetItemTooltip("The lamps nearest the camera get a cube shadow map (6 x %u^2 depth faces each).",
@@ -822,17 +810,17 @@ namespace walnut
                 }
                 ImGui::Checkbox("Animate", &m_lighting.animatePointLights);
                 ImGui::SameLine();
-                ImGui::Checkbox("Markers", &m_lighting.showPointLightMarkers);
+                ImGui::Checkbox("Markers", &m_debugSettings.lightMarkers);
                 ImGui::SameLine();
                 {
-                    int clustered = m_lighting.clusteredLighting ? 1 : 0;
+                    int clustered = m_renderSettings.clusteredLighting ? 1 : 0;
                     ImGui::RadioButton("Brute force##lights", &clustered, 0);
                     ImGui::SetItemTooltip("Every pixel visits every lamp.");
                     ImGui::SameLine();
                     ImGui::RadioButton("Clustered##lights", &clustered, 1);
                     ImGui::SetItemTooltip("A compute pass lists the lamps reaching each of 16x9x24 view-space clusters;\n"
                                           "every pixel visits only its cluster's list.");
-                    m_lighting.clusteredLighting = clustered != 0;
+                    m_renderSettings.clusteredLighting = clustered != 0;
                 }
                 const uint32_t used = m_clusterGrid->GetUsedIndices();
                 ImGui::Text("Clusters: %ux%ux%u, %u light entries (%.1f per cluster, %.0f%% of the list)",
@@ -842,7 +830,7 @@ namespace walnut
                 ImGui::TreePop();
             }
             {
-                int shading = static_cast<int>(m_lighting.shadingModel);
+                int shading = static_cast<int>(m_renderSettings.shading);
                 ImGui::RadioButton("Lambert##shading", &shading, static_cast<int>(ShadingModel::Lambert));
                 ImGui::SameLine();
                 ImGui::RadioButton("PBR (GGX)##shading", &shading, static_cast<int>(ShadingModel::Pbr));
@@ -850,30 +838,31 @@ namespace walnut
                 ImGui::TextDisabled("Shading");
                 ImGui::SetItemTooltip("Lambert: matte only (baseColor / pi).\n"
                                       "PBR: Lambert diffuse + Cook-Torrance GGX specular, driven by the metallic and roughness maps.");
-                m_lighting.shadingModel = static_cast<ShadingModel>(shading);
+                m_renderSettings.shading = static_cast<ShadingModel>(shading);
             }
-            ImGui::Checkbox("Sun shadows", &m_shadowsEnabled);
+            ImGui::Checkbox("Sun shadows", &m_renderSettings.sunShadows.enabled);
             {
                 // Ray-traced shadows need the TLAS, which exists only with inline ray tracing support.
-                const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
+                const bool canTrace = m_caps.raytracing;
                 ImGui::BeginDisabled(!canTrace);
-                int technique = m_sceneView.raytracedShadows && canTrace ? 1 : 0;
+                int technique = m_renderSettings.sunShadows.raytraced && canTrace ? 1 : 0;
                 // "##technique" makes the ID unique: the "Shadow map" tree node below has the same visible label,
                 // and ImGui derives IDs from labels (text after ## is part of the ID but not displayed).
-                ImGui::RadioButton("Shadow map##technique", &technique, 0);
+                bool clicked = ImGui::RadioButton("Shadow map##technique", &technique, 0);
                 ImGui::SameLine();
-                ImGui::RadioButton("Ray traced##technique", &technique, 1);
-                m_sceneView.raytracedShadows = technique == 1;
+                clicked |= ImGui::RadioButton("Ray traced##technique", &technique, 1);
+                if (clicked)
+                    m_renderSettings.sunShadows.raytraced = technique == 1;
                 ImGui::EndDisabled();
                 if (!canTrace)
                     ImGui::SetItemTooltip("Needs DirectX Raytracing tier 1.1 (inline ray tracing).");
             }
             {
-                const int r = m_lighting.shadowFilterRadius;
+                const int r = m_renderSettings.sunShadows.filterRadius;
                 const std::string label = r < 0  ? std::string("hard (1 texel)")
                                         : r == 0 ? std::string("2x2 hardware filter")
                                                  : std::format("{}x{} taps (each 2x2)", 2 * r + 1, 2 * r + 1);
-                ImGui::SliderInt("Shadow softness", &m_lighting.shadowFilterRadius, -1, 4, label.c_str());
+                ImGui::SliderInt("Shadow softness", &m_renderSettings.sunShadows.filterRadius, -1, 4, label.c_str());
                 ImGui::SetItemTooltip("PCF kernel radius. Each step widens the soft edge by about two shadow-map texels\n"
                                       "and costs more samples: (2r+1)^2 per pixel.");
             }
@@ -881,23 +870,23 @@ namespace walnut
             {
                 // All three in shadow-map texels (1.8 cm each for Sponza). Zero shows the acne; large values show
                 // shadows detaching from their casters (peter-panning).
-                ImGui::SliderFloat("Constant", &m_lighting.shadowConstantBias, 0.0f, 20.0f, "%.2f texels");
+                ImGui::SliderFloat("Constant", &m_renderSettings.sunShadows.constantBias, 0.0f, 20.0f, "%.2f texels");
                 ImGui::SetItemTooltip("Pushes every comparison towards the sun by this distance.");
-                ImGui::SliderFloat("Slope-scaled", &m_lighting.shadowSlopeBias, 0.0f, 20.0f, "%.2f texels");
+                ImGui::SliderFloat("Slope-scaled", &m_renderSettings.sunShadows.slopeBias, 0.0f, 20.0f, "%.2f texels");
                 ImGui::SetItemTooltip("Extra push that grows with how tilted the surface is relative to the sun\n"
                                       "(times tan of the angle): tilted surfaces need more.");
-                ImGui::SliderFloat("Normal offset", &m_lighting.shadowNormalOffset, 0.0f, 20.0f, "%.2f texels");
+                ImGui::SliderFloat("Normal offset", &m_renderSettings.sunShadows.normalOffset, 0.0f, 20.0f, "%.2f texels");
                 ImGui::SetItemTooltip("Looks the shadow map up this far out along the surface normal.");
                 if (ImGui::Button("Defaults"))
                 {
-                    const SceneLighting defaults;
-                    m_lighting.shadowConstantBias = defaults.shadowConstantBias;
-                    m_lighting.shadowSlopeBias = defaults.shadowSlopeBias;
-                    m_lighting.shadowNormalOffset = defaults.shadowNormalOffset;
+                    const SunShadowSettings defaults;
+                    m_renderSettings.sunShadows.constantBias = defaults.constantBias;
+                    m_renderSettings.sunShadows.slopeBias = defaults.slopeBias;
+                    m_renderSettings.sunShadows.normalOffset = defaults.normalOffset;
                 }
                 ImGui::SameLine();
                 if (ImGui::Button("None (show acne)"))
-                    m_lighting.shadowConstantBias = m_lighting.shadowSlopeBias = m_lighting.shadowNormalOffset = 0.0f;
+                    m_renderSettings.sunShadows.constantBias = m_renderSettings.sunShadows.slopeBias = m_renderSettings.sunShadows.normalOffset = 0.0f;
                 ImGui::TreePop();
             }
 
@@ -1008,7 +997,7 @@ namespace walnut
                         static_cast<double>(m_renderer->GetGBuffer().GetBytes()) / (1024.0 * 1024.0),
                         swapChain.GetWidth(), swapChain.GetHeight());
             // Float + HDR: scene colors are linear light and may go above 1.0.
-            ImGui::ColorEdit3("Clear color (linear)", m_clearColor, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
+            ImGui::ColorEdit3("Clear color (linear)", m_debugSettings.clearColor, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR);
 
             // Read before this frame's allocations, so this shows what the previous frame used.
             const FrameAllocator& frameAllocator = m_renderer->GetFrameAllocator();
