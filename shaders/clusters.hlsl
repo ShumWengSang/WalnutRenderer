@@ -54,47 +54,84 @@ bool SphereTouchesBox(float3 center, float radius, float3 boxMin, float3 boxMax)
     return dot(d, d) <= radius * radius;
 }
 
-[numthreads(64, 1, 1)]
-void CSBuildClusters(uint3 dispatchThreadId : SV_DispatchThreadID)
+// Lights in view space, shared by the 64 threads of a group (L5). "groupshared" memory is a small, fast scratchpad
+// that every thread of one group can read and write (not visible to other groups). The group loads the lights in
+// batches of 64: each thread fetches and transforms ONE light into it, then every thread tests its own cluster
+// against all 64. Each light is transformed once per group instead of once per thread: 64x less work and reading.
+static const uint kThreadsPerGroup = 64;
+groupshared float4 s_lights[kThreadsPerGroup]; // xyz = view-space center, w = range (negative: no light)
+
+// Tests this thread's cluster against every light, one shared batch at a time. Pass 1 only counts; pass 2 writes the
+// indices into the cluster's range [first, first + capacity).
+uint TestLights(uint groupIndex, bool valid, float3 boxMin, float3 boxMax, bool write, uint first, uint capacity)
+{
+    StructuredBuffer<PointLight> lights = ResourceDescriptorHeap[g_frame.pointLightBufferIndex];
+    RWStructuredBuffer<uint> indices = ResourceDescriptorHeap[g_draw.indicesUavIndex];
+    uint count = 0;
+    for (uint base = 0; base < g_frame.pointLightCount; base += kThreadsPerGroup)
+    {
+        // Every thread of the group loads one light of the batch...
+        const uint lightIndex = base + groupIndex;
+        float4 viewLight = float4(0.0f, 0.0f, 0.0f, -1.0f);
+        if (lightIndex < g_frame.pointLightCount)
+        {
+            const PointLight light = lights[lightIndex];
+            viewLight = float4(mul(float4(light.position, 1.0f), g_frame.view).xyz, light.range);
+        }
+        s_lights[groupIndex] = viewLight;
+        // ... and waits until all 64 are there. (Every thread of the group must reach this line, so threads without a
+        // cluster don't return early; they just skip the tests.)
+        GroupMemoryBarrierWithGroupSync();
+
+        if (valid)
+        {
+            const uint batchSize = min(kThreadsPerGroup, g_frame.pointLightCount - base);
+            for (uint k = 0; k < batchSize; ++k)
+            {
+                const float4 light = s_lights[k];
+                if (SphereTouchesBox(light.xyz, light.w, boxMin, boxMax))
+                {
+                    if (write && count < capacity)
+                        indices[first + count] = base + k;
+                    ++count;
+                }
+            }
+        }
+        // Wait until everyone is done with this batch before the next one overwrites it.
+        GroupMemoryBarrierWithGroupSync();
+    }
+    return count;
+}
+
+[numthreads(kThreadsPerGroup, 1, 1)]
+void CSBuildClusters(uint3 dispatchThreadId : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 {
     const uint cluster = dispatchThreadId.x;
-    if (cluster >= kClusterCount)
-        return; // the last group has a few threads too many
-    const uint3 cell = uint3(cluster % kClusterCountX, (cluster / kClusterCountX) % kClusterCountY,
-                             cluster / (kClusterCountX * kClusterCountY));
-    float3 boxMin, boxMax;
-    ClusterBounds(cell, boxMin, boxMax);
-
-    StructuredBuffer<PointLight> lights = ResourceDescriptorHeap[g_frame.pointLightBufferIndex];
-    RWStructuredBuffer<uint2> grid = ResourceDescriptorHeap[g_draw.gridUavIndex];
-    RWStructuredBuffer<uint> indices = ResourceDescriptorHeap[g_draw.indicesUavIndex];
-    RWStructuredBuffer<uint> counter = ResourceDescriptorHeap[g_draw.counterUavIndex];
-
-    // Pass 1: how many lights touch this cluster? (Light positions go to view space, where the box is.)
-    uint count = 0;
-    for (uint i = 0; i < g_frame.pointLightCount; ++i)
+    const bool valid = cluster < kClusterCount; // the last group may have a few threads too many
+    float3 boxMin = 0.0f, boxMax = 0.0f;
+    if (valid)
     {
-        const PointLight light = lights[i];
-        const float3 center = mul(float4(light.position, 1.0f), g_frame.view).xyz;
-        if (SphereTouchesBox(center, light.range, boxMin, boxMax))
-            ++count;
+        const uint3 cell = uint3(cluster % kClusterCountX, (cluster / kClusterCountX) % kClusterCountY,
+                                 cluster / (kClusterCountX * kClusterCountY));
+        ClusterBounds(cell, boxMin, boxMax);
     }
+
+    // Pass 1: how many lights touch this cluster?
+    uint count = TestLights(groupIndex, valid, boxMin, boxMax, false, 0, 0);
 
     // Reserve exactly that many slots in the shared index list. InterlockedAdd adds atomically and returns the old
     // value: every cluster gets its own range, however the 3456 threads interleave.
+    RWStructuredBuffer<uint> counter = ResourceDescriptorHeap[g_draw.counterUavIndex];
     uint first = 0;
-    if (count > 0)
+    if (valid && count > 0)
         InterlockedAdd(counter[0], count, first);
     count = first < g_draw.indexCapacity ? min(count, g_draw.indexCapacity - first) : 0; // never write past the end
-    grid[cluster] = uint2(first, count);
 
     // Pass 2: the same tests again, now writing the indices into the reserved range.
-    uint written = 0;
-    for (uint j = 0; j < g_frame.pointLightCount && written < count; ++j)
+    TestLights(groupIndex, valid, boxMin, boxMax, true, first, count);
+    if (valid)
     {
-        const PointLight light = lights[j];
-        const float3 center = mul(float4(light.position, 1.0f), g_frame.view).xyz;
-        if (SphereTouchesBox(center, light.range, boxMin, boxMax))
-            indices[first + written++] = j;
+        RWStructuredBuffer<uint2> grid = ResourceDescriptorHeap[g_draw.gridUavIndex];
+        grid[cluster] = uint2(first, count);
     }
 }

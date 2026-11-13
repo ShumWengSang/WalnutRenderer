@@ -11,6 +11,7 @@ It loads a glTF scene (Sponza by default) and renders it with:
   - **ray tracing** (DXR 1.1 inline `RayQuery` against a BLAS-per-primitive / TLAS acceleration structure, alpha-tested leaves via candidate hits), when the GPU supports raytracing tier 1.1. A difference view compares the two.
 - **HDR**: the scene renders into an FP16 target in linear light; a fullscreen pass applies exposure and a tonemap curve (ACES fitted, Reinhard, clamp) and writes the back buffer through an `_SRGB` view.
 - **Depth pre-pass and deferred shading**: a depth-only pass lets the scene pass shade each pixel once (depth EQUAL). **View → Forward / Deferred** switches between shading in each draw and writing a G-buffer (base color, two octahedral normals, roughness/metallic/occlusion, emissive) that a fullscreen pass lights with the same shader code.
+- **Many point lights, clustered**: up to 1024 lamps (inverse-square falloff with a smooth range window, same BRDF as the sun), drawn as instanced glowing markers. A compute shader sorts them every frame into a 16×9×24 grid of view-space clusters, and each pixel shades only its cluster's list (**Lighting → Point lights → Brute force / Clustered**), in forward and deferred alike.
 - **Reversed-Z** depth (D32_FLOAT, infinite far plane), **Enhanced Barriers** only, a fly camera, and PIX markers throughout.
 
 ## Requirements
@@ -91,15 +92,17 @@ The camera starts inside large scenes like Sponza, or framing small ones from ou
 ```
 cmake/Dependencies.cmake  FetchContent: DirectX-Headers, Agility SDK, DXC, Dear ImGui, WinPixEventRuntime, cgltf, stb_image (all pinned)
 shaders/                  HLSL sources, compiled at runtime straight from here (a copy next to the exe is the fallback):
-                          scene.hlsl (draws), deferred.hlsl (deferred lighting), tonemap.hlsl; common/ holds the shared
-                          includes (bindless, frame constants, scene data, BRDF, lighting, G-buffer layout, debug views)
+                          scene.hlsl (draws), deferred.hlsl (deferred lighting), clusters.hlsl (compute: light clusters),
+                          lightmarkers.hlsl, tonemap.hlsl; common/ holds the shared includes (bindless, frame constants,
+                          scene data, BRDF, lighting, clusters, G-buffer layout, debug views)
 src/core/                 Application loop, Win32 Window, Input, Timer, Log
 src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, RootSignature (shared bindless),
                           Buffer, Texture, UploadContext (staging ring), FrameAllocator (per-frame constants),
                           MipChain, ShaderCompiler, Pix
 src/renderer/             Renderer (frames in flight, frame constants, pass setup), ScenePass, ShadowMap,
-                          AccelerationStructures (BLAS/TLAS), GBuffer, DeferredPass, TonemapPass
-src/scene/                Camera, fly controller, lighting, glTF loading (cgltf) into a flat Scene, image decoding (stb_image)
+                          AccelerationStructures (BLAS/TLAS), GBuffer, DeferredPass, LightBuffer, ClusterGrid,
+                          LightMarkerPass, TonemapPass
+src/scene/                Camera, fly controller, lighting, point lights, glTF loading (cgltf) into a flat Scene, image decoding (stb_image)
 src/ui/                   ImGuiLayer (Win32 + DX12 backends)
 tools/                    fetch-assets.ps1 (download glTF models), pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher)
 ```
@@ -149,14 +152,15 @@ Example prompt: *"Survey captures\WalnutRenderer_timing_….wpix with PixMcp: fr
 2. If the window was resized, the renderer flushes the GPU and calls `ResizeBuffers` on the swapchain.
 3. ImGui starts a new frame. `Input` is told whether ImGui is using the keyboard or mouse, and ignores that device for game input while it is.
 4. `Renderer::BeginFrame()` waits on this frame slot's fence, resets its command allocator and per-frame upload memory, and prepares the HDR scene color target and the depth buffer: Enhanced Barriers from UNDEFINED to RENDER_TARGET / DEPTH_STENCIL_WRITE (with DISCARD, so it doesn't matter which layout the last frame left them in), then clears of both. It binds the bindless state (descriptor heap, then the shared root signature).
-5. `Renderer::SetFrameConstants()` binds the frame's camera and light data at `b2` (see `src/renderer/FrameConstants.h`); every pass can read it.
+5. The frame's point lights are written into its upload memory (`LightBuffer`: a `StructuredBuffer` view straight onto the frame allocator, no copy), and `Renderer::SetFrameConstants()` binds the frame's camera and light data at `b2` (see `src/renderer/FrameConstants.h`) for graphics and compute; every pass can read it. With clustered lights, `ClusterGrid` then runs two compute dispatches: one thread resets a counter, then one thread per cluster tests every light's sphere against its cluster's view-space box (lights loaded 64 at a time into groupshared memory) and appends the hits to one shared index list (`InterlockedAdd`). Barriers order the dispatches and make the results readable by pixel shaders.
 6. The shadow pass renders depth from the sun into a 2048² shadow map (`ShadowMap`: UNDEFINED → DEPTH_STENCIL_WRITE with DISCARD, clear, depth-only draws, then DEPTH_STENCIL_WRITE → DIRECT_QUEUE_SHADER_RESOURCE so pixel shaders can read it). The sun's camera is orthographic, fitted to the scene's bounding sphere.
    - At load (not per frame), when ray tracing is supported, `AccelerationStructures` builds one BLAS per primitive from the scene's vertex/index buffers and a TLAS over the instances.
 7. The scene from the camera. `ScenePass` records one draw per instance (opaque first, then alpha-tested; PSOs switch only between those groups).
    - **Depth pre-pass** (`Renderer::BeginDepthPrepass()`, depth only): every draw writes its depth with no pixel shader (alpha-tested ones run a small shader that only discards). Shared, `precise` vertex math keeps the depths bit-identical to the next pass's.
    - **Forward** (`Renderer::BeginScenePass()`): the draws again, depth test EQUAL and no depth writes, so the pixel shader runs once per visible pixel. It samples the material (`SampleMaterial`) and lights it (`ShadeSurface` in `shaders/common/Lighting.hlsli`).
    - **Deferred** (`Renderer::BeginGBufferPass()`): the same EQUAL draws write the material into four G-buffer render targets instead. `Renderer::BeginDeferredPass()` then makes the G-buffer and depth buffer readable (RENDER_TARGET / DEPTH_STENCIL_WRITE → DIRECT_QUEUE_SHADER_RESOURCE), and `DeferredPass` draws one fullscreen triangle that rebuilds each pixel's world position from depth and calls the same `ShadeSurface`.
-   - Either way, pixels are shaded with the glTF metallic-roughness BRDF: sun (diffuse + GGX specular) plus a sky/ground ambient (diffuse + reflection, darkened by the occlusion map) plus emission. The sun's visibility comes from the shadow map (slope-scaled bias, normal offset, PCF) or, with **Lighting → Ray traced**, from one `RayQuery` shadow ray per pixel against the TLAS. In ray-traced mode the shadow map pass is cleared but draws nothing.
+   - Either way, pixels are shaded with the glTF metallic-roughness BRDF: sun (diffuse + GGX specular) plus a sky/ground ambient (diffuse + reflection, darkened by the occlusion map) plus emission, plus the point lights (every one, or only the pixel's cluster's list). The sun's visibility comes from the shadow map (slope-scaled bias, normal offset, PCF) or, with **Lighting → Ray traced**, from one `RayQuery` shadow ray per pixel against the TLAS. In ray-traced mode the shadow map pass is cleared but draws nothing.
+   - **Light markers** (`Renderer::BeginOverlayPass()`, which turns a read depth buffer back into a depth target): one `DrawInstanced(6, lightCount)`, a camera-facing square per light built in the vertex shader, blended additively and hidden by closer geometry.
 8. `Renderer::BeginBackBufferPass()` records one barrier call with two transitions: scene color RENDER_TARGET → SHADER_RESOURCE (`SyncBefore = RENDER_TARGET`, `SyncAfter = PIXEL_SHADING`) and back buffer PRESENT → RENDER_TARGET. `TonemapPass` draws a fullscreen triangle that reads scene color and writes the back buffer through its `_SRGB` view.
 9. `Renderer::BeginUiPass()` switches to the back buffer's plain `UNORM` view (ImGui's colors are already sRGB), and ImGui is recorded.
 10. `Renderer::EndFrame()` records an Enhanced Barrier from RENDER_TARGET back to PRESENT (`SyncBefore = RENDER_TARGET`, `SyncAfter = NONE`) and executes the command list. It then presents and signals the frame fence.
@@ -198,6 +202,25 @@ GPU frame times, PIX Timing Captures (Release, 1280×720, vsync off, RTX 3070 Ti
 
 - **The pre-pass** costs about 0.04 ms and halves the scene pass's pixel shader invocations at the start view (PIX counters: 1,829,025 → 916,264 for 921,600 pixels): early-Z rejects hidden fragments before the shader runs. Ray tracing gains most, since every skipped fragment is also a skipped ray.
 - **Deferred** pays for writing and reading the G-buffer (the G-buffer pass costs about 85% of forward shading: sampling the material dominates, and the shadow-map lighting pass is only 0.05 ms). It wins only where lighting is expensive and the forward pass wastes it: at the start view with ray-traced shadows, where the fullscreen pass traces each ray once in fully packed 2×2 quads instead of on small triangles' partly empty ones. With one sun, forward + pre-pass is the better default; deferred pays off with many lights (light volumes or tiles) and screen-space effects that need the G-buffer anyway.
+
+### Many lights: brute force vs clustered
+
+**Lighting → Point lights** sets the lamp count (up to 1024), range and intensity; **Night** turns the sun off. **Brute force** makes every pixel visit every lamp. **Clustered** cuts the view frustum into 16×9×24 clusters (screen tiles × exponential depth slices); a compute pass lists the lamps reaching each one, and each pixel finds its cluster from its screen position and depth and visits only that list. **View → Show → Lights per cluster** shows the list lengths as a heat map, and the Point lights section shows how full the shared index list is (128,569 entries, 37 per cluster, at 1024 lamps from the start view). Clustered and brute-force images are bit-identical.
+
+GPU frame times, PIX Timing Captures (Release, 1280×720, vsync off, RTX 3070 Ti, Sponza start view with the sun on, p50; clustered includes its compute build):
+
+| Point lights | 16 | 64 | 256 | 1024 |
+|---|---|---|---|---|
+| Forward, brute force | 0.39 ms | 0.75 ms | 2.28 ms | 8.94 ms |
+| Deferred, brute force | 0.38 ms | 0.63 ms | 1.69 ms | 5.98 ms |
+| Forward, clustered | 0.31 ms | 0.35 ms | 0.47 ms | **1.01 ms** |
+| Deferred, clustered | 0.33 ms | 0.35 ms | 0.43 ms | **0.81 ms** |
+| (cluster build) | 0.01 ms | 0.02 ms | 0.05 ms | 0.12 ms |
+
+- **Brute force** grows linearly: about +8.5 µs per lamp forward, +5.6 µs deferred. Each pixel visits every lamp, and with 2.6 m ranges in a 37 m hall almost none of them reach it.
+- **Clustered** visits about 37 lamps per pixel instead of 1024: 8.8× faster forward and 7.4× deferred at 1024 lamps. A cluster's box is the axis-aligned box around its frustum cell, so lists include a few lamps that barely miss, but never miss one.
+- **Deferred beats forward with many lights** (as deferred lighting was invented for): its lighting loop runs once per screen pixel in full 2×2 quads, while forward's runs inside the material shader, including its helper lanes on small triangles.
+- **The build** first transformed every lamp into view space in every thread (0.59 ms at 1024 lamps); loading lamps 64 at a time into groupshared memory, transformed once per group, cut it to 0.12 ms.
 
 ### Barriers
 
