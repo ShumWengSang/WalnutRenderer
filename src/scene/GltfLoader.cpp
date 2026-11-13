@@ -166,198 +166,234 @@ namespace walnut
             XMStoreFloat3(&out.bounds.max, hi);
             return true;
         }
+
+        // Gives each (image, content) pair one SceneTexture, created the first time a material uses it. The same image
+        // used as a color and as data becomes two textures (sRGB and linear mips differ).
+        class TextureDeduper
+        {
+        public:
+            explicit TextureDeduper(Scene& scene) : m_scene(scene) {}
+
+            // The texture for this view, or kNoTexture if it has none.
+            uint32_t Use(const cgltf_texture_view& view, MipContent content)
+            {
+                if (!view.texture || !view.texture->image)
+                    return kNoTexture;
+                if (view.texcoord != 0)
+                    log::Warn("A texture uses TEXCOORD_{}; only TEXCOORD_0 is loaded", view.texcoord);
+                const auto [it, inserted] = m_textureOfImage.try_emplace({ view.texture->image, content },
+                                                                         static_cast<uint32_t>(m_scene.textures.size()));
+                if (inserted)
+                {
+                    const cgltf_image& image = *view.texture->image;
+                    m_scene.textures.push_back({ .name = image.name ? image.name : (image.uri ? image.uri : "embedded"), .content = content });
+                    m_images.push_back(&image);
+                }
+                return it->second;
+            }
+
+            // The glTF image of each texture (parallel to Scene::textures).
+            const std::vector<const cgltf_image*>& GetImages() const { return m_images; }
+
+        private:
+            Scene& m_scene;
+            std::map<std::pair<const cgltf_image*, MipContent>, uint32_t> m_textureOfImage;
+            std::vector<const cgltf_image*> m_images;
+        };
+
+        void ConvertMaterials(const cgltf_data& data, Scene& scene, TextureDeduper& textures)
+        {
+            // Copy the factors. glTF stores colors as linear values already (only images are sRGB).
+            for (size_t i = 0; i < data.materials_count; ++i)
+            {
+                const cgltf_material& source = data.materials[i];
+                SceneMaterial& material = scene.materials.emplace_back();
+                if (source.has_pbr_metallic_roughness)
+                {
+                    const cgltf_pbr_metallic_roughness& pbr = source.pbr_metallic_roughness;
+                    material.baseColorFactor = { pbr.base_color_factor[0], pbr.base_color_factor[1], pbr.base_color_factor[2], pbr.base_color_factor[3] };
+                    material.baseColorTexture = textures.Use(pbr.base_color_texture, MipContent::Srgb /*it's a color*/);
+                    material.metallicRoughnessTexture = textures.Use(pbr.metallic_roughness_texture, MipContent::Linear /*data*/);
+                    material.metallicFactor = pbr.metallic_factor;
+                    material.roughnessFactor = pbr.roughness_factor;
+                }
+                // Normals, occlusion and metallic-roughness are measurements stored in the image, so they're read as
+                // linear numbers. Only base color and emissive are colors and use sRGB.
+                material.normalTexture = textures.Use(source.normal_texture, MipContent::NormalMap);
+                material.normalScale = source.normal_texture.texture ? source.normal_texture.scale : 1.0f;
+                material.occlusionTexture = textures.Use(source.occlusion_texture, MipContent::Linear);
+                material.occlusionStrength = source.occlusion_texture.texture ? source.occlusion_texture.scale : 1.0f;
+                material.emissiveTexture = textures.Use(source.emissive_texture, MipContent::Srgb);
+                material.emissiveFactor = { source.emissive_factor[0], source.emissive_factor[1], source.emissive_factor[2] };
+                if (source.has_emissive_strength) // KHR_materials_emissive_strength: lets emissive go above 1.0
+                {
+                    material.emissiveFactor.x *= source.emissive_strength.emissive_strength;
+                    material.emissiveFactor.y *= source.emissive_strength.emissive_strength;
+                    material.emissiveFactor.z *= source.emissive_strength.emissive_strength;
+                }
+                material.alphaMode = source.alpha_mode == cgltf_alpha_mode_mask    ? AlphaMode::Mask
+                                   : source.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend
+                                                                                  : AlphaMode::Opaque;
+                material.alphaCutoff = source.alpha_cutoff;
+                material.doubleSided = source.double_sided;
+            }
+        }
+
+        // Fills in the textures' mips; a material whose texture failed falls back to its constant factor.
+        void DecodeTextures(Scene& scene, const std::vector<const cgltf_image*>& images, const std::filesystem::path& baseDirectory)
+        {
+            // Decode the images and build their mip chains, one texture per thread: each is independent, and decoding
+            // 24 JPEGs of 1024x1024 one after another takes a while.
+            const auto decodeStart = std::chrono::steady_clock::now();
+            std::vector<uint32_t> textureIndices(scene.textures.size());
+            std::iota(textureIndices.begin(), textureIndices.end(), 0u);
+            std::for_each(std::execution::par, textureIndices.begin(), textureIndices.end(), [&](uint32_t i) {
+                SceneTexture& texture = scene.textures[i];
+                std::vector<uint8_t> fileBytes;
+                std::span<const uint8_t> encoded;
+                if (const cgltf_buffer_view* view = images[i]->buffer_view) // embedded, e.g. in a .glb
+                    encoded = { static_cast<const uint8_t*>(cgltf_buffer_view_data(view)), view->size };
+                else if (const char* uri = images[i]->uri; uri && std::string_view(uri).starts_with("data:"))
+                {
+                    texture.error = "base64 data URIs are not supported";
+                    return;
+                }
+                else if (uri)
+                {
+                    // URIs may be percent-encoded ("my%20image.png"); cgltf_decode_uri decodes in place.
+                    std::string decoded = uri;
+                    cgltf_decode_uri(decoded.data());
+                    decoded.resize(std::strlen(decoded.c_str()));
+                    const std::filesystem::path path = baseDirectory / std::filesystem::path(ToWide(decoded));
+                    if (auto bytes = ReadFileBytes(path))
+                        fileBytes = std::move(*bytes);
+                    else
+                    {
+                        texture.error = "can't read " + ToUtf8(path.wstring());
+                        return;
+                    }
+                    encoded = fileBytes;
+                }
+
+                if (std::optional<ImageRgba8> image = DecodeImage(encoded, texture.error))
+                    texture.mips = GenerateMipChain(std::move(*image), texture.content);
+            });
+            const double decodeMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - decodeStart).count();
+
+            uint64_t textureBytes = 0;
+            for (SceneTexture& texture : scene.textures)
+            {
+                if (!texture.error.empty())
+                    log::Warn("Texture '{}' not loaded: {}", texture.name, texture.error);
+                for (const ImageRgba8& mip : texture.mips)
+                    textureBytes += mip.pixels.size();
+            }
+            // A material whose texture failed falls back to its constant factor.
+            const auto dropIfFailed = [&](uint32_t& texture) {
+                if (texture != kNoTexture && scene.textures[texture].mips.empty())
+                    texture = kNoTexture;
+            };
+            for (SceneMaterial& material : scene.materials)
+            {
+                dropIfFailed(material.baseColorTexture);
+                dropIfFailed(material.metallicRoughnessTexture);
+                dropIfFailed(material.normalTexture);
+                dropIfFailed(material.occlusionTexture);
+                dropIfFailed(material.emissiveTexture);
+            }
+            if (!scene.textures.empty())
+                log::Info("Decoded {} textures in {:.0f} ms ({:.1f} MB with mips)", scene.textures.size(), decodeMs,
+                          static_cast<double>(textureBytes) / (1024.0 * 1024.0));
+        }
+
+        // Returns, for each glTF mesh, the scene primitives it became.
+        std::vector<std::vector<uint32_t>> AppendMeshes(const cgltf_data& data, Scene& scene)
+        {
+            // Each mesh's primitives are appended once, however many nodes use that mesh.
+            std::vector<std::vector<uint32_t>> primitivesOfMesh(data.meshes_count);
+            std::vector<float> scratch;
+            for (size_t m = 0; m < data.meshes_count; ++m)
+            {
+                const cgltf_mesh& mesh = data.meshes[m];
+                for (size_t p = 0; p < mesh.primitives_count; ++p)
+                {
+                    if (AppendPrimitive(data, mesh.primitives[p], scene, scratch))
+                        primitivesOfMesh[m].push_back(static_cast<uint32_t>(scene.primitives.size() - 1));
+                    else
+                    {
+                        ++scene.skippedPrimitives;
+                        log::Warn("Skipping primitive {} of mesh '{}': not a triangle list, or no positions", p,
+                                  mesh.name ? mesh.name : "");
+                    }
+                }
+            }
+
+            // Primitives without a material use glTF's default material (white, fully metallic and rough).
+            for (ScenePrimitive& primitive : scene.primitives)
+            {
+                if (primitive.materialIndex == UINT32_MAX)
+                {
+                    if (scene.materials.size() == data.materials_count)
+                        scene.materials.emplace_back();
+                    primitive.materialIndex = static_cast<uint32_t>(scene.materials.size() - 1);
+                }
+            }
+            return primitivesOfMesh;
+        }
+
+        void InstantiateNodes(const cgltf_data& data, Scene& scene, const std::vector<std::vector<uint32_t>>& primitivesOfMesh)
+        {
+            using namespace DirectX;
+            // Walk the node tree, multiplying each node's local transform with its parent's world
+            // transform. glTF stores matrices column-major for column vectors (p' = M * p); reading those 16 floats as
+            // rows gives the transpose, which is exactly the row-vector form DirectXMath uses (p' = p * M).
+            const XMMATRIX flipZ = XMMatrixScaling(1.0f, 1.0f, -1.0f);
+            XMVECTOR sceneMin = g_XMFltMax, sceneMax = -g_XMFltMax;
+            auto visit = [&](auto& self, const cgltf_node& node, FXMMATRIX parentWorld) -> void {
+                XMFLOAT4X4 local;
+                cgltf_node_transform_local(&node, &local.m[0][0]);
+                const XMMATRIX world = XMLoadFloat4x4(&local) * parentWorld; // row vectors: own transform first, then the parent's
+
+                if (node.mesh)
+                {
+                    // The vertices were converted to left-handed space (z negated), so the transform is converted to
+                    // match: un-flip into glTF space, apply the glTF transform, flip back.
+                    const XMMATRIX worldLH = flipZ * world * flipZ;
+                    const bool mirrored = XMVectorGetX(XMMatrixDeterminant(worldLH)) < 0.0f;
+                    for (const uint32_t primitiveIndex : primitivesOfMesh[cgltf_mesh_index(&data, node.mesh)])
+                    {
+                        SceneInstance& instance = scene.instances.emplace_back();
+                        XMStoreFloat4x4(&instance.world, worldLH);
+                        instance.primitiveIndex = primitiveIndex;
+                        scene.mirroredInstances += mirrored;
+
+                        // World bounds: the box around the 8 transformed corners of the primitive's object-space box.
+                        instance.worldBounds = scene.primitives[primitiveIndex].bounds.Transformed(worldLH);
+                        sceneMin = XMVectorMin(sceneMin, XMLoadFloat3(&instance.worldBounds.min));
+                        sceneMax = XMVectorMax(sceneMax, XMLoadFloat3(&instance.worldBounds.max));
+                    }
+                }
+                for (size_t i = 0; i < node.children_count; ++i)
+                    self(self, *node.children[i], world);
+            };
+            ForEachRootNode(data, [&](const cgltf_node& root) { visit(visit, root, XMMatrixIdentity()); });
+
+            if (!scene.instances.empty())
+            {
+                XMStoreFloat3(&scene.bounds.min, sceneMin);
+                XMStoreFloat3(&scene.bounds.max, sceneMax);
+            }
+        }
     }
 
     Scene BuildSceneFromGltf(const cgltf_data& data, const std::filesystem::path& baseDirectory)
     {
-        using namespace DirectX;
         Scene scene;
-
-        // Each (image, content) pair becomes one SceneTexture, created the first time a material uses it.
-        std::map<std::pair<const cgltf_image*, MipContent>, uint32_t> textureOfImage;
-        std::vector<const cgltf_image*> textureImages; // parallel to scene.textures
-        auto useTexture = [&](const cgltf_texture_view& view, MipContent content) -> uint32_t {
-            if (!view.texture || !view.texture->image)
-                return kNoTexture;
-            if (view.texcoord != 0)
-                log::Warn("A texture uses TEXCOORD_{}; only TEXCOORD_0 is loaded", view.texcoord);
-            const auto [it, inserted] = textureOfImage.try_emplace({ view.texture->image, content }, static_cast<uint32_t>(scene.textures.size()));
-            if (inserted)
-            {
-                const cgltf_image& image = *view.texture->image;
-                scene.textures.push_back({ .name = image.name ? image.name : (image.uri ? image.uri : "embedded"), .content = content });
-                textureImages.push_back(&image);
-            }
-            return it->second;
-        };
-
-        // 0. Materials: copy the factors. glTF stores colors as linear values already (only images are sRGB).
-        for (size_t i = 0; i < data.materials_count; ++i)
-        {
-            const cgltf_material& source = data.materials[i];
-            SceneMaterial& material = scene.materials.emplace_back();
-            if (source.has_pbr_metallic_roughness)
-            {
-                const cgltf_pbr_metallic_roughness& pbr = source.pbr_metallic_roughness;
-                material.baseColorFactor = { pbr.base_color_factor[0], pbr.base_color_factor[1], pbr.base_color_factor[2], pbr.base_color_factor[3] };
-                material.baseColorTexture = useTexture(pbr.base_color_texture, MipContent::Srgb /*it's a color*/);
-                material.metallicRoughnessTexture = useTexture(pbr.metallic_roughness_texture, MipContent::Linear /*data*/);
-                material.metallicFactor = pbr.metallic_factor;
-                material.roughnessFactor = pbr.roughness_factor;
-            }
-            // Normals, occlusion and metallic-roughness are measurements stored in the image, so they're read as
-            // linear numbers. Only base color and emissive are colors and use sRGB.
-            material.normalTexture = useTexture(source.normal_texture, MipContent::NormalMap);
-            material.normalScale = source.normal_texture.texture ? source.normal_texture.scale : 1.0f;
-            material.occlusionTexture = useTexture(source.occlusion_texture, MipContent::Linear);
-            material.occlusionStrength = source.occlusion_texture.texture ? source.occlusion_texture.scale : 1.0f;
-            material.emissiveTexture = useTexture(source.emissive_texture, MipContent::Srgb);
-            material.emissiveFactor = { source.emissive_factor[0], source.emissive_factor[1], source.emissive_factor[2] };
-            if (source.has_emissive_strength) // KHR_materials_emissive_strength: lets emissive go above 1.0
-            {
-                material.emissiveFactor.x *= source.emissive_strength.emissive_strength;
-                material.emissiveFactor.y *= source.emissive_strength.emissive_strength;
-                material.emissiveFactor.z *= source.emissive_strength.emissive_strength;
-            }
-            material.alphaMode = source.alpha_mode == cgltf_alpha_mode_mask    ? AlphaMode::Mask
-                               : source.alpha_mode == cgltf_alpha_mode_blend ? AlphaMode::Blend
-                                                                              : AlphaMode::Opaque;
-            material.alphaCutoff = source.alpha_cutoff;
-            material.doubleSided = source.double_sided;
-        }
-
-        // Decode the images and build their mip chains, one texture per thread: each is independent, and decoding
-        // 24 JPEGs of 1024x1024 one after another takes a while.
-        const auto decodeStart = std::chrono::steady_clock::now();
-        std::vector<uint32_t> textureIndices(scene.textures.size());
-        std::iota(textureIndices.begin(), textureIndices.end(), 0u);
-        std::for_each(std::execution::par, textureIndices.begin(), textureIndices.end(), [&](uint32_t i) {
-            SceneTexture& texture = scene.textures[i];
-            std::vector<uint8_t> fileBytes;
-            std::span<const uint8_t> encoded;
-            if (const cgltf_buffer_view* view = textureImages[i]->buffer_view) // embedded, e.g. in a .glb
-                encoded = { static_cast<const uint8_t*>(cgltf_buffer_view_data(view)), view->size };
-            else if (const char* uri = textureImages[i]->uri; uri && std::string_view(uri).starts_with("data:"))
-            {
-                texture.error = "base64 data URIs are not supported";
-                return;
-            }
-            else if (uri)
-            {
-                // URIs may be percent-encoded ("my%20image.png"); cgltf_decode_uri decodes in place.
-                std::string decoded = uri;
-                cgltf_decode_uri(decoded.data());
-                decoded.resize(std::strlen(decoded.c_str()));
-                const std::filesystem::path path = baseDirectory / std::filesystem::path(ToWide(decoded));
-                if (auto bytes = ReadFileBytes(path))
-                    fileBytes = std::move(*bytes);
-                else
-                {
-                    texture.error = "can't read " + ToUtf8(path.wstring());
-                    return;
-                }
-                encoded = fileBytes;
-            }
-
-            if (std::optional<ImageRgba8> image = DecodeImage(encoded, texture.error))
-                texture.mips = GenerateMipChain(std::move(*image), texture.content);
-        });
-        const double decodeMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - decodeStart).count();
-
-        uint64_t textureBytes = 0;
-        for (SceneTexture& texture : scene.textures)
-        {
-            if (!texture.error.empty())
-                log::Warn("Texture '{}' not loaded: {}", texture.name, texture.error);
-            for (const ImageRgba8& mip : texture.mips)
-                textureBytes += mip.pixels.size();
-        }
-        // A material whose texture failed falls back to its constant factor.
-        const auto dropIfFailed = [&](uint32_t& texture) {
-            if (texture != kNoTexture && scene.textures[texture].mips.empty())
-                texture = kNoTexture;
-        };
-        for (SceneMaterial& material : scene.materials)
-        {
-            dropIfFailed(material.baseColorTexture);
-            dropIfFailed(material.metallicRoughnessTexture);
-            dropIfFailed(material.normalTexture);
-            dropIfFailed(material.occlusionTexture);
-            dropIfFailed(material.emissiveTexture);
-        }
-        if (!scene.textures.empty())
-            log::Info("Decoded {} textures in {:.0f} ms ({:.1f} MB with mips)", scene.textures.size(), decodeMs,
-                      static_cast<double>(textureBytes) / (1024.0 * 1024.0));
-
-        // 1. Geometry. Each mesh's primitives are appended once, however many nodes use that mesh.
-        std::vector<std::vector<uint32_t>> primitivesOfMesh(data.meshes_count);
-        std::vector<float> scratch;
-        for (size_t m = 0; m < data.meshes_count; ++m)
-        {
-            const cgltf_mesh& mesh = data.meshes[m];
-            for (size_t p = 0; p < mesh.primitives_count; ++p)
-            {
-                if (AppendPrimitive(data, mesh.primitives[p], scene, scratch))
-                    primitivesOfMesh[m].push_back(static_cast<uint32_t>(scene.primitives.size() - 1));
-                else
-                {
-                    ++scene.skippedPrimitives;
-                    log::Warn("Skipping primitive {} of mesh '{}': not a triangle list, or no positions", p,
-                              mesh.name ? mesh.name : "");
-                }
-            }
-        }
-
-        // Primitives without a material use glTF's default material (white, fully metallic and rough).
-        for (ScenePrimitive& primitive : scene.primitives)
-        {
-            if (primitive.materialIndex == UINT32_MAX)
-            {
-                if (scene.materials.size() == data.materials_count)
-                    scene.materials.emplace_back();
-                primitive.materialIndex = static_cast<uint32_t>(scene.materials.size() - 1);
-            }
-        }
-
-        // 2. Instances. Walk the node tree, multiplying each node's local transform with its parent's world
-        //    transform. glTF stores matrices column-major for column vectors (p' = M * p); reading those 16 floats as
-        //    rows gives the transpose, which is exactly the row-vector form DirectXMath uses (p' = p * M).
-        const XMMATRIX flipZ = XMMatrixScaling(1.0f, 1.0f, -1.0f);
-        XMVECTOR sceneMin = g_XMFltMax, sceneMax = -g_XMFltMax;
-        auto visit = [&](auto& self, const cgltf_node& node, FXMMATRIX parentWorld) -> void {
-            XMFLOAT4X4 local;
-            cgltf_node_transform_local(&node, &local.m[0][0]);
-            const XMMATRIX world = XMLoadFloat4x4(&local) * parentWorld; // row vectors: own transform first, then the parent's
-
-            if (node.mesh)
-            {
-                // The vertices were converted to left-handed space (z negated), so the transform is converted to
-                // match: un-flip into glTF space, apply the glTF transform, flip back.
-                const XMMATRIX worldLH = flipZ * world * flipZ;
-                const bool mirrored = XMVectorGetX(XMMatrixDeterminant(worldLH)) < 0.0f;
-                for (const uint32_t primitiveIndex : primitivesOfMesh[cgltf_mesh_index(&data, node.mesh)])
-                {
-                    SceneInstance& instance = scene.instances.emplace_back();
-                    XMStoreFloat4x4(&instance.world, worldLH);
-                    instance.primitiveIndex = primitiveIndex;
-                    scene.mirroredInstances += mirrored;
-
-                    // World bounds: the box around the 8 transformed corners of the primitive's object-space box.
-                    instance.worldBounds = scene.primitives[primitiveIndex].bounds.Transformed(worldLH);
-                    sceneMin = XMVectorMin(sceneMin, XMLoadFloat3(&instance.worldBounds.min));
-                    sceneMax = XMVectorMax(sceneMax, XMLoadFloat3(&instance.worldBounds.max));
-                }
-            }
-            for (size_t i = 0; i < node.children_count; ++i)
-                self(self, *node.children[i], world);
-        };
-        ForEachRootNode(data, [&](const cgltf_node& root) { visit(visit, root, XMMatrixIdentity()); });
-
-        if (!scene.instances.empty())
-        {
-            XMStoreFloat3(&scene.bounds.min, sceneMin);
-            XMStoreFloat3(&scene.bounds.max, sceneMax);
-        }
+        TextureDeduper textures(scene);
+        ConvertMaterials(data, scene, textures);
+        DecodeTextures(scene, textures.GetImages(), baseDirectory);
+        const std::vector<std::vector<uint32_t>> primitivesOfMesh = AppendMeshes(data, scene);
+        InstantiateNodes(data, scene, primitivesOfMesh);
         return scene;
     }
 
