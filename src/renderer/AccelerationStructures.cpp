@@ -1,10 +1,12 @@
 #include "renderer/AccelerationStructures.h"
 
 #include "core/Log.h"
+#include "gfx/Barriers.h"
 #include "gfx/CommandQueue.h"
 #include "gfx/Device.h"
 #include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
+#include "gfx/Views.h"
 #include "scene/Scene.h"
 
 #include <algorithm>
@@ -158,18 +160,17 @@ namespace walnut
 
         // The TLAS build reads the BLASes, and the copy reads the postbuild sizes: both must wait for the BLAS
         // builds to finish writing.
-        const D3D12_BUFFER_BARRIER barriers[] = {
-            CD3DX12_BUFFER_BARRIER(D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE,
-                                   D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE,
-                                   D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_WRITE,
-                                   D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_READ, m_blasBuffer.Get()),
-            CD3DX12_BUFFER_BARRIER(D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE,
-                                   D3D12_BARRIER_SYNC_COPY,
-                                   D3D12_BARRIER_ACCESS_UNORDERED_ACCESS,
-                                   D3D12_BARRIER_ACCESS_COPY_SOURCE, postbuild.Get()),
-        };
-        const CD3DX12_BARRIER_GROUP group(_countof(barriers), barriers);
-        commandList->Barrier(1, &group);
+        constexpr BufferAccess kBuildWrite{ D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE,
+                                            D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_WRITE };
+        constexpr BufferAccess kBuildRead{ D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE,
+                                           D3D12_BARRIER_ACCESS_RAYTRACING_ACCELERATION_STRUCTURE_READ };
+        // The postbuild info is written like a UAV by the build.
+        constexpr BufferAccess kPostbuildWrite{ D3D12_BARRIER_SYNC_BUILD_RAYTRACING_ACCELERATION_STRUCTURE,
+                                                D3D12_BARRIER_ACCESS_UNORDERED_ACCESS };
+        BarrierBatch()
+            .Buffer(m_blasBuffer.Get(), kBuildWrite, kBuildRead)
+            .Buffer(postbuild.Get(), kPostbuildWrite, access::CopySourceBuffer)
+            .Submit(commandList.Get());
 
         commandList->CopyBufferRegion(readback.Get(), 0, postbuild.Get(), 0, postbuild.GetSize());
         {
@@ -192,10 +193,7 @@ namespace walnut
 
         // Shaders find the TLAS through the bindless heap. An acceleration-structure SRV has no resource: just the
         // GPU address of the TLAS.
-        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE;
-        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.RaytracingAccelerationStructure.Location = m_tlasBuffer.GetGpuAddress();
+        const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = AccelerationStructureSrv(m_tlasBuffer.GetGpuAddress());
         m_tlasSrv = srvHeap.Allocate();
         d3d->CreateShaderResourceView(nullptr, &srvDesc, m_tlasSrv.cpu);
 

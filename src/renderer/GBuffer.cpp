@@ -1,14 +1,16 @@
 #include "renderer/GBuffer.h"
 
 #include "core/Log.h"
+#include "gfx/Barriers.h"
 #include "gfx/Device.h"
 #include "gfx/GpuUtils.h"
+#include "gfx/Views.h"
 
 namespace walnut
 {
     namespace
     {
-        constexpr UINT kAllSubresources = 0xffffffff;
+
         constexpr const wchar_t* kTargetNames[GBuffer::kCount] = {
             L"GBuffer_BaseColor", L"GBuffer_Normals", L"GBuffer_Material", L"GBuffer_Emissive" };
     }
@@ -56,11 +58,7 @@ namespace walnut
             m_bytes += m_device->GetResourceAllocationInfo2(0, 1, &desc, &info).SizeInBytes;
 
             m_device->CreateRenderTargetView(m_targets[i].Get(), nullptr, m_rtvs[i].cpu);
-            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-            srvDesc.Format = kFormats[i];
-            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-            srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            srvDesc.Texture2D.MipLevels = 1;
+            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = Texture2DSrv(kFormats[i]);
             m_device->CreateShaderResourceView(m_targets[i].Get(), &srvDesc, m_srvs[i].cpu);
         }
         log::Info("G-buffer: {}x{}, {} targets, {:.1f} MB", width, height, static_cast<uint32_t>(kCount),
@@ -70,28 +68,18 @@ namespace walnut
     void GBuffer::BeginWrite(ID3D12GraphicsCommandList7* commandList) const
     {
         // Last frame's reads (the deferred pass) were in an earlier ExecuteCommandLists: nothing to wait for.
-        std::array<D3D12_TEXTURE_BARRIER, kCount> barriers;
-        for (uint32_t i = 0; i < kCount; ++i)
-            barriers[i] = CD3DX12_TEXTURE_BARRIER(
-                D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_SYNC_RENDER_TARGET,
-                D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_ACCESS_RENDER_TARGET,
-                D3D12_BARRIER_LAYOUT_UNDEFINED, D3D12_BARRIER_LAYOUT_RENDER_TARGET,
-                m_targets[i].Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources), D3D12_TEXTURE_BARRIER_FLAG_DISCARD);
-        const CD3DX12_BARRIER_GROUP group(kCount, barriers.data());
-        commandList->Barrier(1, &group);
+        BarrierBatch barriers;
+        for (const ComPtr<ID3D12Resource>& target : m_targets)
+            barriers.Texture(target.Get(), access::Undefined, access::RenderTarget, true /*discard*/);
+        barriers.Submit(commandList);
     }
 
     void GBuffer::EndWrite(ID3D12GraphicsCommandList7* commandList) const
     {
         // Wait for the G-buffer pass's writes, make them visible to the fullscreen pass's pixel shader.
-        std::array<D3D12_TEXTURE_BARRIER, kCount> barriers;
-        for (uint32_t i = 0; i < kCount; ++i)
-            barriers[i] = CD3DX12_TEXTURE_BARRIER(
-                D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_SYNC_PIXEL_SHADING,
-                D3D12_BARRIER_ACCESS_RENDER_TARGET, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
-                D3D12_BARRIER_LAYOUT_RENDER_TARGET, D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE,
-                m_targets[i].Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources));
-        const CD3DX12_BARRIER_GROUP group(kCount, barriers.data());
-        commandList->Barrier(1, &group);
+        BarrierBatch barriers;
+        for (const ComPtr<ID3D12Resource>& target : m_targets)
+            barriers.Texture(target.Get(), access::RenderTarget, access::PixelShaderRead);
+        barriers.Submit(commandList);
     }
 }

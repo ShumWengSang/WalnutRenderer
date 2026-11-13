@@ -3,9 +3,11 @@
 #include "core/Log.h"
 #include "core/StringUtils.h"
 #include "core/Window.h"
+#include "gfx/Barriers.h"
 #include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
 #include "gfx/RootSignature.h"
+#include "gfx/Views.h"
 
 #include <stb_image_write.h>
 
@@ -18,12 +20,6 @@
 
 namespace walnut
 {
-    namespace
-    {
-        // In D3D12_BARRIER_SUBRESOURCE_RANGE, an index of 0xffffffff (with NumMipLevels = 0) means
-        // "every subresource".
-        constexpr UINT kAllSubresources = 0xffffffff;
-    }
 
     Renderer::Renderer(Window& window, const RendererDesc& desc)
         : m_vsync(desc.vsync)
@@ -105,26 +101,16 @@ namespace walnut
         // preserving the old data and just (re)initialize its compression metadata. Last frame's reads of it
         // (the tonemap pass) were in an earlier ExecuteCommandLists, so there's nothing to wait for:
         // SyncBefore = NONE, AccessBefore = NO_ACCESS.
-        const CD3DX12_TEXTURE_BARRIER sceneToRenderTarget(
-            D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_SYNC_RENDER_TARGET,
-            D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_ACCESS_RENDER_TARGET,
-            D3D12_BARRIER_LAYOUT_UNDEFINED, D3D12_BARRIER_LAYOUT_RENDER_TARGET,
-            m_sceneColor.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources), D3D12_TEXTURE_BARRIER_FLAG_DISCARD);
-        const CD3DX12_BARRIER_GROUP sceneGroup(1, &sceneToRenderTarget);
-        m_commandList->Barrier(1, &sceneGroup);
+        BarrierBatch().Texture(m_sceneColor.Get(), access::Undefined, access::RenderTarget, true /*discard*/)
+            .Submit(m_commandList.Get());
 
         m_commandList->ClearRenderTargetView(m_sceneRtv.cpu, clearColor, 0, nullptr);
 
         // The depth buffer: deferred shading leaves it shader-readable at the end of a frame, forward leaves it
         // DEPTH_STENCIL_WRITE. Either way it's cleared now, so UNDEFINED -> DEPTH_STENCIL_WRITE with DISCARD
         // works from both without tracking which: like the scene color above.
-        const CD3DX12_TEXTURE_BARRIER depthToWrite(
-            D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_SYNC_DEPTH_STENCIL,
-            D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE,
-            D3D12_BARRIER_LAYOUT_UNDEFINED, D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE,
-            m_depthBuffer.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources), D3D12_TEXTURE_BARRIER_FLAG_DISCARD);
-        const CD3DX12_BARRIER_GROUP depthGroup(1, &depthToWrite);
-        m_commandList->Barrier(1, &depthGroup);
+        BarrierBatch().Texture(m_depthBuffer.Get(), access::Undefined, access::DepthWrite, true /*discard*/)
+            .Submit(m_commandList.Get());
         m_depthReadable = false;
         m_commandList->ClearDepthStencilView(m_dsv.cpu, D3D12_CLEAR_FLAG_DEPTH, kDepthClearValue, 0, 0, nullptr);
 
@@ -159,13 +145,7 @@ namespace walnut
         m_gbuffer->EndWrite(m_commandList.Get());
         // The depth buffer too: the fullscreen pass reads it as a texture. Wait for the depth tests and writes of
         // the pre-pass and G-buffer pass (SyncBefore = DEPTH_STENCIL) before pixel shaders read it.
-        const CD3DX12_TEXTURE_BARRIER depthToRead(
-            D3D12_BARRIER_SYNC_DEPTH_STENCIL, D3D12_BARRIER_SYNC_PIXEL_SHADING,
-            D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
-            D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE, D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE,
-            m_depthBuffer.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources));
-        const CD3DX12_BARRIER_GROUP depthGroup(1, &depthToRead);
-        m_commandList->Barrier(1, &depthGroup);
+        BarrierBatch().Texture(m_depthBuffer.Get(), access::DepthWrite, access::PixelShaderRead).Submit(m_commandList.Get());
         m_depthReadable = true;
 
         // Only the scene color: no depth buffer bound (a 2D pass, and the depth buffer is being read).
@@ -178,13 +158,7 @@ namespace walnut
         if (m_depthReadable)
         {
             // The deferred pass read the depth buffer; wait for that, then make it a depth target again.
-            const CD3DX12_TEXTURE_BARRIER depthToWrite(
-                D3D12_BARRIER_SYNC_PIXEL_SHADING, D3D12_BARRIER_SYNC_DEPTH_STENCIL,
-                D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ,
-                D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE,
-                m_depthBuffer.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources));
-            const CD3DX12_BARRIER_GROUP depthGroup(1, &depthToWrite);
-            m_commandList->Barrier(1, &depthGroup);
+            BarrierBatch().Texture(m_depthBuffer.Get(), access::PixelShaderRead, access::DepthTest).Submit(m_commandList.Get());
             m_depthReadable = false;
         }
         m_commandList->OMSetRenderTargets(1, &m_sceneRtv.cpu, FALSE, &m_dsv.cpu);
@@ -213,27 +187,16 @@ namespace walnut
     void Renderer::BeginBackBufferPass()
     {
         // Two transitions in one Barrier() call, so the driver can batch them:
-        D3D12_TEXTURE_BARRIER barriers[2] = {
-            // 1. Scene color: stop being a render target, become readable by pixel shaders. Waits for all scene
-            //    drawing (SyncBefore = RENDER_TARGET) and makes those writes visible to texture reads
-            //    (AccessAfter = SHADER_RESOURCE). DIRECT_QUEUE_SHADER_RESOURCE: only the direct queue reads it,
-            //    which can be faster than the generic SHADER_RESOURCE layout.
-            CD3DX12_TEXTURE_BARRIER(
-                D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_SYNC_PIXEL_SHADING,
-                D3D12_BARRIER_ACCESS_RENDER_TARGET, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
-                D3D12_BARRIER_LAYOUT_RENDER_TARGET, D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE,
-                m_sceneColor.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources)),
-            // 2. Back buffer: PRESENT -> RENDER_TARGET. Nothing earlier in this command list touched it, and
-            //    ExecuteCommandLists boundaries already finish all prior GPU work (including the previous
-            //    Present), so there is nothing to wait for: SyncBefore = NONE, AccessBefore = NO_ACCESS.
-            CD3DX12_TEXTURE_BARRIER(
-                D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_SYNC_RENDER_TARGET,
-                D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_ACCESS_RENDER_TARGET,
-                D3D12_BARRIER_LAYOUT_PRESENT, D3D12_BARRIER_LAYOUT_RENDER_TARGET,
-                m_swapChain->GetBackBuffer(m_backBufferIndex), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources)),
-        };
-        const CD3DX12_BARRIER_GROUP group(_countof(barriers), barriers);
-        m_commandList->Barrier(1, &group);
+        //  1. Scene color: stop being a render target, become readable by pixel shaders. Waits for all scene
+        //     drawing (SyncBefore = RENDER_TARGET) and makes those writes visible to texture reads
+        //     (AccessAfter = SHADER_RESOURCE).
+        //  2. Back buffer: PRESENT -> RENDER_TARGET. Nothing earlier in this command list touched it, and
+        //     ExecuteCommandLists boundaries already finish all prior GPU work (including the previous
+        //     Present), so there is nothing to wait for: SyncBefore = NONE, AccessBefore = NO_ACCESS.
+        BarrierBatch()
+            .Texture(m_sceneColor.Get(), access::RenderTarget, access::PixelShaderRead)
+            .Texture(m_swapChain->GetBackBuffer(m_backBufferIndex), access::Present, access::RenderTarget)
+            .Submit(m_commandList.Get());
 
         // No clear: the fullscreen pass writes every pixel. No depth buffer: 2D passes don't need one.
         // The _SRGB view: the tonemap pass outputs linear colors, and the hardware encodes them to sRGB on write.
@@ -267,21 +230,11 @@ namespace walnut
         }
 
         // RENDER_TARGET -> COPY_SOURCE, copy, and back: the UI is drawn into the same back buffer afterwards.
-        const auto transition = [&](D3D12_BARRIER_SYNC syncBefore, D3D12_BARRIER_SYNC syncAfter,
-                                    D3D12_BARRIER_ACCESS accessBefore, D3D12_BARRIER_ACCESS accessAfter,
-                                    D3D12_BARRIER_LAYOUT layoutBefore, D3D12_BARRIER_LAYOUT layoutAfter) {
-            const CD3DX12_TEXTURE_BARRIER barrier(syncBefore, syncAfter, accessBefore, accessAfter, layoutBefore, layoutAfter,
-                                                  backBuffer, CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources));
-            const CD3DX12_BARRIER_GROUP group(1, &barrier);
-            m_commandList->Barrier(1, &group);
-        };
-        transition(D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_RENDER_TARGET,
-                   D3D12_BARRIER_ACCESS_COPY_SOURCE, D3D12_BARRIER_LAYOUT_RENDER_TARGET, D3D12_BARRIER_LAYOUT_COPY_SOURCE);
+        BarrierBatch().Texture(backBuffer, access::RenderTarget, access::CopySource).Submit(m_commandList.Get());
         const CD3DX12_TEXTURE_COPY_LOCATION destination(m_screenshotReadback.Get(), m_screenshotFootprint);
         const CD3DX12_TEXTURE_COPY_LOCATION source(backBuffer, 0);
         m_commandList->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
-        transition(D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_ACCESS_COPY_SOURCE,
-                   D3D12_BARRIER_ACCESS_RENDER_TARGET, D3D12_BARRIER_LAYOUT_COPY_SOURCE, D3D12_BARRIER_LAYOUT_RENDER_TARGET);
+        BarrierBatch().Texture(backBuffer, access::CopySource, access::RenderTarget).Submit(m_commandList.Get());
         m_screenshotPending = true;
     }
 
@@ -346,13 +299,7 @@ namespace walnut
         // RENDER_TARGET -> PRESENT (= COMMON, the layout Present requires). Wait for every render-target
         // write before it (tonemap, ImGui). Nothing later in this list uses the buffer, so
         // SyncAfter = NONE and AccessAfter = NO_ACCESS; Present runs after ExecuteCommandLists completes.
-        const CD3DX12_TEXTURE_BARRIER toPresent(
-            D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_SYNC_NONE,
-            D3D12_BARRIER_ACCESS_RENDER_TARGET, D3D12_BARRIER_ACCESS_NO_ACCESS,
-            D3D12_BARRIER_LAYOUT_RENDER_TARGET, D3D12_BARRIER_LAYOUT_PRESENT,
-            backBuffer, CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources));
-        const CD3DX12_BARRIER_GROUP toPresentGroup(1, &toPresent);
-        m_commandList->Barrier(1, &toPresentGroup);
+        BarrierBatch().Texture(backBuffer, access::RenderTarget, access::Present).Submit(m_commandList.Get());
         PIXEndEvent(m_commandList.Get()); // "Frame"
 
         WR_CHECK(m_commandList->Close());
@@ -414,11 +361,7 @@ namespace walnut
         // Two views of the same texture: an RTV to draw into it, and an SRV (in the bindless heap) to read it.
         m_device->Get()->CreateRenderTargetView(m_sceneColor.Get(), nullptr, m_sceneRtv.cpu);
 
-        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-        srvDesc.Format = kSceneColorFormat;
-        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.Texture2D.MipLevels = 1;
+        const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = Texture2DSrv(kSceneColorFormat);
         m_device->Get()->CreateShaderResourceView(m_sceneColor.Get(), &srvDesc, m_sceneSrv.cpu);
     }
 
@@ -446,16 +389,9 @@ namespace walnut
                                                            nullptr, 0, nullptr, IID_PPV_ARGS(&m_depthBuffer)));
         SetDebugName(m_depthBuffer.Get(), L"DepthBuffer");
 
-        D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
-        dsvDesc.Format = kDepthFormat;
-        dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+        const D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = Texture2DDsv(kDepthFormat);
         m_device->Get()->CreateDepthStencilView(m_depthBuffer.Get(), &dsvDesc, m_dsv.cpu);
-
-        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-        srvDesc.Format = kDepthSrvFormat;
-        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.Texture2D.MipLevels = 1;
+        const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = Texture2DSrv(kDepthSrvFormat);
         m_device->Get()->CreateShaderResourceView(m_depthBuffer.Get(), &srvDesc, m_depthSrv.cpu);
     }
 }

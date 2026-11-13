@@ -30,6 +30,7 @@ set(WALNUT_SOURCES
     src/core/Window.cpp
     src/core/Window.h
 
+    src/gfx/Barriers.h
     src/gfx/Buffer.cpp
     src/gfx/Buffer.h
     src/gfx/CommandQueue.cpp
@@ -56,6 +57,7 @@ set(WALNUT_SOURCES
     src/gfx/Texture.h
     src/gfx/UploadContext.cpp
     src/gfx/UploadContext.h
+    src/gfx/Views.h
 
     src/renderer/AccelerationStructures.cpp
     src/renderer/AccelerationStructures.h

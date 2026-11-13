@@ -1,7 +1,9 @@
 #include "renderer/PointShadowMaps.h"
 
+#include "gfx/Barriers.h"
 #include "gfx/Device.h"
 #include "gfx/GpuUtils.h"
+#include "gfx/Views.h"
 #include "renderer/ShadowMap.h"
 
 namespace walnut
@@ -33,34 +35,18 @@ namespace walnut
         for (uint32_t slice = 0; slice < kSliceCount; ++slice)
         {
             // A view of ONE slice of the array: the face being rendered.
-            D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
-            dsvDesc.Format = ShadowMap::kDepthFormat;
-            dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
-            dsvDesc.Texture2DArray.FirstArraySlice = slice;
-            dsvDesc.Texture2DArray.ArraySize = 1;
+            const D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = Texture2DArraySliceDsv(ShadowMap::kDepthFormat, slice);
             m_dsvs.push_back(m_dsvHeap->Allocate());
             d3d->CreateDepthStencilView(m_texture.Get(), &dsvDesc, m_dsvs.back().cpu);
 
-            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-            srvDesc.Format = ShadowMap::kReadFormat;
-            srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
-            srvDesc.Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(
-                D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0, D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
-                D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0, D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_1);
-            srvDesc.Texture2DArray.MipLevels = 1;
-            srvDesc.Texture2DArray.FirstArraySlice = slice;
-            srvDesc.Texture2DArray.ArraySize = 1;
+            // And of the same slice for the UI, as gray (like ShadowMap's debug view).
+            const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = Texture2DArraySrv(ShadowMap::kReadFormat, slice, 1, Swizzle::RedAsGray);
             m_faceDebugSrvs.push_back(m_srvHeap.Allocate());
             d3d->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_faceDebugSrvs.back().cpu);
         }
 
         // The same 2D array, seen as cubes: every 6 slices are one cube, in the order +X, -X, +Y, -Y, +Z, -Z.
-        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-        srvDesc.Format = ShadowMap::kReadFormat;
-        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
-        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.TextureCubeArray.MipLevels = 1;
-        srvDesc.TextureCubeArray.NumCubes = kMaxShadowedLights;
+        const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = TextureCubeArraySrv(ShadowMap::kReadFormat, kMaxShadowedLights);
         m_cubeArraySrv = m_srvHeap.Allocate();
         d3d->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_cubeArraySrv.cpu);
     }
@@ -89,13 +75,7 @@ namespace walnut
     void PointShadowMaps::Begin(ID3D12GraphicsCommandList7* commandList) const
     {
         // Last frame's reads were in an earlier ExecuteCommandLists; every used face is cleared before it's drawn.
-        const CD3DX12_TEXTURE_BARRIER toDepthWrite(
-            D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_SYNC_DEPTH_STENCIL,
-            D3D12_BARRIER_ACCESS_NO_ACCESS, D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE,
-            D3D12_BARRIER_LAYOUT_UNDEFINED, D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE,
-            m_texture.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(0xFFFFFFFF), D3D12_TEXTURE_BARRIER_FLAG_DISCARD);
-        const CD3DX12_BARRIER_GROUP group(1, &toDepthWrite);
-        commandList->Barrier(1, &group);
+        BarrierBatch().Texture(m_texture.Get(), access::Undefined, access::DepthWrite, true /*discard*/).Submit(commandList);
     }
 
     void PointShadowMaps::BeginFace(ID3D12GraphicsCommandList7* commandList, uint32_t slot, uint32_t face) const
@@ -111,12 +91,7 @@ namespace walnut
 
     void PointShadowMaps::End(ID3D12GraphicsCommandList7* commandList) const
     {
-        const CD3DX12_TEXTURE_BARRIER toShaderResource(
-            D3D12_BARRIER_SYNC_DEPTH_STENCIL, D3D12_BARRIER_SYNC_PIXEL_SHADING,
-            D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE, D3D12_BARRIER_ACCESS_SHADER_RESOURCE,
-            D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE, D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE,
-            m_texture.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(0xFFFFFFFF));
-        const CD3DX12_BARRIER_GROUP group(1, &toShaderResource);
-        commandList->Barrier(1, &group);
+        // Wait for every face's depth writes, then the shading samples the cubes (like ShadowMap::End).
+        BarrierBatch().Texture(m_texture.Get(), access::DepthWrite, access::PixelShaderRead).Submit(commandList);
     }
 }

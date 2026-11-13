@@ -2,6 +2,7 @@
 
 #include "gfx/Device.h"
 #include "gfx/FrameAllocator.h"
+#include "gfx/Views.h"
 
 #include <algorithm>
 #include <cstring>
@@ -32,13 +33,8 @@ namespace walnut
         if (!lights.empty())
             std::memcpy(allocation.cpu, lights.data(), lights.size_bytes());
 
-        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-        srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.Buffer.FirstElement = allocation.offset / kStride;
-        srvDesc.Buffer.NumElements = static_cast<UINT>(count);
-        srvDesc.Buffer.StructureByteStride = static_cast<UINT>(kStride);
+        const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc =
+            StructuredBufferSrv(static_cast<uint32_t>(count), static_cast<uint32_t>(kStride), allocation.offset / kStride);
         const DescriptorHandle& srv = m_srvs[frameIndex];
         m_device->CreateShaderResourceView(allocator.GetResource(), &srvDesc, srv.cpu);
         return srv.index;

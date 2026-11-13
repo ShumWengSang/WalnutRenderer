@@ -120,7 +120,8 @@ shaders/                  HLSL sources, compiled at runtime straight from here (
 src/core/                 Application loop, command line, settings registry (--set), Win32 Window, Input, Timer, Log
 src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, RootSignature (shared bindless),
                           Buffer, Texture, UploadContext (staging ring), FrameAllocator (per-frame constants),
-                          MipChain, ShaderCompiler, Pix
+                          MipChain, ShaderCompiler, Pix, Views (view descriptions), Barriers (named barrier states +
+                          BarrierBatch)
 src/renderer/             Renderer (frames in flight, frame constants, pass setup), ScenePass, DebugViews, ShadowMap,
                           AccelerationStructures (BLAS/TLAS), GBuffer, DeferredPass, LightBuffer, ClusterGrid,
                           LightMarkerPass, PointShadowMaps, TonemapPass

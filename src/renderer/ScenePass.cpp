@@ -8,6 +8,7 @@
 #include "gfx/RootSignature.h"
 #include "gfx/ShaderCompiler.h"
 #include "gfx/UploadContext.h"
+#include "gfx/Views.h"
 #include "renderer/GBuffer.h"
 #include "renderer/ShadowMap.h"
 #include "scene/Scene.h"
@@ -158,12 +159,8 @@ namespace walnut
 
         // The same index buffer is also readable by shaders: a ray that hits a triangle gets only its number, and
         // must fetch the triangle's 3 vertex indices itself to look up their UVs (alpha-tested shadow rays).
-        D3D12_SHADER_RESOURCE_VIEW_DESC indexSrvDesc{};
-        indexSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
-        indexSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-        indexSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        indexSrvDesc.Buffer.NumElements = static_cast<UINT>(scene.indices.size());
-        indexSrvDesc.Buffer.StructureByteStride = sizeof(uint32_t);
+        const D3D12_SHADER_RESOURCE_VIEW_DESC indexSrvDesc =
+            StructuredBufferSrv(static_cast<uint32_t>(scene.indices.size()), sizeof(uint32_t));
         m_indexSrv = m_srvHeap.Allocate();
         m_device->CreateShaderResourceView(m_indexBuffer.Get(), &indexSrvDesc, m_indexSrv.cpu);
 
@@ -236,12 +233,7 @@ namespace walnut
         Buffer buffer(m_device, BufferDesc{ .size = size, .heapType = D3D12_HEAP_TYPE_DEFAULT, .name = name });
         upload.UploadBuffer(buffer, data, size);
 
-        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-        srvDesc.Format = DXGI_FORMAT_UNKNOWN; // structured: elements are StructureByteStride bytes, no format
-        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        srvDesc.Buffer.NumElements = count;
-        srvDesc.Buffer.StructureByteStride = stride;
+        const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = StructuredBufferSrv(count, stride);
         srv = m_srvHeap.Allocate();
         m_device->CreateShaderResourceView(buffer.Get(), &srvDesc, srv.cpu);
         return buffer;

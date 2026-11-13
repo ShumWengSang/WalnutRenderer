@@ -2,6 +2,7 @@
 
 #include "core/Log.h"
 #include "core/Timer.h"
+#include "gfx/Barriers.h"
 #include "gfx/CommandQueue.h"
 #include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
@@ -261,13 +262,9 @@ namespace walnut
         //    sample it run in a later ExecuteCommandLists, which the boundary already orders.
         //  - SHADER_RESOURCE (not DIRECT_QUEUE_SHADER_RESOURCE): readable from any queue, so a future copy or
         //    compute queue could use it too.
-        const CD3DX12_TEXTURE_BARRIER toShaderResource(
-            D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_SYNC_NONE,
-            D3D12_BARRIER_ACCESS_COPY_DEST, D3D12_BARRIER_ACCESS_NO_ACCESS,
-            D3D12_BARRIER_LAYOUT_COPY_DEST, D3D12_BARRIER_LAYOUT_SHADER_RESOURCE,
-            destination.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(0xffffffff));
-        const CD3DX12_BARRIER_GROUP group(1, &toShaderResource);
-        m_commandList->Barrier(1, &group);
+        constexpr TextureAccess kReadLater{ D3D12_BARRIER_SYNC_NONE, D3D12_BARRIER_ACCESS_NO_ACCESS,
+                                            D3D12_BARRIER_LAYOUT_SHADER_RESOURCE };
+        BarrierBatch().Texture(destination.Get(), access::CopyDest, kReadLater).Submit(m_commandList.Get());
     }
 
     void UploadContext::Flush()

@@ -1,11 +1,13 @@
 #include "renderer/ClusterGrid.h"
 
 #include "core/Log.h"
+#include "gfx/Barriers.h"
 #include "gfx/Device.h"
 #include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
 #include "gfx/RootSignature.h"
 #include "gfx/ShaderCompiler.h"
+#include "gfx/Views.h"
 
 namespace walnut
 {
@@ -26,21 +28,11 @@ namespace walnut
         {
             if (srv)
             {
-                D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-                srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-                srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-                srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-                srvDesc.Buffer.NumElements = count;
-                srvDesc.Buffer.StructureByteStride = stride;
+                const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = StructuredBufferSrv(count, stride);
                 device->CreateShaderResourceView(buffer, &srvDesc, srv->cpu);
             }
-            // An unordered access view: read AND write from shaders, in any order ("unordered": the GPU doesn't sort
-            // out conflicting writes for you, unlike render targets).
-            D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-            uavDesc.Format = DXGI_FORMAT_UNKNOWN;
-            uavDesc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-            uavDesc.Buffer.NumElements = count;
-            uavDesc.Buffer.StructureByteStride = stride;
+            // An unordered access view: read AND write from shaders (see StructuredBufferUav).
+            const D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = StructuredBufferUav(count, stride);
             device->CreateUnorderedAccessView(buffer, nullptr, &uavDesc, uav.cpu);
         }
     }
@@ -137,30 +129,19 @@ namespace walnut
 
         // The build's InterlockedAdds must see the reset's 0: a UAV barrier orders a compute write before compute
         // reads/writes of the same buffer (without it the two dispatches may overlap on the GPU).
-        const CD3DX12_BUFFER_BARRIER counterBarrier(
-            D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_SYNC_COMPUTE_SHADING,
-            D3D12_BARRIER_ACCESS_UNORDERED_ACCESS, D3D12_BARRIER_ACCESS_UNORDERED_ACCESS, m_counter.Get());
-        const CD3DX12_BARRIER_GROUP counterGroup(1, &counterBarrier);
-        commandList->Barrier(1, &counterGroup);
+        BarrierBatch().Buffer(m_counter.Get(), access::ComputeReadWrite, access::ComputeReadWrite).Submit(commandList);
 
         // One thread per cluster, 64 per group: ceil(3456 / 64) = 54 groups.
         commandList->SetPipelineState(m_buildPipeline.Get());
         commandList->Dispatch((kClusterCount + kClusterThreadsPerGroup - 1) / kClusterThreadsPerGroup, 1, 1);
 
-        // Wait for the build before any pixel shader reads the grid, and make its writes visible to them.
-        const CD3DX12_BUFFER_BARRIER toRead[2] = {
-            CD3DX12_BUFFER_BARRIER(D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_SYNC_PIXEL_SHADING,
-                                   D3D12_BARRIER_ACCESS_UNORDERED_ACCESS, D3D12_BARRIER_ACCESS_SHADER_RESOURCE, m_grid.Get()),
-            CD3DX12_BUFFER_BARRIER(D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_SYNC_PIXEL_SHADING,
-                                   D3D12_BARRIER_ACCESS_UNORDERED_ACCESS, D3D12_BARRIER_ACCESS_SHADER_RESOURCE, m_indices.Get()),
-        };
-        // The counter goes to the CPU: wait for the build's atomics, then copy it into this slot's readback space.
-        const CD3DX12_BUFFER_BARRIER counterToCopy(
-            D3D12_BARRIER_SYNC_COMPUTE_SHADING, D3D12_BARRIER_SYNC_COPY,
-            D3D12_BARRIER_ACCESS_UNORDERED_ACCESS, D3D12_BARRIER_ACCESS_COPY_SOURCE, m_counter.Get());
-        const D3D12_BUFFER_BARRIER barriers[3] = { toRead[0], toRead[1], counterToCopy };
-        const CD3DX12_BARRIER_GROUP readGroup(3, barriers);
-        commandList->Barrier(1, &readGroup);
+        // Wait for the build before any pixel shader reads the grid, and make its writes visible to them. The
+        // counter goes to the CPU: wait for the build's atomics, then copy it into this slot's readback space.
+        BarrierBatch()
+            .Buffer(m_grid.Get(), access::ComputeReadWrite, access::PixelShaderReadBuffer)
+            .Buffer(m_indices.Get(), access::ComputeReadWrite, access::PixelShaderReadBuffer)
+            .Buffer(m_counter.Get(), access::ComputeReadWrite, access::CopySourceBuffer)
+            .Submit(commandList);
         commandList->CopyBufferRegion(m_counterReadback.Get(), frameIndex * sizeof(uint32_t), m_counter.Get(), 0, sizeof(uint32_t));
     }
 }
