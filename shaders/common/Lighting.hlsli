@@ -265,8 +265,11 @@ float PointShadow(PointLight light, float3 worldPosition, float3 geometricNormal
 
 // Adds one point light's reflected light (radiance) and arriving light (irradiance, for the Lambert views). The
 // visibility of shadowed lamps that reach the point is summed into shadowSum / shadowCount (the shadow debug view).
+// comparePointShadows (the point shadow difference view, ray-traced variant): for lamps with a cube map, also trace
+// a ray and sum both answers into compareMap / compareRay.
 void AddPointLight(PointLight light, float3 worldPosition, MaterialSample mat, float3 toCamera, SurfaceBrdf surface,
-                   inout float3 radiance, inout float3 irradianceSum, inout float shadowSum, inout uint shadowCount)
+                   bool comparePointShadows, inout float3 radiance, inout float3 irradianceSum, inout float shadowSum,
+                   inout uint shadowCount, inout float3 compare)
 {
     const float3 toLight = light.position - worldPosition;
     const float distanceSquared = dot(toLight, toLight);
@@ -292,6 +295,10 @@ void AddPointLight(PointLight light, float3 worldPosition, MaterialSample mat, f
         shadow = PointShadow(light, worldPosition, mat.geometricNormal);
         shadowed = light.shadowSlot != kNoShadowSlot;
     }
+#if RAYTRACED_SHADOWS
+    if (comparePointShadows && light.shadowSlot != kNoShadowSlot)
+        compare += float3(shadow, RayTracedPointShadow(worldPosition, mat.geometricNormal, light.position), 1.0f);
+#endif
     if (shadowed)
     {
         shadowSum += shadow;
@@ -314,13 +321,14 @@ struct ShadingResult
     float3 ambient;     // sky + ground light, diffuse + reflection, darkened by occlusion
     float3 pointLights; // every point light's diffuse + specular (Lambert mode: diffuse only)
     float  pointShadow; // average visibility of the shadowed lamps reaching the point; -1: none reaches it
+    float3 pointShadowCompare; // comparePointShadows: (sum of cube-map visibility, sum of ray visibility, lamp count)
     float  shadow;      // the sun's visibility: 1 = lit, 0 = blocked (shadow map, or ray in the ray-traced variant)
     float  mapShadow;   // ray-traced variant with compareShadowMap only: the shadow map's answer for the same point
 };
 
 // Lights one surface point. Forward shading calls it per fragment with the interpolated position; deferred shading
 // calls it once per screen pixel with the position rebuilt from the depth buffer. Same code, so same result.
-ShadingResult ShadeSurface(float3 worldPosition, MaterialSample mat, bool compareShadowMap)
+ShadingResult ShadeSurface(float3 worldPosition, MaterialSample mat, bool compareShadowMap, bool comparePointShadows)
 {
     ShadingResult result;
 
@@ -388,6 +396,7 @@ ShadingResult ShadeSurface(float3 worldPosition, MaterialSample mat, bool compar
     result.pointLights = 0.0f;
     float shadowSum = 0.0f;
     uint shadowCount = 0;
+    result.pointShadowCompare = 0.0f;
     if (g_frame.clusteredLighting != 0)
     {
         StructuredBuffer<uint2> grid = ResourceDescriptorHeap[g_frame.clusterGridIndex];
@@ -395,13 +404,14 @@ ShadingResult ShadeSurface(float3 worldPosition, MaterialSample mat, bool compar
         const uint2 entry = grid[ClusterOf(worldPosition)]; // (first, count)
         for (uint i = 0; i < entry.y; ++i)
             AddPointLight(pointLights[clusterLightIndices[entry.x + i]], worldPosition, mat, toCamera, surface,
-                          result.pointLights, pointLightIrradiance, shadowSum, shadowCount);
+                          comparePointShadows, result.pointLights, pointLightIrradiance, shadowSum, shadowCount,
+                          result.pointShadowCompare);
     }
     else
     {
         for (uint i = 0; i < g_frame.pointLightCount; ++i)
-            AddPointLight(pointLights[i], worldPosition, mat, toCamera, surface, result.pointLights,
-                          pointLightIrradiance, shadowSum, shadowCount);
+            AddPointLight(pointLights[i], worldPosition, mat, toCamera, surface, comparePointShadows, result.pointLights,
+                          pointLightIrradiance, shadowSum, shadowCount, result.pointShadowCompare);
     }
     result.lighting += pointLightIrradiance / kPi;
     result.pointShadow = shadowCount > 0 ? shadowSum / float(shadowCount) : -1.0f;
@@ -460,6 +470,13 @@ bool SharedViewColor(uint view, float3 worldPosition, MaterialSample mat, Shadin
     else if (view == kViewAmbient)          color = shading.ambient;
     else if (view == kViewPointLights)      color = shading.pointLights;
     // Shadowed lamps' visibility: white = lit, black = blocked, dark blue = no shadowed lamp reaches this point.
+    else if (view == kViewPointShadowDifference)
+    {
+        // Cube maps vs rays, for the lamps that have a cube: the same colors as the sun's difference view (red: only
+        // the cube map shadows, blue: only the ray does), dark blue where no such lamp reaches the point.
+        const float3 c = shading.pointShadowCompare;
+        color = c.z > 0.0f ? ShadowDifferenceColor(c.y / c.z, c.x / c.z) : float3(0.03f, 0.05f, 0.15f);
+    }
     else if (view == kViewPointShadows)     color = shading.pointShadow < 0.0f ? float3(0.03f, 0.05f, 0.15f) : shading.pointShadow.xxx;
     else if (view == kViewSunShadow)        color = shading.shadow.xxx;
     else if (view == kViewShadowDifference)

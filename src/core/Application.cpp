@@ -309,9 +309,14 @@ namespace walnut
             const bool canTrace = m_accelerationStructures != nullptr;
             if (m_lighting.pointShadowTechnique == PointShadowTechnique::RayTraced && !canTrace)
                 m_lighting.pointShadowTechnique = PointShadowTechnique::CubeMaps;
-            m_sceneView.raytracedPointShadows = m_lighting.pointShadowTechnique == PointShadowTechnique::RayTraced;
+            // The point shadow difference view lights with cube maps and also traces rays to compare: cube maps for
+            // this frame, in the ray-traced shader variant.
+            const bool pointShadowDifference = canTrace && m_sceneView.debugView == SceneDebugView::PointShadowDifference;
+            const PointShadowTechnique pointShadowTechnique = pointShadowDifference ? PointShadowTechnique::CubeMaps
+                                                                                     : m_lighting.pointShadowTechnique;
+            m_sceneView.raytracedPointShadows = pointShadowDifference || pointShadowTechnique == PointShadowTechnique::RayTraced;
             frameConstants.sunShadowRaytraced = m_sceneView.raytracedShadows && canTrace ? 1u : 0u;
-            frameConstants.pointShadowTechnique = static_cast<uint32_t>(m_lighting.pointShadowTechnique);
+            frameConstants.pointShadowTechnique = static_cast<uint32_t>(pointShadowTechnique);
             frameConstants.cameraPosition = m_camera.position;
             frameConstants.sunDirection = m_lighting.GetSunDirection();
             const auto scaled = [](const DirectX::XMFLOAT3& color, float intensity) {
@@ -358,7 +363,7 @@ namespace walnut
                 m_shadowedLights.clear();
                 {
                     // Only the cube-map technique uses slots (rays shadow every lamp; off shadows none).
-                    const uint32_t budget = m_lighting.pointShadowTechnique != PointShadowTechnique::CubeMaps ? 0u :
+                    const uint32_t budget = pointShadowTechnique != PointShadowTechnique::CubeMaps ? 0u :
                         std::min<uint32_t>(static_cast<uint32_t>(std::max(m_lighting.pointShadowBudget, 0)),
                                            PointShadowMaps::kMaxShadowedLights);
                     std::vector<std::pair<float, uint32_t>> byDistance;
@@ -621,7 +626,7 @@ namespace walnut
                                     "Roughness", "Metallic", "Normal map (tangent space)", "Occlusion", "Emissive",
                                     "Sun specular (highlights)", "Ambient (sky + ground, occluded)",
                                     "Geometric normals (no normal map)", "Point lights only", "Lights per cluster (heat map)",
-                                    "Point light shadows (shadowed lamps)" };
+                                    "Point light shadows (shadowed lamps)", "Point shadow difference (cube maps vs rays)" };
             const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
 
             // Forward or deferred. Deferred can show everything computed from the G-buffer, but not views that need a
@@ -656,7 +661,8 @@ namespace walnut
             {
                 for (int i = 0; i < IM_ARRAYSIZE(views); ++i)
                 {
-                    const bool needsTracing = static_cast<SceneDebugView>(i) == SceneDebugView::ShadowDifference;
+                    const bool needsTracing = static_cast<SceneDebugView>(i) == SceneDebugView::ShadowDifference ||
+                                              static_cast<SceneDebugView>(i) == SceneDebugView::PointShadowDifference;
                     if (i == static_cast<int>(SceneDebugView::Roughness))
                         ImGui::SeparatorText("Material maps");
                     else if (i == static_cast<int>(SceneDebugView::SunSpecular))

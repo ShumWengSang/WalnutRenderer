@@ -12,6 +12,7 @@ It loads a glTF scene (Sponza by default) and renders it with:
 - **HDR**: the scene renders into an FP16 target in linear light; a fullscreen pass applies exposure and a tonemap curve (ACES fitted, Reinhard, clamp) and writes the back buffer through an `_SRGB` view.
 - **Depth pre-pass and deferred shading**: a depth-only pass lets the scene pass shade each pixel once (depth EQUAL). **View → Forward / Deferred** switches between shading in each draw and writing a G-buffer (base color, two octahedral normals, roughness/metallic/occlusion, emissive) that a fullscreen pass lights with the same shader code.
 - **Many point lights, clustered**: up to 1024 lamps (inverse-square falloff with a smooth range window, same BRDF as the sun), drawn as instanced glowing markers. A compute shader sorts them every frame into a 16×9×24 grid of view-space clusters, and each pixel shades only its cluster's list (**Lighting → Point lights → Brute force / Clustered**), in forward and deferred alike.
+- **Point light shadows**: **Lighting → Point lights → Off / Cube maps / Ray traced**. Cube maps: the lamps nearest the camera (up to 32) each render six 90° depth faces into one texture array, sampled as a `TextureCubeArray` by direction. Ray traced: one inline `RayQuery` to every lamp that reaches the pixel, so every lamp casts shadows.
 - **Reversed-Z** depth (D32_FLOAT, infinite far plane), **Enhanced Barriers** only, a fly camera, and PIX markers throughout.
 
 ## Requirements
@@ -101,7 +102,7 @@ src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapCha
                           MipChain, ShaderCompiler, Pix
 src/renderer/             Renderer (frames in flight, frame constants, pass setup), ScenePass, ShadowMap,
                           AccelerationStructures (BLAS/TLAS), GBuffer, DeferredPass, LightBuffer, ClusterGrid,
-                          LightMarkerPass, TonemapPass
+                          LightMarkerPass, PointShadowMaps, TonemapPass
 src/scene/                Camera, fly controller, lighting, point lights, glTF loading (cgltf) into a flat Scene, image decoding (stb_image)
 src/ui/                   ImGuiLayer (Win32 + DX12 backends)
 tools/                    fetch-assets.ps1 (download glTF models), pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher)
@@ -154,6 +155,7 @@ Example prompt: *"Survey captures\WalnutRenderer_timing_….wpix with PixMcp: fr
 4. `Renderer::BeginFrame()` waits on this frame slot's fence, resets its command allocator and per-frame upload memory, and prepares the HDR scene color target and the depth buffer: Enhanced Barriers from UNDEFINED to RENDER_TARGET / DEPTH_STENCIL_WRITE (with DISCARD, so it doesn't matter which layout the last frame left them in), then clears of both. It binds the bindless state (descriptor heap, then the shared root signature).
 5. The frame's point lights are written into its upload memory (`LightBuffer`: a `StructuredBuffer` view straight onto the frame allocator, no copy), and `Renderer::SetFrameConstants()` binds the frame's camera and light data at `b2` (see `src/renderer/FrameConstants.h`) for graphics and compute; every pass can read it. With clustered lights, `ClusterGrid` then runs two compute dispatches: one thread resets a counter, then one thread per cluster tests every light's sphere against its cluster's view-space box (lights loaded 64 at a time into groupshared memory) and appends the hits to one shared index list (`InterlockedAdd`). Barriers order the dispatches and make the results readable by pixel shaders.
 6. The shadow pass renders depth from the sun into a 2048² shadow map (`ShadowMap`: UNDEFINED → DEPTH_STENCIL_WRITE with DISCARD, clear, depth-only draws, then DEPTH_STENCIL_WRITE → DIRECT_QUEUE_SHADER_RESOURCE so pixel shaders can read it). The sun's camera is orthographic, fitted to the scene's bounding sphere.
+   - **Point light cube maps** (cube-map technique only): for each of the nearest lamps, six faces (`PointShadowMaps::BeginFace`, one depth view per array slice) each drawn depth-only with that face's 90° camera at `b1`, culled to the meshes whose world bounds touch the lamp's sphere (about 19 of 103 draws per face in Sponza).
    - At load (not per frame), when ray tracing is supported, `AccelerationStructures` builds one BLAS per primitive from the scene's vertex/index buffers and a TLAS over the instances.
 7. The scene from the camera. `ScenePass` records one draw per instance (opaque first, then alpha-tested; PSOs switch only between those groups).
    - **Depth pre-pass** (`Renderer::BeginDepthPrepass()`, depth only): every draw writes its depth with no pixel shader (alpha-tested ones run a small shader that only discards). Shared, `precise` vertex math keeps the depths bit-identical to the next pass's.
@@ -221,6 +223,25 @@ GPU frame times, PIX Timing Captures (Release, 1280×720, vsync off, RTX 3070 Ti
 - **Clustered** visits about 37 lamps per pixel instead of 1024: 8.8× faster forward and 7.4× deferred at 1024 lamps. A cluster's box is the axis-aligned box around its frustum cell, so lists include a few lamps that barely miss, but never miss one.
 - **Deferred beats forward with many lights** (as deferred lighting was invented for): its lighting loop runs once per screen pixel in full 2×2 quads, while forward's runs inside the material shader, including its helper lanes on small triangles.
 - **The build** first transformed every lamp into view space in every thread (0.59 ms at 1024 lamps); loading lamps 64 at a time into groupshared memory, transformed once per group, cut it to 0.12 ms.
+
+### Point light shadows: cube maps vs ray traced
+
+**Lighting → Point lights → Shadows** picks the technique; with cube maps, **Shadowed lamps** sets the budget (the nearest lamps get one; **Cube shadow map** shows one unfolded). **View → Show → Point light shadows** shows the shadowed lamps' average visibility, and **Point shadow difference** lights with cube maps while also tracing a ray for each lamp that has one: red where only the cube map shadows, blue where only the ray does. They agree almost everywhere; the tints are the cube maps' limits: thin casters (leaves, chains) that 256² faces can't resolve, and edges the 4-tap filter softens.
+
+Both answer the same question as the sun's shadows, from a point instead of parallel rays: the cube is indexed by the direction from the lamp (the hardware picks the face), its depth comes from the face camera's perspective formula, and its texels (and bias) grow with distance. A ray just stops at the lamp.
+
+GPU frame times, PIX Timing Captures (Release, 1280×720, vsync off, RTX 3070 Ti, Sponza start view, clustered lights, p50):
+
+| | 256 lamps, forward | 256, deferred | 1024 lamps, forward | 1024, deferred |
+|---|---|---|---|---|
+| No point shadows | 0.51 ms | 0.46 ms | 1.13 ms | 0.88 ms |
+| Cube maps, 16 nearest | 1.00 ms | 0.96 ms | 1.63 ms | 1.38 ms |
+| Cube maps, 32 nearest | 1.62 ms | 1.57 ms | 2.12 ms | 1.87 ms |
+| Ray traced, every lamp | 1.72 ms | 1.31 ms | 7.34 ms | 5.09 ms |
+
+- **Cube maps** cost per shadowed lamp: about 0.03 ms of GPU time and about 110 draw calls (1788 draws for 16 lamps), whatever the total lamp count, and 48 MB for 32 cubes. Reading them is cheap (+0.04 ms for 32). Only the budget casts shadows, so shadows pop as lamps enter and leave it.
+- **Rays** cost per lamp reaching each pixel: no budget, no draws, no memory, no popping, but at 1024 lamps (about four times as many per pixel) they take 6 ms. Deferred traces them once per screen pixel, in full 2×2 quads, and is about 30% cheaper.
+
 
 ### Barriers
 

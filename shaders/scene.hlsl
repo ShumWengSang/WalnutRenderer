@@ -328,7 +328,8 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     const Material material = materials[materialIndex];
 
     const MaterialSample mat = SampleMaterial(input, isFrontFace, material);
-    const ShadingResult shading = ShadeSurface(input.worldPosition, mat, g_draw.debugView == kViewShadowDifference);
+    const ShadingResult shading = ShadeSurface(input.worldPosition, mat, g_draw.debugView == kViewShadowDifference,
+                                               g_draw.debugView == kViewPointShadowDifference);
 
     float3 color;
     if (SharedViewColor(g_draw.debugView, input.worldPosition, mat, shading, color))
