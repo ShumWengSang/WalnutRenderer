@@ -4,6 +4,7 @@
 
 #include "common/Bindless.hlsli"
 #include "common/Fullscreen.hlsli"
+#include "shared/Constants.h" // kTonemap*
 
 // Root constants at b0. Must match TonemapDrawConstants in TonemapPass.cpp.
 struct DrawConstants
@@ -14,9 +15,6 @@ struct DrawConstants
 };
 ConstantBuffer<DrawConstants> g_draw : register(b0);
 
-static const uint kTonemapClamp = 0;
-static const uint kTonemapReinhard = 1;
-static const uint kTonemapAcesFitted = 2;
 
 // x / (1 + x): maps 0..infinity smoothly onto 0..1 and never clips. Simple, but it compresses everything
 // (even mid-tones lose contrast) and bright saturated colors fade towards a flat look.

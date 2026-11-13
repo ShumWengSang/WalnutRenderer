@@ -114,12 +114,14 @@ shaders/                  HLSL sources, compiled at runtime straight from here (
                           lightmarkers.hlsl, tonemap.hlsl; common/ holds the shared includes (bindless, frame constants,
                           scene data, fullscreen triangle, BRDF, clusters, G-buffer layout, debug views). Lighting.hlsli
                           pulls in the lighting pieces: Material, SunShadow, ShadowRays, PointLight, PointShadows,
-                          Shading (ShadeSurface) and DebugViewColors
+                          Shading (ShadeSurface) and DebugViewColors. shared/ holds headers that the C++ code includes too,
+                          so both sides use the same values: Constants.h (enum values, cluster counts, cube face size)
+                          and DebugViewList.h (every debug view: value, --set name, UI label, forward-only/ray-traced flags)
 src/core/                 Application loop, command line, settings registry (--set), Win32 Window, Input, Timer, Log
 src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, RootSignature (shared bindless),
                           Buffer, Texture, UploadContext (staging ring), FrameAllocator (per-frame constants),
                           MipChain, ShaderCompiler, Pix
-src/renderer/             Renderer (frames in flight, frame constants, pass setup), ScenePass, ShadowMap,
+src/renderer/             Renderer (frames in flight, frame constants, pass setup), ScenePass, DebugViews, ShadowMap,
                           AccelerationStructures (BLAS/TLAS), GBuffer, DeferredPass, LightBuffer, ClusterGrid,
                           LightMarkerPass, PointShadowMaps, TonemapPass
 src/scene/                Camera, fly controller, lighting, point lights, glTF loading (cgltf) into a flat Scene, image decoding (stb_image)

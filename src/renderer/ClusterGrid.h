@@ -3,6 +3,7 @@
 #include "gfx/Buffer.h"
 #include "gfx/D3D12Common.h"
 #include "gfx/DescriptorHeap.h"
+#include "shared/Constants.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -18,10 +19,7 @@ namespace walnut
     class ClusterGrid
     {
     public:
-        static constexpr uint32_t kCountX = 16; // must match Clusters.hlsli
-        static constexpr uint32_t kCountY = 9;
-        static constexpr uint32_t kCountZ = 24;
-        static constexpr uint32_t kClusterCount = kCountX * kCountY * kCountZ;
+        // The grid's size (kClusterCountX/Y/Z, kClusterCount) is shared with the shaders: shared/Constants.h.
         // Room in the shared index list. Every (cluster, light) pair takes one slot: 3456 clusters x ~300 lights.
         static constexpr uint32_t kIndexCapacity = 1u << 20;
 

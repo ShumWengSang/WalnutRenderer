@@ -56,7 +56,7 @@ bool SphereTouchesBox(float3 center, float radius, float3 boxMin, float3 boxMax)
 // that every thread of one group can read and write (not visible to other groups). The group loads the lights in
 // batches of 64: each thread fetches and transforms ONE light into it, then every thread tests its own cluster
 // against all 64. Each light is transformed once per group instead of once per thread: 64x less work and reading.
-static const uint kThreadsPerGroup = 64;
+static const uint kThreadsPerGroup = kClusterThreadsPerGroup; // shared/Constants.h (ClusterGrid dispatches with it)
 groupshared float4 s_lights[kThreadsPerGroup]; // xyz = view-space center, w = range (negative: no light)
 
 // Tests this thread's cluster against every light, one shared batch at a time. Pass 1 only counts; pass 2 writes the

@@ -21,8 +21,6 @@ namespace walnut
         };
         static_assert(sizeof(ClusterBuildConstants) <= kNumDrawConstants * sizeof(uint32_t));
 
-        constexpr uint32_t kThreadsPerGroup = 64; // [numthreads] of CSBuildClusters
-
         void CreateStructuredViews(ID3D12Device* device, ID3D12Resource* buffer, uint32_t count, uint32_t stride,
                                    const DescriptorHandle* srv, const DescriptorHandle& uav)
         {
@@ -147,7 +145,7 @@ namespace walnut
 
         // One thread per cluster, 64 per group: ceil(3456 / 64) = 54 groups.
         commandList->SetPipelineState(m_buildPipeline.Get());
-        commandList->Dispatch((kClusterCount + kThreadsPerGroup - 1) / kThreadsPerGroup, 1, 1);
+        commandList->Dispatch((kClusterCount + kClusterThreadsPerGroup - 1) / kClusterThreadsPerGroup, 1, 1);
 
         // Wait for the build before any pixel shader reads the grid, and make its writes visible to them.
         const CD3DX12_BUFFER_BARRIER toRead[2] = {

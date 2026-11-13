@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gfx/MipChain.h"
+#include "shared/Constants.h" // kNoTexture, AlphaMode values
 
 #include <DirectXMath.h>
 
@@ -20,8 +21,6 @@ namespace walnut
     };
     static_assert(sizeof(SceneVertex) == 48);
 
-    inline constexpr uint32_t kNoTexture = UINT32_MAX;
-
     // A decoded image with its full mip chain, ready to upload. 'content' says what its bytes mean: color images
     // (base color, emissive) are sRGB; data images (metallic-roughness, occlusion) linear; normal maps are linear
     // vectors whose mips are renormalized.
@@ -35,12 +34,12 @@ namespace walnut
         bool IsSrgb() const { return content == MipContent::Srgb; }
     };
 
-    // How a material's alpha is used (glTF alphaMode). Values must match shaders/common/SceneData.hlsli.
+    // How a material's alpha is used (glTF alphaMode). Values shared with the shaders (shared/Constants.h).
     enum class AlphaMode : uint32_t
     {
-        Opaque = 0, // alpha ignored
-        Mask = 1,   // pixels with alpha < alphaCutoff are discarded (leaves, chains, fences)
-        Blend = 2,  // see-through; needs sorted, blended drawing (drawn as opaque for now)
+        Opaque = kAlphaOpaque, // alpha ignored
+        Mask = kAlphaMask,     // pixels with alpha < alphaCutoff are discarded (leaves, chains, fences)
+        Blend = kAlphaBlend,   // see-through; needs sorted, blended drawing (drawn as opaque for now)
     };
 
     // A glTF metallic-roughness material: constant factors, multiplied by textures where it has them.

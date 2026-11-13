@@ -5,11 +5,11 @@
 #include "common/Bindless.hlsli"
 #include "common/FrameConstants.hlsli"
 #include "common/PointLight.hlsli"
+#include "shared/Constants.h" // kPointShadowFaceSize
 
 // Point light shadows from cube shadow maps (M2). The lamp's cube was rendered by six 90-degree cameras at the lamp
 // (PointShadowMaps.cpp). Sampling a cube with a direction makes the hardware pick the face and the texel the ray from
 // the lamp's center passes through; SampleCmp then compares our depth with the depth stored there, like SunShadow.
-static const float kPointShadowFaceSize = 256.0f;     // PointShadowMaps::kFaceSize
 static const float kPointShadowNormalOffset = 1.5f;   // texels, along the surface normal (towards the lamp)
 static const float kPointShadowDepthBias = 1.0f;      // texels, towards the lamp
 

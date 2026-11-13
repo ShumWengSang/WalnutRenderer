@@ -2,6 +2,7 @@
 #ifndef WALNUT_POINT_LIGHT_HLSLI
 #define WALNUT_POINT_LIGHT_HLSLI
 
+#include "shared/Constants.h" // kNoShadowSlot
 
 // One point light (L1). Must match PointLightGpu in PointLights.h (32 bytes).
 struct PointLight
@@ -9,7 +10,7 @@ struct PointLight
     float3 position;  // world space
     float  range;     // meters: the light fades to exactly zero here
     float3 intensity; // linear color * intensity
-    uint   shadowSlot; // cube shadow map slot (PointShadowMaps), 0xFFFFFFFF: no shadow
+    uint   shadowSlot; // cube shadow map slot (PointShadowMaps), kNoShadowSlot: none
 };
 
 // How much of a point light reaches a surface at distance^2 = distanceSquared, per unit of intensity.
@@ -24,8 +25,5 @@ float PointLightFalloff(float distanceSquared, float range)
     const float window = saturate(1.0f - ratio2 * ratio2);
     return window * window / max(distanceSquared, 1e-4f);
 }
-
-// The light has no cube shadow map (beyond the budget, or point shadows aren't cube maps).
-static const uint kNoShadowSlot = 0xFFFFFFFF;
 
 #endif

@@ -3,11 +3,7 @@
 #ifndef WALNUT_SCENE_DATA_HLSLI
 #define WALNUT_SCENE_DATA_HLSLI
 
-static const uint kNoTexture = 0xFFFFFFFF;
-
-static const uint kAlphaOpaque = 0; // AlphaMode in Scene.h
-static const uint kAlphaMask   = 1;
-static const uint kAlphaBlend  = 2;
+#include "shared/Constants.h" // kNoTexture, kAlpha* (AlphaMode)
 
 
 // Must match SceneVertex in Scene.h (48 bytes).

@@ -1,5 +1,5 @@
 // Deferred shading's second half: one fullscreen pass that lights every screen pixel once, from what the G-buffer
-// pass (PSGBuffer in scene.hlsl) stored. The lighting is the forward path's own code (ShadeSurface in Lighting.hlsli);
+// pass (PSGBuffer in scene.hlsl) stored. The lighting is the forward path's own code (ShadeSurface in Shading.hlsli);
 // only where its inputs come from differs.
 
 #ifndef RAYTRACED_SHADOWS
@@ -19,7 +19,7 @@ struct DrawConstants
     uint materialIndex;
     uint emissiveIndex;
     uint depthIndex;
-    uint debugView;      // SceneDebugView in ScenePass.h
+    uint debugView;      // SceneDebugView (shared/DebugViewList.h)
 };
 ConstantBuffer<DrawConstants> g_draw : register(b0);
 

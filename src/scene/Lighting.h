@@ -1,22 +1,24 @@
 #pragma once
 
+#include "shared/Constants.h"
+
 #include <DirectXMath.h>
 
 namespace walnut
 {
-    // Where point lights get their shadows. Values must match Lighting.hlsli.
+    // Where point lights get their shadows. Values shared with the shaders (shared/Constants.h).
     enum class PointShadowTechnique : uint32_t
     {
-        Off = 0,       // lamps light through everything
-        CubeMaps = 1,  // the nearest lamps (the budget) get a cube shadow map
-        RayTraced = 2, // every lamp: one shadow ray per lamp that reaches the pixel (needs inline ray tracing)
+        Off = kPointShadowOff,             // lamps light through everything
+        CubeMaps = kPointShadowCubeMaps,   // the nearest lamps (the budget) get a cube shadow map
+        RayTraced = kPointShadowRayTraced, // every lamp: one shadow ray per lamp that reaches the pixel (needs inline ray tracing)
     };
 
-    // How surfaces respond to light. Values must match shaders/common/DebugViews.hlsli.
+    // How surfaces respond to light. Values shared with the shaders (shared/Constants.h).
     enum class ShadingModel : uint32_t
     {
-        Lambert = 0, // matte only: baseColor / pi (Step 1-2)
-        Pbr = 1,     // glTF metallic-roughness: Lambert diffuse + Cook-Torrance GGX specular (Brdf.hlsli)
+        Lambert = kShadingLambert, // matte only: baseColor / pi (Step 1-2)
+        Pbr = kShadingPbr,         // glTF metallic-roughness: Lambert diffuse + Cook-Torrance GGX specular (Brdf.hlsli)
     };
 
     // The scene's light: one sun (a directional light: infinitely far away, so every point receives it from the
@@ -48,7 +50,7 @@ namespace walnut
         int pointShadowBudget = 16;
         PointShadowTechnique pointShadowTechnique = PointShadowTechnique::CubeMaps;
 
-        // Shadow-map bias, in shadow-map texels (see SunShadow in shaders/common/Lighting.hlsli).
+        // Shadow-map bias, in shadow-map texels (see SunShadow in shaders/common/SunShadow.hlsli).
         float shadowConstantBias = 0.5f;
         float shadowSlopeBias = 1.0f;
         float shadowNormalOffset = 1.0f;

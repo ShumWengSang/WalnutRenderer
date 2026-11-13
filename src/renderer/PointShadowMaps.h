@@ -2,6 +2,7 @@
 
 #include "gfx/D3D12Common.h"
 #include "gfx/DescriptorHeap.h"
+#include "shared/Constants.h"
 
 #include <DirectXMath.h>
 
@@ -25,7 +26,7 @@ namespace walnut
     class PointShadowMaps
     {
     public:
-        static constexpr uint32_t kFaceSize = 256;
+        static constexpr uint32_t kFaceSize = kPointShadowFaceSize; // shared with the shaders (shared/Constants.h)
         static constexpr uint32_t kMaxShadowedLights = 32;
         static constexpr uint32_t kFaceCount = 6;
         // Each face camera sees from nearScale * range to range. Closer than that, nothing casts a shadow (the light

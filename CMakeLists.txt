@@ -61,6 +61,7 @@ set(WALNUT_SOURCES
     src/renderer/AccelerationStructures.h
     src/renderer/ClusterGrid.cpp
     src/renderer/ClusterGrid.h
+    src/renderer/DebugViews.h
     src/renderer/DeferredPass.cpp
     src/renderer/DeferredPass.h
     src/renderer/FrameConstants.h
@@ -100,10 +101,16 @@ set(WALNUT_SOURCES
 
     src/ui/ImGuiLayer.cpp
     src/ui/ImGuiLayer.h
+
+    # Shared with the shaders (see shaders/shared/Shared.h).
+    shaders/shared/Constants.h
+    shaders/shared/DebugViewList.h
+    shaders/shared/Shared.h
 )
 
 add_executable(WalnutRenderer WIN32 ${WALNUT_SOURCES})
-target_include_directories(WalnutRenderer PRIVATE src)
+# shaders/: for the headers in shaders/shared/, which the C++ code and the shaders both include.
+target_include_directories(WalnutRenderer PRIVATE src shaders)
 target_compile_definitions(WalnutRenderer PRIVATE
     UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
     WALNUT_AGILITY_SDK_VERSION=${WALNUT_AGILITY_SDK_EXPORT_VERSION}

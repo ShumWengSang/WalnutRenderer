@@ -1,6 +1,6 @@
 // Clustered lighting (L3/L4): the view frustum cut into a 3D grid of cells ("clusters"), each with a list of the point
 // lights that can reach it. Built every frame by clusters.hlsl, read by the shading (Lighting.hlsli).
-// Must match ClusterGrid.h.
+// The grid's size is in shared/Constants.h (shared with ClusterGrid.h).
 //
 //   x, y: 16 x 9 tiles across the screen
 //   z:    24 slices in depth, spaced exponentially between clusterNear and clusterFar (thin near the camera, thick far
@@ -9,11 +9,7 @@
 #define WALNUT_CLUSTERS_HLSLI
 
 #include "common/FrameConstants.hlsli"
-
-static const uint kClusterCountX = 16;
-static const uint kClusterCountY = 9;
-static const uint kClusterCountZ = 24;
-static const uint kClusterCount = kClusterCountX * kClusterCountY * kClusterCountZ;
+#include "shared/Constants.h" // kClusterCountX/Y/Z, kClusterCount
 
 uint ClusterIndex(uint3 cell)
 {

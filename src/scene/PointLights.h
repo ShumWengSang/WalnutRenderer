@@ -1,5 +1,7 @@
 #pragma once
 
+#include "shared/Constants.h"
+
 #include <DirectXMath.h>
 
 #include <cstdint>
@@ -7,13 +9,13 @@
 
 namespace walnut
 {
-    // One point light as the shaders read it (32 bytes). Must match PointLight in shaders/common/Lighting.hlsli.
+    // One point light as the shaders read it (32 bytes). Must match PointLight in shaders/common/PointLight.hlsli.
     struct PointLightGpu
     {
         DirectX::XMFLOAT3 position; // world space
         float range;                // meters: the light fades smoothly to exactly zero here
         DirectX::XMFLOAT3 intensity; // linear color * intensity: at distance d, a surface facing it receives intensity / d^2
-        uint32_t shadowSlot = UINT32_MAX; // which cube of PointShadowMaps holds its shadow; UINT32_MAX: none
+        uint32_t shadowSlot = kNoShadowSlot; // which cube of PointShadowMaps holds its shadow
     };
 
     // A field of colored lamps scattered through a scene, for testing many lights. Positions and colors come from a

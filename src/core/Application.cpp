@@ -182,12 +182,10 @@ namespace walnut
     {
         using E = SettingsRegistry::EnumName;
         SettingsRegistry& s = m_settings;
-        s.AddEnum("view.show", &m_sceneView.debugView, {
-            { "lit", 0 }, { "lighting", 1 }, { "basecolor", 2 }, { "normals", 3 }, { "texcoords", 4 }, { "instances", 5 },
-            { "materials", 6 }, { "alphamode", 7 }, { "sunshadow", 8 }, { "shadowdiff", 9 }, { "roughness", 10 },
-            { "metallic", 11 }, { "normalmap", 12 }, { "occlusion", 13 }, { "emissive", 14 }, { "sunspecular", 15 },
-            { "ambient", 16 }, { "geonormals", 17 }, { "pointlights", 18 }, { "clusterlights", 19 },
-            { "pointshadows", 20 }, { "pointshadowdiff", 21 } });
+        std::vector<E> views;
+        for (const DebugViewInfo& view : kDebugViews)
+            views.push_back({ view.setting, static_cast<int>(view.view) });
+        s.AddEnum("view.show", &m_sceneView.debugView, std::move(views));
         s.AddEnum("view.path", &m_sceneView.renderPath, { E{ "forward", 0 }, E{ "deferred", 1 } });
         s.AddBool("view.prepass", &m_sceneView.depthPrepass);
         s.AddEnum("view.normalMapping", &m_sceneView.normalMapping, { E{ "off", 0 }, E{ "mesh", 1 }, E{ "derived", 2 } });
@@ -667,27 +665,10 @@ namespace walnut
 
         if (m_scenePass && ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen))
         {
-            const char* views[] = { "Lit (sun + ambient)", "Lighting only", "Base color (unlit)", "Normals (world)",
-                                    "Texture coordinates", "Instance colors", "Material colors", "Alpha mode / back faces",
-                                    "Sun shadow", "Shadow difference (ray traced vs map)",
-                                    "Roughness", "Metallic", "Normal map (tangent space)", "Occlusion", "Emissive",
-                                    "Sun specular (highlights)", "Ambient (sky + ground, occluded)",
-                                    "Geometric normals (no normal map)", "Point lights only", "Lights per cluster (heat map)",
-                                    "Point light shadows (shadowed lamps)", "Point shadow difference (cube maps vs rays)" };
             const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
 
             // Forward or deferred. Deferred can show everything computed from the G-buffer, but not views that need a
-            // draw's own inputs (texture coordinates, instance and material ids, the raw normal map, face orientation).
-            const auto inGBuffer = [](SceneDebugView view) {
-                switch (view)
-                {
-                case SceneDebugView::Texcoords: case SceneDebugView::Instances: case SceneDebugView::Materials:
-                case SceneDebugView::AlphaMode: case SceneDebugView::NormalMap:
-                    return false;
-                default:
-                    return true;
-                }
-            };
+            // draw's own inputs (kDebugViewForwardOnly in shaders/shared/DebugViewList.h).
             {
                 int path = static_cast<int>(m_sceneView.renderPath);
                 ImGui::RadioButton("Forward##path", &path, static_cast<int>(RenderPath::Forward));
@@ -700,27 +681,20 @@ namespace walnut
                 m_sceneView.renderPath = static_cast<RenderPath>(path);
             }
             const bool deferred = m_sceneView.renderPath == RenderPath::Deferred;
-            if (deferred && !inGBuffer(m_sceneView.debugView))
+            if (deferred && (GetDebugViewInfo(m_sceneView.debugView).flags & kDebugViewForwardOnly))
                 m_sceneView.debugView = SceneDebugView::Lit;
 
-            const int current = static_cast<int>(m_sceneView.debugView);
-            if (ImGui::BeginCombo("Show", views[current]))
+            if (ImGui::BeginCombo("Show", GetDebugViewInfo(m_sceneView.debugView).label))
             {
-                for (int i = 0; i < IM_ARRAYSIZE(views); ++i)
+                for (const DebugViewInfo& view : kDebugViews)
                 {
-                    const bool needsTracing = static_cast<SceneDebugView>(i) == SceneDebugView::ShadowDifference ||
-                                              static_cast<SceneDebugView>(i) == SceneDebugView::PointShadowDifference;
-                    if (i == static_cast<int>(SceneDebugView::Roughness))
-                        ImGui::SeparatorText("Material maps");
-                    else if (i == static_cast<int>(SceneDebugView::SunSpecular))
-                        ImGui::SeparatorText("Lighting terms");
-                    else if (i == static_cast<int>(SceneDebugView::GeometricNormals))
-                        ImGui::SeparatorText("Geometry");
-                    else if (i == static_cast<int>(SceneDebugView::PointLights))
-                        ImGui::SeparatorText("Point lights");
-                    ImGui::BeginDisabled((needsTracing && !canTrace) || (deferred && !inGBuffer(static_cast<SceneDebugView>(i))));
-                    if (ImGui::Selectable(views[i], i == current))
-                        m_sceneView.debugView = static_cast<SceneDebugView>(i);
+                    if (view.group[0] != '\0')
+                        ImGui::SeparatorText(view.group);
+                    const bool unavailable = ((view.flags & kDebugViewNeedsRayTracing) && !canTrace) ||
+                                             (deferred && (view.flags & kDebugViewForwardOnly));
+                    ImGui::BeginDisabled(unavailable);
+                    if (ImGui::Selectable(view.label, view.view == m_sceneView.debugView))
+                        m_sceneView.debugView = view.view;
                     ImGui::EndDisabled();
                 }
                 ImGui::EndCombo();
@@ -871,8 +845,8 @@ namespace walnut
                 }
                 const uint32_t used = m_clusterGrid->GetUsedIndices();
                 ImGui::Text("Clusters: %ux%ux%u, %u light entries (%.1f per cluster, %.0f%% of the list)",
-                            ClusterGrid::kCountX, ClusterGrid::kCountY, ClusterGrid::kCountZ, used,
-                            static_cast<double>(used) / ClusterGrid::kClusterCount,
+                            kClusterCountX, kClusterCountY, kClusterCountZ, used,
+                            static_cast<double>(used) / kClusterCount,
                             100.0 * used / ClusterGrid::kIndexCapacity);
                 ImGui::TreePop();
             }

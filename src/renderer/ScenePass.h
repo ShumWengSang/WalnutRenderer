@@ -4,6 +4,8 @@
 #include "gfx/D3D12Common.h"
 #include "gfx/DescriptorHeap.h"
 #include "gfx/Texture.h"
+#include "renderer/DebugViews.h"
+#include "shared/Constants.h"
 
 #include <DirectXMath.h>
 
@@ -20,39 +22,12 @@ namespace walnut
     class UploadContext;
     struct Scene;
 
-    // What the scene shaders output. Values must match shaders/common/DebugViews.hlsli.
-    enum class SceneDebugView : uint32_t
-    {
-        Lit = 0,          // base color lit by the sun (Lambert diffuse) plus ambient
-        LightingOnly = 1, // the same lighting on a white surface: shows the light without the textures
-        BaseColor = 2,    // the material's base color: texture * factor (unlit)
-        Normals = 3,      // world-space normal, mapped from -1..1 to 0..1 colors
-        Texcoords = 4,    // UV as red/green
-        Instances = 5,    // a random color per instance (= per draw)
-        Materials = 6,    // a random color per material
-        AlphaMode = 7,    // opaque gray, mask yellow, blend red; back faces of double-sided materials darker
-        SunShadow = 8,    // the shadow map test: white = the sun reaches this point, black = blocked
-        ShadowDifference = 9, // ray traced vs shadow map: red = only the map shadows, blue = only the ray shadows
-        Roughness = 10,   // metallic-roughness map G * roughnessFactor (black = mirror, white = matte)
-        Metallic = 11,    // metallic-roughness map B * metallicFactor (white = metal)
-        NormalMap = 12,   // the raw tangent-space normal map (light blue = flat)
-        Occlusion = 13,   // ambient occlusion map, scaled by its strength
-        Emissive = 14,    // emitted light: emissive map * factor
-        SunSpecular = 15, // only the sun's GGX specular reflection (the highlights)
-        Ambient = 16,     // only the ambient light: sky/ground diffuse + reflection, times occlusion
-        GeometricNormals = 17, // the surface's own normal, without the normal map (used for shadows)
-        PointLights = 18, // only the point lights' contribution (diffuse + specular)
-        ClusterLights = 19, // heat map: how many lights the pixel's cluster lists
-        PointShadows = 20, // average visibility of the shadowed lamps reaching the pixel
-        PointShadowDifference = 21, // cube maps vs rays for the lamps with a cube (red: only cubes, blue: only rays)
-    };
-
-    // Where the tangent frame for normal mapping comes from. Values must match scene.hlsl.
+    // Where the tangent frame for normal mapping comes from. Values shared with scene.hlsl (shared/Constants.h).
     enum class NormalMapping : uint32_t
     {
-        Off = 0,     // ignore normal maps: the interpolated vertex normal only
-        Mesh = 1,    // TBN from the glTF TANGENT attribute (derived per pixel for meshes without one)
-        Derived = 2, // TBN always derived per pixel from position/uv screen-space derivatives
+        Off = kNormalMappingOff,         // ignore normal maps: the interpolated vertex normal only
+        Mesh = kNormalMappingMesh,       // TBN from the glTF TANGENT attribute (derived per pixel for meshes without one)
+        Derived = kNormalMappingDerived, // TBN always derived per pixel from position/uv screen-space derivatives
     };
 
     // How the scene's pixels get their color.

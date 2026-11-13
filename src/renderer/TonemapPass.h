@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gfx/D3D12Common.h"
+#include "shared/Constants.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -11,12 +12,13 @@ namespace walnut
     class Device;
     class ShaderCompiler;
 
-    // Which curve maps HDR scene light (0 .. infinity) to displayable 0..1. Values must match tonemap.hlsl.
+    // Which curve maps HDR scene light (0 .. infinity) to displayable 0..1. Values shared with tonemap.hlsl
+    // (shared/Constants.h).
     enum class TonemapOperator : uint32_t
     {
-        Clamp = 0,      // no curve: everything above 1 is clipped (what D1 did)
-        Reinhard = 1,   // x / (1 + x): simple, never clips, but flattens and desaturates bright areas
-        AcesFitted = 2, // fit of the ACES film curve: contrasty "filmic" look, gentle highlight roll-off
+        Clamp = kTonemapClamp,           // no curve: everything above 1 is clipped (what D1 did)
+        Reinhard = kTonemapReinhard,     // x / (1 + x): simple, never clips, but flattens and desaturates bright areas
+        AcesFitted = kTonemapAcesFitted, // fit of the ACES film curve: contrasty "filmic" look, gentle highlight roll-off
     };
 
     struct TonemapSettings

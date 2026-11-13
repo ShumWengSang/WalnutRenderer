@@ -13,6 +13,7 @@
 #include "common/FrameConstants.hlsli"
 #include "common/GBuffer.hlsli"
 #include "common/Lighting.hlsli"
+#include "shared/Constants.h" // kNormalMapping*
 
 // Root constants at b0. Must match SceneDrawConstants in ScenePass.cpp.
 struct DrawConstants
@@ -20,16 +21,13 @@ struct DrawConstants
     uint vertexBufferIndex;   // descriptor heap slot of StructuredBuffer<Vertex>
     uint instanceBufferIndex; // descriptor heap slot of StructuredBuffer<Instance>
     uint materialBufferIndex; // descriptor heap slot of StructuredBuffer<Material>
-    uint debugView;           // SceneDebugView in ScenePass.h
+    uint debugView;           // SceneDebugView (shared/DebugViewList.h)
     uint instanceIndex;       // which instance this draw is
     uint indexBufferIndex;    // descriptor heap slot of the index buffer as StructuredBuffer<uint> (ray hits)
-    uint normalMapping;       // NormalMapping in ScenePass.h
+    uint normalMapping;       // NormalMapping in ScenePass.h (values: kNormalMapping*)
 };
 ConstantBuffer<DrawConstants> g_draw : register(b0);
 
-static const uint kNormalMappingOff     = 0; // NormalMapping in ScenePass.h
-static const uint kNormalMappingMesh    = 1;
-static const uint kNormalMappingDerived = 2;
 
 struct PSInput
 {

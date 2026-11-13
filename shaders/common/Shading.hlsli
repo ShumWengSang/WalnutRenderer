@@ -15,6 +15,7 @@
 #include "common/PointShadows.hlsli"
 #include "common/ShadowRays.hlsli"
 #include "common/SunShadow.hlsli"
+#include "shared/Constants.h" // kShading*, kPointShadow* (the point shadow technique)
 
 // The ambient "hemisphere light": the sky's radiance from above the horizon, the ground's from below.
 //
@@ -31,10 +32,6 @@ float3 HemisphereLight(float3 direction, float width)
     return lerp(g_frame.groundRadiance, g_frame.skyRadiance, skyShare);
 }
 
-// The point shadow technique (Lighting > Point lights). Values must match PointShadowTechnique in Lighting.h.
-static const uint  kPointShadowOff       = 0;
-static const uint  kPointShadowCubeMaps  = 1;
-static const uint  kPointShadowRayTraced = 2;
 
 // Adds one point light's reflected light (radiance) and arriving light (irradiance, for the Lambert views). The
 // visibility of shadowed lamps that reach the point is summed into shadowSum / shadowCount (the shadow debug view).
