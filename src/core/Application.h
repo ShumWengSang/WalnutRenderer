@@ -1,6 +1,8 @@
 #pragma once
 
+#include "core/CommandLine.h"
 #include "core/Input.h"
+#include "core/SettingsRegistry.h"
 #include "core/Timer.h"
 #include "renderer/AccelerationStructures.h"
 #include "renderer/ClusterGrid.h"
@@ -31,21 +33,6 @@ namespace walnut
     class ShaderCompiler;
     class ImGuiLayer;
 
-    struct AppOptions
-    {
-        bool debugLayer = false;
-        bool gpuValidation = false;
-        bool pixGpuCapturer = false;   // load WinPixGpuCapturer.dll at startup
-        uint64_t pixCaptureFrame = 0;  // take a GPU capture at this frame (implies pixGpuCapturer)
-        uint64_t exitAfterFrames = 0; // 0 = run until closed (useful for automated smoke tests)
-        double exitAfterSeconds = 0.0; // 0 = run until closed
-        std::filesystem::path scene = kDefaultScene; // relative to the asset directory, or absolute
-    };
-
-    // Parses --debug-layer, --no-debug-layer, --gpu-validation, --pix, --pix-capture-frame=N,
-    // --exit-after-frames=N, --exit-after-seconds=S and --scene=PATH.
-    AppOptions ParseCommandLine();
-
     class Application
     {
     public:
@@ -64,6 +51,10 @@ namespace walnut
         void DrawPixUI();
         void ReloadShaders();
         void RequestGpuCapture();
+        // The names --set and --list-settings know (core/SettingsRegistry.h).
+        void RegisterSettings();
+        // The time animations run on: the clock, or --time.
+        double GetAnimationTime() const;
 
         AppOptions m_options;
         std::filesystem::path m_exeDir;
@@ -113,5 +104,6 @@ namespace walnut
         bool m_showUI = true; // F1
         float m_smoothedFrameMs = 0.0f;
         std::filesystem::path m_lastCapturePath;
+        SettingsRegistry m_settings;
     };
 }

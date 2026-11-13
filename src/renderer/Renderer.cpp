@@ -1,14 +1,20 @@
 #include "renderer/Renderer.h"
 
 #include "core/Log.h"
+#include "core/StringUtils.h"
 #include "core/Window.h"
 #include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
 #include "gfx/RootSignature.h"
 
+#include <stb_image_write.h>
+
 #include <algorithm>
+#include <cstring>
+#include <fstream>
 #include <iterator>
 #include <string>
+#include <vector>
 
 namespace walnut
 {
@@ -241,6 +247,85 @@ namespace walnut
         // Switching views of the same texture needs no barrier; the layout and contents don't change.
         const D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_swapChain->GetRtv(m_backBufferIndex);
         m_commandList->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    }
+
+    void Renderer::CaptureBackBuffer()
+    {
+        ID3D12Resource* backBuffer = m_swapChain->GetBackBuffer(m_backBufferIndex);
+        const D3D12_RESOURCE_DESC desc = backBuffer->GetDesc();
+        UINT64 bytes = 0;
+        m_device->Get()->GetCopyableFootprints(&desc, 0, 1, 0, &m_screenshotFootprint, nullptr, nullptr, &bytes);
+        if (!m_screenshotReadback || m_screenshotReadback->GetDesc().Width < bytes)
+        {
+            const CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_READBACK);
+            const CD3DX12_RESOURCE_DESC1 bufferDesc = CD3DX12_RESOURCE_DESC1::Buffer(bytes);
+            m_screenshotReadback.Reset();
+            WR_CHECK(m_device->Get()->CreateCommittedResource3(&heapProps, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+                                                               D3D12_BARRIER_LAYOUT_UNDEFINED, nullptr, nullptr, 0, nullptr,
+                                                               IID_PPV_ARGS(&m_screenshotReadback)));
+            SetDebugName(m_screenshotReadback.Get(), L"ScreenshotReadback");
+        }
+
+        // RENDER_TARGET -> COPY_SOURCE, copy, and back: the UI is drawn into the same back buffer afterwards.
+        const auto transition = [&](D3D12_BARRIER_SYNC syncBefore, D3D12_BARRIER_SYNC syncAfter,
+                                    D3D12_BARRIER_ACCESS accessBefore, D3D12_BARRIER_ACCESS accessAfter,
+                                    D3D12_BARRIER_LAYOUT layoutBefore, D3D12_BARRIER_LAYOUT layoutAfter) {
+            const CD3DX12_TEXTURE_BARRIER barrier(syncBefore, syncAfter, accessBefore, accessAfter, layoutBefore, layoutAfter,
+                                                  backBuffer, CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources));
+            const CD3DX12_BARRIER_GROUP group(1, &barrier);
+            m_commandList->Barrier(1, &group);
+        };
+        transition(D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_ACCESS_RENDER_TARGET,
+                   D3D12_BARRIER_ACCESS_COPY_SOURCE, D3D12_BARRIER_LAYOUT_RENDER_TARGET, D3D12_BARRIER_LAYOUT_COPY_SOURCE);
+        const CD3DX12_TEXTURE_COPY_LOCATION destination(m_screenshotReadback.Get(), m_screenshotFootprint);
+        const CD3DX12_TEXTURE_COPY_LOCATION source(backBuffer, 0);
+        m_commandList->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
+        transition(D3D12_BARRIER_SYNC_COPY, D3D12_BARRIER_SYNC_RENDER_TARGET, D3D12_BARRIER_ACCESS_COPY_SOURCE,
+                   D3D12_BARRIER_ACCESS_RENDER_TARGET, D3D12_BARRIER_LAYOUT_COPY_SOURCE, D3D12_BARRIER_LAYOUT_RENDER_TARGET);
+        m_screenshotPending = true;
+    }
+
+    bool Renderer::SaveScreenshot(const std::filesystem::path& path)
+    {
+        if (!m_screenshotPending)
+            return false;
+        WaitForGpu();
+        m_screenshotPending = false;
+
+        const uint32_t width = m_screenshotFootprint.Footprint.Width;
+        const uint32_t height = m_screenshotFootprint.Footprint.Height;
+        const uint32_t pitch = m_screenshotFootprint.Footprint.RowPitch;
+        void* mapped = nullptr;
+        const D3D12_RANGE readRange{ 0, static_cast<SIZE_T>(pitch) * height };
+        WR_CHECK(m_screenshotReadback->Map(0, &readRange, &mapped));
+        // The back buffer is RGBA8 holding sRGB-encoded values (the tonemap wrote through the _SRGB view): exactly
+        // what a PNG stores. Alpha is forced opaque.
+        std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4);
+        for (uint32_t y = 0; y < height; ++y)
+        {
+            const uint8_t* row = static_cast<const uint8_t*>(mapped) + static_cast<size_t>(y) * pitch;
+            uint8_t* out = pixels.data() + static_cast<size_t>(y) * width * 4;
+            std::memcpy(out, row, static_cast<size_t>(width) * 4);
+            for (uint32_t x = 0; x < width; ++x)
+                out[x * 4 + 3] = 255;
+        }
+        const D3D12_RANGE noWrite{ 0, 0 };
+        m_screenshotReadback->Unmap(0, &noWrite);
+
+        std::vector<uint8_t> png;
+        stbi_write_png_to_func([](void* context, void* data, int size) {
+            auto* bytes = static_cast<std::vector<uint8_t>*>(context);
+            bytes->insert(bytes->end(), static_cast<uint8_t*>(data), static_cast<uint8_t*>(data) + size);
+        }, &png, static_cast<int>(width), static_cast<int>(height), 4, pixels.data(), static_cast<int>(width) * 4);
+        if (png.empty())
+            return false;
+        if (path.has_parent_path())
+            std::filesystem::create_directories(path.parent_path());
+        std::ofstream file(path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+        const bool ok = file.good();
+        log::Info("Screenshot {}x{} -> {}{}", width, height, ToUtf8(path.wstring()), ok ? "" : " (write failed)");
+        return ok;
     }
 
     void Renderer::BindBindlessState(ID3D12GraphicsCommandList* commandList) const

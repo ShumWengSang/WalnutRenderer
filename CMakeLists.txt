@@ -17,10 +17,14 @@ set(WALNUT_SOURCES
 
     src/core/Application.cpp
     src/core/Application.h
+    src/core/CommandLine.cpp
+    src/core/CommandLine.h
     src/core/Input.cpp
     src/core/Input.h
     src/core/Log.cpp
     src/core/Log.h
+    src/core/SettingsRegistry.cpp
+    src/core/SettingsRegistry.h
     src/core/StringUtils.h
     src/core/Timer.h
     src/core/Window.cpp
@@ -116,6 +120,7 @@ target_link_libraries(WalnutRenderer PRIVATE
     walnut_pix
     walnut_cgltf
     walnut_stb
+    walnut_stb_write
     d3d12
     dxgi
     dxguid

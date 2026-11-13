@@ -33,6 +33,12 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int)
     walnut::log::Info("WalnutRenderer starting (Agility SDK {})", WALNUT_AGILITY_SDK_VERSION);
 
     const walnut::AppOptions options = walnut::ParseCommandLine();
+    if (options.help)
+    {
+        walnut::log::Info("{}", walnut::GetCommandLineHelp());
+        walnut::log::Shutdown();
+        return EXIT_SUCCESS;
+    }
     int exitCode = EXIT_SUCCESS;
     try
     {
@@ -42,7 +48,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ PWSTR, _In_ int)
     catch (const std::exception& e)
     {
         walnut::log::Error("Fatal: {}", e.what());
-        if (options.exitAfterFrames == 0 && options.exitAfterSeconds <= 0.0)
+        if (options.exitAfterFrames == 0 && options.exitAfterSeconds <= 0.0 && options.screenshot.empty())
             MessageBoxA(nullptr, e.what(), "WalnutRenderer - fatal error", MB_OK | MB_ICONERROR);
         exitCode = EXIT_FAILURE;
     }

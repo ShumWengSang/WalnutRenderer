@@ -44,50 +44,6 @@ namespace walnut
         }
     }
 
-    AppOptions ParseCommandLine()
-    {
-        AppOptions options;
-#ifdef _DEBUG
-        options.debugLayer = true;
-#endif
-        int argc = 0;
-        LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-        if (!argv)
-            return options;
-
-        constexpr std::wstring_view kExitAfterFrames = L"--exit-after-frames=";
-        constexpr std::wstring_view kExitAfterSeconds = L"--exit-after-seconds=";
-        constexpr std::wstring_view kPixCaptureFrame = L"--pix-capture-frame=";
-        constexpr std::wstring_view kScene = L"--scene=";
-        for (int i = 1; i < argc; ++i)
-        {
-            const std::wstring_view arg = argv[i];
-            if (arg == L"--debug-layer")
-                options.debugLayer = true;
-            else if (arg == L"--no-debug-layer")
-                options.debugLayer = false;
-            else if (arg == L"--gpu-validation")
-                options.gpuValidation = true;
-            else if (arg == L"--pix")
-                options.pixGpuCapturer = true;
-            else if (arg.starts_with(kPixCaptureFrame))
-            {
-                options.pixGpuCapturer = true;
-                options.pixCaptureFrame = std::wcstoull(std::wstring(arg.substr(kPixCaptureFrame.size())).c_str(), nullptr, 10);
-            }
-            else if (arg.starts_with(kExitAfterFrames))
-                options.exitAfterFrames = std::wcstoull(std::wstring(arg.substr(kExitAfterFrames.size())).c_str(), nullptr, 10);
-            else if (arg.starts_with(kExitAfterSeconds))
-                options.exitAfterSeconds = std::wcstod(std::wstring(arg.substr(kExitAfterSeconds.size())).c_str(), nullptr);
-            else if (arg.starts_with(kScene))
-                options.scene = arg.substr(kScene.size());
-            else
-                log::Warn("Unknown command-line argument: {}", ToUtf8(arg));
-        }
-        LocalFree(argv);
-        return options;
-    }
-
     Application::Application(const AppOptions& options)
         : m_options(options), m_exeDir(GetExecutableDirectory())
     {
@@ -204,6 +160,79 @@ namespace walnut
             log::Warn("Inline ray tracing (tier 1.1) not supported: ray-traced features disabled");
 
         m_imgui = std::make_unique<ImGuiLayer>(*m_window, *m_renderer);
+
+        // Reproducible starts: camera and settings from the command line, after the scene-based defaults above.
+        if (options.camera)
+        {
+            m_camera.position = { options.camera->x, options.camera->y, options.camera->z };
+            m_camera.yaw = DirectX::XMConvertToRadians(options.camera->yawDegrees);
+            m_camera.pitch = DirectX::XMConvertToRadians(options.camera->pitchDegrees);
+        }
+        RegisterSettings();
+        for (const auto& [name, value] : options.settings)
+            m_settings.Set(name, value);
+    }
+
+    double Application::GetAnimationTime() const
+    {
+        return m_options.fixedTime ? *m_options.fixedTime : m_timer.GetTotalSeconds();
+    }
+
+    void Application::RegisterSettings()
+    {
+        using E = SettingsRegistry::EnumName;
+        SettingsRegistry& s = m_settings;
+        s.AddEnum("view.show", &m_sceneView.debugView, {
+            { "lit", 0 }, { "lighting", 1 }, { "basecolor", 2 }, { "normals", 3 }, { "texcoords", 4 }, { "instances", 5 },
+            { "materials", 6 }, { "alphamode", 7 }, { "sunshadow", 8 }, { "shadowdiff", 9 }, { "roughness", 10 },
+            { "metallic", 11 }, { "normalmap", 12 }, { "occlusion", 13 }, { "emissive", 14 }, { "sunspecular", 15 },
+            { "ambient", 16 }, { "geonormals", 17 }, { "pointlights", 18 }, { "clusterlights", 19 },
+            { "pointshadows", 20 }, { "pointshadowdiff", 21 } });
+        s.AddEnum("view.path", &m_sceneView.renderPath, { E{ "forward", 0 }, E{ "deferred", 1 } });
+        s.AddBool("view.prepass", &m_sceneView.depthPrepass);
+        s.AddEnum("view.normalMapping", &m_sceneView.normalMapping, { E{ "off", 0 }, E{ "mesh", 1 }, E{ "derived", 2 } });
+        s.AddBool("view.alphaTest", &m_sceneView.alphaTest);
+        s.AddBool("view.backfaceCulling", &m_sceneView.backfaceCulling);
+        s.AddFloat("view.roughnessOverride", &m_sceneView.roughnessOverride);
+        s.AddFloat("view.metallicOverride", &m_sceneView.metallicOverride);
+
+        s.AddEnum("lighting.shading", &m_lighting.shadingModel, { E{ "lambert", 0 }, E{ "pbr", 1 } });
+        s.AddAngle("sun.azimuth", &m_lighting.sunAzimuth);
+        s.AddAngle("sun.elevation", &m_lighting.sunElevation);
+        s.AddFloat("sun.intensity", &m_lighting.sunIntensity);
+        s.AddBool("sun.shadows", &m_shadowsEnabled);
+        s.AddCustom("sun.technique",
+                    [this](std::string_view v) {
+                        if (v == "map") { m_sceneView.raytracedShadows = false; return true; }
+                        if (v == "ray") { m_sceneView.raytracedShadows = true; return true; }
+                        return false;
+                    },
+                    [this] { return std::string(m_sceneView.raytracedShadows ? "ray" : "map"); });
+        s.AddFloat("sun.constantBias", &m_lighting.shadowConstantBias);
+        s.AddFloat("sun.slopeBias", &m_lighting.shadowSlopeBias);
+        s.AddFloat("sun.normalOffset", &m_lighting.shadowNormalOffset);
+        s.AddInt("sun.softness", &m_lighting.shadowFilterRadius, -1, 4);
+        s.AddFloat("ambient.intensity", &m_lighting.ambientIntensity);
+
+        s.AddInt("points.count", &m_lighting.pointLightCount, 0, static_cast<int>(PointLights::kMaxLights));
+        s.AddFloat("points.range", &m_lighting.pointLightRange);
+        s.AddFloat("points.intensity", &m_lighting.pointLightIntensity);
+        s.AddBool("points.animate", &m_lighting.animatePointLights);
+        s.AddBool("points.markers", &m_lighting.showPointLightMarkers);
+        s.AddBool("points.clustered", &m_lighting.clusteredLighting);
+        s.AddEnum("points.shadows", &m_lighting.pointShadowTechnique, { E{ "off", 0 }, E{ "cube", 1 }, E{ "ray", 2 } });
+        s.AddInt("points.budget", &m_lighting.pointShadowBudget, 0, static_cast<int>(PointShadowMaps::kMaxShadowedLights));
+
+        s.AddFloat("tonemap.exposure", &m_tonemapSettings.exposureStops);
+        s.AddEnum("tonemap.curve", &m_tonemapSettings.op, { E{ "clamp", 0 }, E{ "reinhard", 1 }, E{ "aces", 2 } });
+        s.AddCustom("renderer.vsync",
+                    [this](std::string_view v) {
+                        if (v != "0" && v != "1")
+                            return false;
+                        m_renderer->SetVsync(v == "1");
+                        return true;
+                    },
+                    [this] { return std::string(m_renderer->GetVsync() ? "1" : "0"); });
     }
 
     Application::~Application()
@@ -232,6 +261,14 @@ namespace walnut
 
     int Application::Run()
     {
+        if (m_options.listSettings)
+        {
+            log::Info("Settings (--set=NAME=VALUE):");
+            for (const std::string& line : m_settings.List())
+                log::Info("  {}", line);
+            return 0;
+        }
+
         log::Info("Entering main loop");
         m_timer.Reset();
 
@@ -355,7 +392,7 @@ namespace walnut
                 m_renderer->BeginFrame(m_clearColor);
                 // The point lights go into this frame's upload memory, which BeginFrame just made reusable.
                 if (m_scenePass)
-                    m_pointLights.Update(m_timer.GetTotalSeconds(), static_cast<uint32_t>(m_lighting.pointLightCount),
+                    m_pointLights.Update(GetAnimationTime(), static_cast<uint32_t>(m_lighting.pointLightCount),
                                          m_lighting.pointLightRange, m_lighting.pointLightIntensity,
                                          m_lighting.animatePointLights, m_pointLightData);
                 // Which lamps get a cube shadow map: the ones closest to the camera (by how far the camera is from
@@ -475,9 +512,19 @@ namespace walnut
                 // The 3D scene is done; from here on we draw into the back buffer.
                 m_renderer->BeginBackBufferPass();
                 m_tonemapPass->Render(commandList, m_renderer->GetSceneColorSrvIndex(), m_tonemapSettings);
+                // --screenshot: the frame as tonemapped, before the UI is drawn over it.
+                const bool screenshotFrame = !m_options.screenshot.empty() &&
+                                             m_renderer->GetFrameCount() + 1 == m_options.screenshotFrame;
+                if (screenshotFrame)
+                    m_renderer->CaptureBackBuffer();
                 m_renderer->BeginUiPass();
                 m_imgui->Render(commandList);
                 m_renderer->EndFrame();
+                if (screenshotFrame)
+                {
+                    m_renderer->SaveScreenshot(m_options.screenshot);
+                    break;
+                }
             }
 
             if (m_options.exitAfterFrames != 0 && m_renderer->GetFrameCount() >= m_options.exitAfterFrames)

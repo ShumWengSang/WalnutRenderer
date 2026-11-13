@@ -70,8 +70,25 @@ The script does a sparse, shallow fetch of [KhronosGroup/glTF-Sample-Assets](htt
 | `--pix` | Load PIX's GPU capturer (`WinPixGpuCapturer.dll`) at startup, so you can attach PIX or take captures from inside the app. |
 | `--pix-capture-frame=N` | Take a GPU capture of frame N into `bin/captures/`. Implies `--pix`. |
 | `--scene=PATH` | glTF scene to use. Relative paths start at `assets/`. The default is `Sponza/Sponza.gltf`. |
+| `--time=S` | Animations (the point lights' bobbing) use time S instead of the clock, so frames are reproducible. |
+| `--camera=X,Y,Z,YAW,PITCH` | Start camera: position in meters, yaw and pitch in degrees (the **Camera** section shows the current ones). |
+| `--set=NAME=VALUE` | Change a setting at startup, e.g. `--set=view.path=deferred --set=points.shadows=ray`. Repeatable. |
+| `--list-settings` | Log every `--set` name with its current value, then quit. |
+| `--screenshot=FILE.png` | Save the tonemapped frame (without the UI) at frame 5 (`--screenshot-frame=N`), then quit. |
+| `--help` | Log all options, then quit. |
 
 Logs go to the debugger output and to `WalnutRenderer.log` next to the exe. When the debug layer is active, its messages also go to the log.
+
+### Checking that a change didn't change the image
+
+`tools\screenshot-matrix.ps1` renders a fixed set of shots (forward/deferred, every shadow technique, every debug view) with `--time` and fixed cameras, and `tools\compare-images.ps1` compares two such folders pixel by pixel:
+
+```powershell
+.\tools\screenshot-matrix.ps1 -OutDir captures\before      # -GpuValidation also checks every shot with GBV
+# ... change code, rebuild ...
+.\tools\screenshot-matrix.ps1 -OutDir captures\after
+.\tools\compare-images.ps1 captures\before captures\after   # exits 1 if any image differs
+```
 
 ## Controls
 
@@ -96,7 +113,7 @@ shaders/                  HLSL sources, compiled at runtime straight from here (
                           scene.hlsl (draws), deferred.hlsl (deferred lighting), clusters.hlsl (compute: light clusters),
                           lightmarkers.hlsl, tonemap.hlsl; common/ holds the shared includes (bindless, frame constants,
                           scene data, BRDF, lighting, clusters, G-buffer layout, debug views)
-src/core/                 Application loop, Win32 Window, Input, Timer, Log
+src/core/                 Application loop, command line, settings registry (--set), Win32 Window, Input, Timer, Log
 src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, RootSignature (shared bindless),
                           Buffer, Texture, UploadContext (staging ring), FrameAllocator (per-frame constants),
                           MipChain, ShaderCompiler, Pix
@@ -105,7 +122,8 @@ src/renderer/             Renderer (frames in flight, frame constants, pass setu
                           LightMarkerPass, PointShadowMaps, TonemapPass
 src/scene/                Camera, fly controller, lighting, point lights, glTF loading (cgltf) into a flat Scene, image decoding (stb_image)
 src/ui/                   ImGuiLayer (Win32 + DX12 backends)
-tools/                    fetch-assets.ps1 (download glTF models), pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher)
+tools/                    fetch-assets.ps1 (download glTF models), pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher),
+                          screenshot-matrix.ps1 + compare-images.ps1 (before/after image comparisons)
 ```
 
 ## Profiling and debugging with PIX

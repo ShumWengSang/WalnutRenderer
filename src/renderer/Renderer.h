@@ -12,6 +12,7 @@
 
 #include <array>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 
 namespace walnut
@@ -87,6 +88,10 @@ namespace walnut
         void BeginOverlayPass();
         void BeginBackBufferPass();
         void BeginUiPass();
+        // Screenshots (--screenshot): copies the back buffer as it is now (call after the tonemap pass, before the
+        // UI, to leave the UI out) into a readback buffer. SaveScreenshot waits for the GPU and writes a PNG.
+        void CaptureBackBuffer();
+        bool SaveScreenshot(const std::filesystem::path& path);
         void EndFrame();
         void Resize(uint32_t width, uint32_t height);
         void WaitForGpu();
@@ -149,5 +154,8 @@ namespace walnut
         uint64_t m_frameCount = 0;
         bool m_vsync = true;
         bool m_depthReadable = false; // BeginDeferredPass left the depth buffer shader-readable this frame
+        ComPtr<ID3D12Resource> m_screenshotReadback; // created on first use
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT m_screenshotFootprint{};
+        bool m_screenshotPending = false;
     };
 }

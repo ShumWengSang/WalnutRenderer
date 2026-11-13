@@ -104,6 +104,13 @@ target_include_directories(walnut_stb SYSTEM PUBLIC "${stb_SOURCE_DIR}")
 # STBI_NO_STDIO is public so the header declares the same API everywhere it's included.
 target_compile_definitions(walnut_stb PUBLIC STBI_NO_STDIO)
 
+# stb_image_write, for --screenshot. Encodes PNG to memory (STBI_WRITE_NO_STDIO); the engine writes the file.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/stb_image_write_impl.c"
+    "#define STB_IMAGE_WRITE_IMPLEMENTATION\n#include <stb_image_write.h>\n")
+add_library(walnut_stb_write STATIC "${CMAKE_CURRENT_BINARY_DIR}/stb_image_write_impl.c")
+target_include_directories(walnut_stb_write SYSTEM PUBLIC "${stb_SOURCE_DIR}")
+target_compile_definitions(walnut_stb_write PUBLIC STBI_WRITE_NO_STDIO)
+
 # --- Dear ImGui (Win32 + DX12 backends) --------------------------------------
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
