@@ -107,4 +107,45 @@ namespace walnut
         UINT32 m_textureCount = 0;
         UINT32 m_bufferCount = 0;
     };
+
+    // A texture that remembers the state its last barrier left it in. Passes ask for the state they need and get
+    // the barrier from wherever it is now, instead of every pass knowing what the one before it did.
+    class TrackedTexture
+    {
+    public:
+        // A new resource, or a new frame: 'state' is what the next barrier starts from.
+        void Reset(ID3D12Resource* resource, const TextureAccess& state)
+        {
+            m_resource = resource;
+            m_state = state;
+        }
+
+        // Adds the barrier from the current state to 'to' to the batch, unless the current state already serves it.
+        // discard: the contents may be thrown away (see BarrierBatch::Texture).
+        void Transition(BarrierBatch& batch, const TextureAccess& to, bool discard = false)
+        {
+            if (Serves(m_state, to))
+                return;
+            batch.Texture(m_resource, m_state, to, discard);
+            m_state = to;
+        }
+
+        ID3D12Resource* Get() const { return m_resource; }
+        const TextureAccess& GetState() const { return m_state; }
+
+    private:
+        // Same layout, and the access allows what's asked: the same access, or depth writes when only depth tests
+        // are needed (a depth target that's written can also be tested against).
+        static bool Serves(const TextureAccess& current, const TextureAccess& wanted)
+        {
+            if (current.layout != wanted.layout || current.sync != wanted.sync)
+                return false;
+            return current.access == wanted.access ||
+                   (current.access == D3D12_BARRIER_ACCESS_DEPTH_STENCIL_WRITE &&
+                    wanted.access == D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ);
+        }
+
+        ID3D12Resource* m_resource = nullptr;
+        TextureAccess m_state = access::Undefined;
+    };
 }

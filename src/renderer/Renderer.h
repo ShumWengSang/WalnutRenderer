@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gfx/Barriers.h"
 #include "gfx/CommandQueue.h"
 #include "gfx/D3D12Common.h"
 #include "gfx/DescriptorHeap.h"
@@ -25,12 +26,14 @@ namespace walnut
         bool vsync = true;
     };
 
-    // Owns the core D3D12 objects and drives the per-frame command list.
+    // Owns the core D3D12 objects and drives the per-frame command list. SceneRenderer::Record makes the calls between
+    // BeginFrame and BeginUiPass. Each Begin*Pass asks for the states its targets need (TrackedTexture): the barrier
+    // comes from wherever the previous pass left them, so the passes can be skipped or reordered freely.
     //
-    //   renderer.BeginFrame(clearColor);   // waits for this frame slot; scene color + depth cleared
+    //   renderer.BeginFrame(clearColor);   // waits for this frame slot; scene color + depth cleared, b1 zeroed
     //   renderer.SetFrameConstants(...);   // camera + lights at b2 for every pass (graphics and compute)
     //   ... compute (light clusters) ...
-    //   ... shadow map + cube shadow passes ...  // (their own depth targets)
+    //   ... shadow map + cube shadow passes ...  // (their own depth targets; the cubes set b1, then ResetDrawData)
     //   renderer.BeginDepthPrepass();      // camera depth only, no color target (optional for forward)
     //   ... depth pre-pass ...
     //   either forward:
@@ -85,6 +88,8 @@ namespace walnut
         void BeginDepthPrepass();
         // Binds the scene color + depth targets and a full-window viewport (after any shadow/offscreen passes).
         void BeginScenePass();
+        // Points b1 (root parameter DrawData) back at an all-zero block, after a pass that set it per draw.
+        void ResetDrawData();
         // Deferred shading: the G-buffer targets + depth (after the depth pre-pass) ...
         void BeginGBufferPass();
         // ... then the G-buffer and depth become shader-readable and only the scene color is bound, for a
@@ -135,6 +140,8 @@ namespace walnut
         };
 
         void CreateDepthBuffer(uint32_t width, uint32_t height);
+        // One barrier call: 'texture' from its current state to 'to' (nothing if it's already there).
+        void Transition(TrackedTexture& texture, const TextureAccess& to, bool discard = false);
         void SetWindowViewport();
         void CreateSceneColorTarget(uint32_t width, uint32_t height);
 
@@ -161,7 +168,11 @@ namespace walnut
         uint32_t m_backBufferIndex = 0;
         uint64_t m_frameCount = 0;
         bool m_vsync = true;
-        bool m_depthReadable = false; // BeginDeferredPass left the depth buffer shader-readable this frame
+        // The states this frame's barriers have left the targets in (reset by BeginFrame).
+        TrackedTexture m_sceneColorState;
+        TrackedTexture m_depthState;
+        TrackedTexture m_backBufferState;
+        D3D12_GPU_VIRTUAL_ADDRESS m_zeroDrawData = 0; // this frame's all-zero b1 block
         ComPtr<ID3D12Resource> m_screenshotReadback; // created on first use
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT m_screenshotFootprint{};
         bool m_screenshotPending = false;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "gfx/Barriers.h"
 #include "gfx/D3D12Common.h"
 #include "gfx/DescriptorHeap.h"
 
@@ -10,6 +11,17 @@
 namespace walnut
 {
     class Device;
+
+    // Where the deferred pass finds its inputs: bindless SRV indices of the G-buffer targets and the depth buffer.
+    // Must match DrawConstants in deferred.hlsl.
+    struct DeferredInputs
+    {
+        uint32_t baseColor;
+        uint32_t normals;
+        uint32_t material;
+        uint32_t emissive;
+        uint32_t depth;
+    };
 
     // The G-buffer of deferred shading: window-sized render targets that the scene pass fills with each pixel's
     // material (instead of a lit color), for a later fullscreen pass to light. Layout: shaders/common/GBuffer.hlsli.
@@ -42,12 +54,14 @@ namespace walnut
 
         // UNDEFINED -> RENDER_TARGET for every target, discarding the old contents (no clear needed: the lighting
         // only reads pixels the depth buffer says were drawn, and those were all written this frame).
-        void BeginWrite(ID3D12GraphicsCommandList7* commandList) const;
+        void BeginWrite(ID3D12GraphicsCommandList7* commandList);
         // RENDER_TARGET -> shader-readable, after the G-buffer pass.
-        void EndWrite(ID3D12GraphicsCommandList7* commandList) const;
+        void EndWrite(ID3D12GraphicsCommandList7* commandList);
 
         const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kCount>& GetRtvs() const { return m_rtvHandles; }
         uint32_t GetSrvIndex(Target target) const { return m_srvs[target].index; }
+        // The deferred pass's inputs: these targets' SRVs and the given depth buffer SRV.
+        DeferredInputs GetDeferredInputs(uint32_t depthSrvIndex) const;
         uint64_t GetBytes() const { return m_bytes; } // GPU memory of all targets
 
     private:
@@ -57,6 +71,7 @@ namespace walnut
         DescriptorHeap& m_srvHeap;
         std::unique_ptr<DescriptorHeap> m_rtvHeap;
         std::array<ComPtr<ID3D12Resource>, kCount> m_targets;
+        std::array<TrackedTexture, kCount> m_states;
         std::array<DescriptorHandle, kCount> m_rtvs;
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kCount> m_rtvHandles{};
         std::array<DescriptorHandle, kCount> m_srvs;

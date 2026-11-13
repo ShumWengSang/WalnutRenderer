@@ -2,6 +2,7 @@
 
 #include "gfx/D3D12Common.h"
 #include "gfx/PipelineBuilder.h"
+#include "renderer/GBuffer.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -13,15 +14,6 @@ namespace walnut
     class ShaderCompiler;
     enum class SceneDebugView : uint32_t;
 
-    // Where the deferred pass finds its inputs: bindless SRV indices of the G-buffer targets and the depth buffer.
-    struct DeferredInputs
-    {
-        uint32_t baseColor;
-        uint32_t normals;
-        uint32_t material;
-        uint32_t emissive;
-        uint32_t depth;
-    };
 
     // Deferred shading's fullscreen pass (shaders/deferred.hlsl): reads the G-buffer once per screen pixel, rebuilds
     // the position from depth, lights it (the forward path's ShadeSurface) and writes the HDR scene color.

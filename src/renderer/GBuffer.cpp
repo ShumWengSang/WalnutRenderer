@@ -65,21 +65,30 @@ namespace walnut
                   static_cast<double>(m_bytes) / (1024.0 * 1024.0));
     }
 
-    void GBuffer::BeginWrite(ID3D12GraphicsCommandList7* commandList) const
+    void GBuffer::BeginWrite(ID3D12GraphicsCommandList7* commandList)
     {
         // Last frame's reads (the deferred pass) were in an earlier ExecuteCommandLists: nothing to wait for.
         BarrierBatch barriers;
-        for (const ComPtr<ID3D12Resource>& target : m_targets)
-            barriers.Texture(target.Get(), access::Undefined, access::RenderTarget, true /*discard*/);
+        for (uint32_t i = 0; i < kCount; ++i)
+        {
+            m_states[i].Reset(m_targets[i].Get(), access::Undefined);
+            m_states[i].Transition(barriers, access::RenderTarget, true /*discard*/);
+        }
         barriers.Submit(commandList);
     }
 
-    void GBuffer::EndWrite(ID3D12GraphicsCommandList7* commandList) const
+    void GBuffer::EndWrite(ID3D12GraphicsCommandList7* commandList)
     {
         // Wait for the G-buffer pass's writes, make them visible to the fullscreen pass's pixel shader.
         BarrierBatch barriers;
-        for (const ComPtr<ID3D12Resource>& target : m_targets)
-            barriers.Texture(target.Get(), access::RenderTarget, access::PixelShaderRead);
+        for (TrackedTexture& state : m_states)
+            state.Transition(barriers, access::PixelShaderRead);
         barriers.Submit(commandList);
+    }
+
+    DeferredInputs GBuffer::GetDeferredInputs(uint32_t depthSrvIndex) const
+    {
+        return { .baseColor = GetSrvIndex(BaseColor), .normals = GetSrvIndex(Normals), .material = GetSrvIndex(Material),
+                 .emissive = GetSrvIndex(Emissive), .depth = depthSrvIndex };
     }
 }

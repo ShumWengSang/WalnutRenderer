@@ -101,25 +101,44 @@ namespace walnut
         // preserving the old data and just (re)initialize its compression metadata. Last frame's reads of it
         // (the tonemap pass) were in an earlier ExecuteCommandLists, so there's nothing to wait for:
         // SyncBefore = NONE, AccessBefore = NO_ACCESS.
-        BarrierBatch().Texture(m_sceneColor.Get(), access::Undefined, access::RenderTarget, true /*discard*/)
-            .Submit(m_commandList.Get());
+        m_sceneColorState.Reset(m_sceneColor.Get(), access::Undefined);
+        Transition(m_sceneColorState, access::RenderTarget, true /*discard*/);
 
         m_commandList->ClearRenderTargetView(m_sceneRtv.cpu, clearColor, 0, nullptr);
 
         // The depth buffer: deferred shading leaves it shader-readable at the end of a frame, forward leaves it
         // DEPTH_STENCIL_WRITE. Either way it's cleared now, so UNDEFINED -> DEPTH_STENCIL_WRITE with DISCARD
-        // works from both without tracking which: like the scene color above.
-        BarrierBatch().Texture(m_depthBuffer.Get(), access::Undefined, access::DepthWrite, true /*discard*/)
-            .Submit(m_commandList.Get());
-        m_depthReadable = false;
+        // works from both: like the scene color above.
+        m_depthState.Reset(m_depthBuffer.Get(), access::Undefined);
+        Transition(m_depthState, access::DepthWrite, true /*discard*/);
         m_commandList->ClearDepthStencilView(m_dsv.cpu, D3D12_CLEAR_FLAG_DEPTH, kDepthClearValue, 0, 0, nullptr);
 
+        // The back buffer was presented: it starts every frame in the PRESENT layout.
+        m_backBufferState.Reset(m_swapChain->GetBackBuffer(m_backBufferIndex), access::Present);
+
         BindBindlessState(m_commandList.Get());
+        // b1 (per-draw data) gets an all-zero block for the frame, so a shader reading it outside a pass that set it
+        // sees zeros, not whatever an earlier pass left there.
+        m_zeroDrawData = m_frameAllocator->AllocateConstants(std::array<uint32_t, 64>{});
+        ResetDrawData();
+    }
+
+    void Renderer::ResetDrawData()
+    {
+        m_commandList->SetGraphicsRootConstantBufferView(RootParam::DrawData, m_zeroDrawData);
+    }
+
+    void Renderer::Transition(TrackedTexture& texture, const TextureAccess& to, bool discard)
+    {
+        BarrierBatch barriers;
+        texture.Transition(barriers, to, discard);
+        barriers.Submit(m_commandList.Get());
     }
 
     void Renderer::BeginDepthPrepass()
     {
         // Depth only: no render target bound, matching the depth-only PSOs (NumRenderTargets = 0).
+        Transition(m_depthState, access::DepthWrite);
         m_commandList->OMSetRenderTargets(0, nullptr, FALSE, &m_dsv.cpu);
         SetWindowViewport();
     }
@@ -127,6 +146,8 @@ namespace walnut
     void Renderer::BeginScenePass()
     {
         // A separate step from BeginFrame because other passes (the shadow map) render to their own targets first.
+        Transition(m_sceneColorState, access::RenderTarget);
+        Transition(m_depthState, access::DepthWrite);
         m_commandList->OMSetRenderTargets(1, &m_sceneRtv.cpu, FALSE, &m_dsv.cpu);
         SetWindowViewport();
     }
@@ -134,6 +155,7 @@ namespace walnut
     void Renderer::BeginGBufferPass()
     {
         m_gbuffer->BeginWrite(m_commandList.Get());
+        Transition(m_depthState, access::DepthWrite);
         // Four render targets at once ("MRT"): the pixel shader's SV_Target0..3 go to these, in this order.
         const auto& rtvs = m_gbuffer->GetRtvs();
         m_commandList->OMSetRenderTargets(static_cast<UINT>(rtvs.size()), rtvs.data(), FALSE, &m_dsv.cpu);
@@ -145,8 +167,8 @@ namespace walnut
         m_gbuffer->EndWrite(m_commandList.Get());
         // The depth buffer too: the fullscreen pass reads it as a texture. Wait for the depth tests and writes of
         // the pre-pass and G-buffer pass (SyncBefore = DEPTH_STENCIL) before pixel shaders read it.
-        BarrierBatch().Texture(m_depthBuffer.Get(), access::DepthWrite, access::PixelShaderRead).Submit(m_commandList.Get());
-        m_depthReadable = true;
+        Transition(m_depthState, access::PixelShaderRead);
+        Transition(m_sceneColorState, access::RenderTarget);
 
         // Only the scene color: no depth buffer bound (a 2D pass, and the depth buffer is being read).
         m_commandList->OMSetRenderTargets(1, &m_sceneRtv.cpu, FALSE, nullptr);
@@ -155,12 +177,11 @@ namespace walnut
 
     void Renderer::BeginOverlayPass()
     {
-        if (m_depthReadable)
-        {
-            // The deferred pass read the depth buffer; wait for that, then make it a depth target again.
-            BarrierBatch().Texture(m_depthBuffer.Get(), access::PixelShaderRead, access::DepthTest).Submit(m_commandList.Get());
-            m_depthReadable = false;
-        }
+        // Overlays only test depth (no writes): after the deferred pass this waits for its reads and makes the depth
+        // buffer a depth target again; after forward shading it already is one. A later pass that writes depth would
+        // get its own barrier from the tracked state.
+        Transition(m_sceneColorState, access::RenderTarget);
+        Transition(m_depthState, access::DepthTest);
         m_commandList->OMSetRenderTargets(1, &m_sceneRtv.cpu, FALSE, &m_dsv.cpu);
         SetWindowViewport();
     }
@@ -193,10 +214,10 @@ namespace walnut
         //  2. Back buffer: PRESENT -> RENDER_TARGET. Nothing earlier in this command list touched it, and
         //     ExecuteCommandLists boundaries already finish all prior GPU work (including the previous
         //     Present), so there is nothing to wait for: SyncBefore = NONE, AccessBefore = NO_ACCESS.
-        BarrierBatch()
-            .Texture(m_sceneColor.Get(), access::RenderTarget, access::PixelShaderRead)
-            .Texture(m_swapChain->GetBackBuffer(m_backBufferIndex), access::Present, access::RenderTarget)
-            .Submit(m_commandList.Get());
+        BarrierBatch barriers;
+        m_sceneColorState.Transition(barriers, access::PixelShaderRead);
+        m_backBufferState.Transition(barriers, access::RenderTarget);
+        barriers.Submit(m_commandList.Get());
 
         // No clear: the fullscreen pass writes every pixel. No depth buffer: 2D passes don't need one.
         // The _SRGB view: the tonemap pass outputs linear colors, and the hardware encodes them to sRGB on write.
@@ -230,11 +251,11 @@ namespace walnut
         }
 
         // RENDER_TARGET -> COPY_SOURCE, copy, and back: the UI is drawn into the same back buffer afterwards.
-        BarrierBatch().Texture(backBuffer, access::RenderTarget, access::CopySource).Submit(m_commandList.Get());
+        Transition(m_backBufferState, access::CopySource);
         const CD3DX12_TEXTURE_COPY_LOCATION destination(m_screenshotReadback.Get(), m_screenshotFootprint);
         const CD3DX12_TEXTURE_COPY_LOCATION source(backBuffer, 0);
         m_commandList->CopyTextureRegion(&destination, 0, 0, 0, &source, nullptr);
-        BarrierBatch().Texture(backBuffer, access::CopySource, access::RenderTarget).Submit(m_commandList.Get());
+        Transition(m_backBufferState, access::RenderTarget);
         m_screenshotPending = true;
     }
 
@@ -295,11 +316,10 @@ namespace walnut
 
     void Renderer::EndFrame()
     {
-        ID3D12Resource* backBuffer = m_swapChain->GetBackBuffer(m_backBufferIndex);
         // RENDER_TARGET -> PRESENT (= COMMON, the layout Present requires). Wait for every render-target
         // write before it (tonemap, ImGui). Nothing later in this list uses the buffer, so
         // SyncAfter = NONE and AccessAfter = NO_ACCESS; Present runs after ExecuteCommandLists completes.
-        BarrierBatch().Texture(backBuffer, access::RenderTarget, access::Present).Submit(m_commandList.Get());
+        Transition(m_backBufferState, access::Present);
         PIXEndEvent(m_commandList.Get()); // "Frame"
 
         WR_CHECK(m_commandList->Close());

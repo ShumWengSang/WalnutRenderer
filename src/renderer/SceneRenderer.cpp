@@ -166,6 +166,8 @@ namespace walnut
                 }
             }
             m_pointShadowMaps->End(commandList);
+            // The faces set b1 to their camera; nothing after them should see that.
+            renderer.ResetDrawData();
         }
 
         // 2. The scene from the camera, into the HDR scene color target. With the depth pre-pass, depth first: the
@@ -183,15 +185,8 @@ namespace walnut
             renderer.BeginGBufferPass();
             m_scenePass->RenderGBuffer(commandList, *m_sceneData, frame);
             renderer.BeginDeferredPass();
-            const GBuffer& gbuffer = renderer.GetGBuffer();
-            const DeferredInputs inputs{
-                .baseColor = gbuffer.GetSrvIndex(GBuffer::BaseColor),
-                .normals = gbuffer.GetSrvIndex(GBuffer::Normals),
-                .material = gbuffer.GetSrvIndex(GBuffer::Material),
-                .emissive = gbuffer.GetSrvIndex(GBuffer::Emissive),
-                .depth = renderer.GetDepthSrvIndex(),
-            };
-            m_deferredPass->Render(commandList, inputs, frame.view, frame.raytracedVariant);
+            m_deferredPass->Render(commandList, renderer.GetGBuffer().GetDeferredInputs(renderer.GetDepthSrvIndex()),
+                                   frame.view, frame.raytracedVariant);
         }
         else
         {
