@@ -119,6 +119,7 @@ namespace walnut
             m_depthBuffer.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources), D3D12_TEXTURE_BARRIER_FLAG_DISCARD);
         const CD3DX12_BARRIER_GROUP depthGroup(1, &depthToWrite);
         m_commandList->Barrier(1, &depthGroup);
+        m_depthReadable = false;
         m_commandList->ClearDepthStencilView(m_dsv.cpu, D3D12_CLEAR_FLAG_DEPTH, kDepthClearValue, 0, 0, nullptr);
 
         BindBindlessState(m_commandList.Get());
@@ -159,9 +160,28 @@ namespace walnut
             m_depthBuffer.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources));
         const CD3DX12_BARRIER_GROUP depthGroup(1, &depthToRead);
         m_commandList->Barrier(1, &depthGroup);
+        m_depthReadable = true;
 
         // Only the scene color: no depth buffer bound (a 2D pass, and the depth buffer is being read).
         m_commandList->OMSetRenderTargets(1, &m_sceneRtv.cpu, FALSE, nullptr);
+        SetWindowViewport();
+    }
+
+    void Renderer::BeginOverlayPass()
+    {
+        if (m_depthReadable)
+        {
+            // The deferred pass read the depth buffer; wait for that, then make it a depth target again.
+            const CD3DX12_TEXTURE_BARRIER depthToWrite(
+                D3D12_BARRIER_SYNC_PIXEL_SHADING, D3D12_BARRIER_SYNC_DEPTH_STENCIL,
+                D3D12_BARRIER_ACCESS_SHADER_RESOURCE, D3D12_BARRIER_ACCESS_DEPTH_STENCIL_READ,
+                D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE, D3D12_BARRIER_LAYOUT_DEPTH_STENCIL_WRITE,
+                m_depthBuffer.Get(), CD3DX12_BARRIER_SUBRESOURCE_RANGE(kAllSubresources));
+            const CD3DX12_BARRIER_GROUP depthGroup(1, &depthToWrite);
+            m_commandList->Barrier(1, &depthGroup);
+            m_depthReadable = false;
+        }
+        m_commandList->OMSetRenderTargets(1, &m_sceneRtv.cpu, FALSE, &m_dsv.cpu);
         SetWindowViewport();
     }
 

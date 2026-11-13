@@ -81,6 +81,10 @@ namespace walnut
         // ... then the G-buffer and depth become shader-readable and only the scene color is bound, for a
         // fullscreen pass.
         void BeginDeferredPass();
+        // Scene color + depth again, after the scene is shaded (forward or deferred), for things drawn on top that
+        // are still hidden behind closer geometry (light markers). After a deferred pass this switches the depth
+        // buffer back from shader-readable to a depth target.
+        void BeginOverlayPass();
         void BeginBackBufferPass();
         void BeginUiPass();
         void EndFrame();
@@ -144,5 +148,6 @@ namespace walnut
         uint32_t m_backBufferIndex = 0;
         uint64_t m_frameCount = 0;
         bool m_vsync = true;
+        bool m_depthReadable = false; // BeginDeferredPass left the depth buffer shader-readable this frame
     };
 }

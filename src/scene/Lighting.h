@@ -32,6 +32,7 @@ namespace walnut
         float pointLightRange = 4.0f;     // meters
         float pointLightIntensity = 8.0f; // at 1 m, a surface facing the lamp receives this much (falls off as 1/d^2)
         bool animatePointLights = true;
+        bool showPointLightMarkers = true; // a small glowing dot at each lamp
 
         // Shadow-map bias, in shadow-map texels (see SunShadow in scene.hlsl).
         float shadowConstantBias = 0.5f;

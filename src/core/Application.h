@@ -7,6 +7,7 @@
 #include "renderer/ShadowMap.h"
 #include "renderer/DeferredPass.h"
 #include "renderer/LightBuffer.h"
+#include "renderer/LightMarkerPass.h"
 #include "renderer/TonemapPass.h"
 #include "scene/Assets.h"
 #include "scene/Camera.h"
@@ -83,6 +84,7 @@ namespace walnut
         std::unique_ptr<TonemapPass> m_tonemapPass;
         std::unique_ptr<DeferredPass> m_deferredPass;
         std::unique_ptr<LightBuffer> m_lightBuffer;
+        std::unique_ptr<LightMarkerPass> m_lightMarkerPass;
         std::unique_ptr<ImGuiLayer> m_imgui;
         Timer m_timer;
 

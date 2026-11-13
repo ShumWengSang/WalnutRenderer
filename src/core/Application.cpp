@@ -181,6 +181,9 @@ namespace walnut
                                                         m_shaderDir / "deferred.hlsl", m_renderer->GetRootSignature(),
                                                         Renderer::kSceneColorFormat, m_renderer->GetDevice().SupportsInlineRaytracing());
         m_lightBuffer = std::make_unique<LightBuffer>(m_renderer->GetDevice(), m_renderer->GetSrvHeap(), Renderer::kFramesInFlight);
+        m_lightMarkerPass = std::make_unique<LightMarkerPass>(m_renderer->GetDevice(), *m_shaderCompiler,
+                                                              m_shaderDir / "lightmarkers.hlsl", m_renderer->GetRootSignature(),
+                                                              Renderer::kSceneColorFormat, Renderer::kDepthFormat);
         m_shadowMap = std::make_unique<ShadowMap>(m_renderer->GetDevice(), m_renderer->GetSrvHeap(), kShadowMapSize);
 
         // Execute every upload recorded while loading, before the first frame reads that data.
@@ -212,6 +215,7 @@ namespace walnut
         m_tonemapPass.reset();
         m_deferredPass.reset();
         m_lightBuffer.reset();
+        m_lightMarkerPass.reset();
         m_shaderCompiler.reset();
         m_renderer.reset();
         m_window.reset();
@@ -365,6 +369,14 @@ namespace walnut
                         m_scenePass->Render(commandList, m_sceneView);
                 }
 
+                // Markers at the point lights: on top of the shaded scene, hidden behind closer geometry.
+                if (m_scenePass && m_lighting.showPointLightMarkers && !m_pointLightData.empty())
+                {
+                    m_renderer->BeginOverlayPass();
+                    m_lightMarkerPass->Render(commandList, static_cast<uint32_t>(m_pointLightData.size()),
+                                              0.04f * m_lighting.pointLightRange);
+                }
+
                 // The 3D scene is done; from here on we draw into the back buffer.
                 m_renderer->BeginBackBufferPass();
                 m_tonemapPass->Render(commandList, m_renderer->GetSceneColorSrvIndex(), m_tonemapSettings);
@@ -410,7 +422,8 @@ namespace walnut
         const bool sceneOk = !m_scenePass || m_scenePass->ReloadShaders();
         const bool tonemapOk = m_tonemapPass->ReloadShaders();
         const bool deferredOk = m_deferredPass->ReloadShaders();
-        if (sceneOk && tonemapOk && deferredOk)
+        const bool markersOk = m_lightMarkerPass->ReloadShaders();
+        if (sceneOk && tonemapOk && deferredOk && markersOk)
             log::Info("Shaders reloaded");
     }
 
@@ -497,7 +510,7 @@ namespace walnut
         // Shader errors first: they would otherwise be easy to miss inside a closed section.
         const std::string noError;
         for (const std::string* error : { m_scenePass ? &m_scenePass->GetLastError() : &noError, &m_tonemapPass->GetLastError(),
-                                          &m_deferredPass->GetLastError() })
+                                          &m_deferredPass->GetLastError(), &m_lightMarkerPass->GetLastError() })
         {
             if (error->empty())
                 continue;
@@ -654,6 +667,8 @@ namespace walnut
                 ImGui::SliderFloat("Intensity##point", &m_lighting.pointLightIntensity, 0.0f, 1000.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
                 ImGui::SetItemTooltip("Light received 1 m from a lamp, facing it. Falls off as 1 / distance^2.");
                 ImGui::Checkbox("Animate", &m_lighting.animatePointLights);
+                ImGui::SameLine();
+                ImGui::Checkbox("Markers", &m_lighting.showPointLightMarkers);
                 ImGui::SameLine();
                 ImGui::TextDisabled("brute force: every pixel visits every lamp");
                 ImGui::TreePop();

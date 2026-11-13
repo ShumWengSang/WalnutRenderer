@@ -62,6 +62,8 @@ set(WALNUT_SOURCES
     src/renderer/GBuffer.h
     src/renderer/LightBuffer.cpp
     src/renderer/LightBuffer.h
+    src/renderer/LightMarkerPass.cpp
+    src/renderer/LightMarkerPass.h
     src/renderer/Renderer.cpp
     src/renderer/Renderer.h
     src/renderer/ScenePass.cpp
