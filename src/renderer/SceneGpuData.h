@@ -63,7 +63,7 @@ namespace walnut
 
     private:
         Buffer CreateStructuredBuffer(UploadContext& upload, const void* data, uint32_t count, uint32_t stride,
-                                      const wchar_t* name, DescriptorHandle& srv);
+                                      const wchar_t* name, OwnedDescriptor& srv);
         // Uploads every loaded scene texture; returns each one's bindless SRV index (kNoTexture if it wasn't loaded).
         std::vector<uint32_t> CreateTextures(UploadContext& upload, const Scene& scene);
 
@@ -74,12 +74,12 @@ namespace walnut
         Buffer m_instanceBuffer; // StructuredBuffer<Instance>, read through m_instanceSrv
         Buffer m_materialBuffer; // StructuredBuffer<Material>, read by the pixel shader through m_materialSrv
         Buffer m_indexBuffer;    // 32-bit indices, bound the classic way (IASetIndexBuffer)
-        DescriptorHandle m_vertexSrv;    // their slots in the bindless heap
-        DescriptorHandle m_instanceSrv;
-        DescriptorHandle m_materialSrv;
-        DescriptorHandle m_indexSrv;
+        OwnedDescriptor m_vertexSrv;    // their slots in the bindless heap
+        OwnedDescriptor m_instanceSrv;
+        OwnedDescriptor m_materialSrv;
+        OwnedDescriptor m_indexSrv;
         std::vector<Texture> m_textures;
-        std::vector<DescriptorHandle> m_textureSrvs;
+        std::vector<OwnedDescriptor> m_textureSrvs;
         uint64_t m_textureBytes = 0;
         std::vector<DrawItem> m_draws;
     };

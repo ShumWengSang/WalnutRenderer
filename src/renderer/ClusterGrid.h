@@ -56,7 +56,7 @@ namespace walnut
         Buffer m_counter; // one uint: how much of m_indices is in use
         Buffer m_counterReadback; // one uint per frame in flight, copied from m_counter for the CPU
         uint32_t m_usedIndices = 0;
-        DescriptorHandle m_gridSrv, m_gridUav, m_indicesSrv, m_indicesUav, m_counterUav;
+        OwnedDescriptor m_gridSrv, m_gridUav, m_indicesSrv, m_indicesUav, m_counterUav;
 
         ComPtr<ID3D12PipelineState> m_resetPipeline;
         ComPtr<ID3D12PipelineState> m_buildPipeline;

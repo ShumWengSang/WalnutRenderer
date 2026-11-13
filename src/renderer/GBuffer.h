@@ -72,9 +72,9 @@ namespace walnut
         std::unique_ptr<DescriptorHeap> m_rtvHeap;
         std::array<ComPtr<ID3D12Resource>, kCount> m_targets;
         std::array<TrackedTexture, kCount> m_states;
-        std::array<DescriptorHandle, kCount> m_rtvs;
+        std::array<OwnedDescriptor, kCount> m_rtvs;
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kCount> m_rtvHandles{};
-        std::array<DescriptorHandle, kCount> m_srvs;
+        std::array<OwnedDescriptor, kCount> m_srvs;
         uint64_t m_bytes = 0;
     };
 }

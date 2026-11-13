@@ -53,10 +53,9 @@ namespace walnut
         const Stats& GetStats() const { return m_stats; }
 
     private:
-        DescriptorHeap& m_srvHeap;
         Buffer m_blasBuffer; // every BLAS, packed at 256-byte aligned offsets
         Buffer m_tlasBuffer;
-        DescriptorHandle m_tlasSrv;
+        OwnedDescriptor m_tlasSrv;
         Stats m_stats;
     };
 }

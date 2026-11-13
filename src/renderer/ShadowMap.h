@@ -43,12 +43,11 @@ namespace walnut
         D3D12_GPU_DESCRIPTOR_HANDLE GetDebugSrvGpuHandle() const { return m_debugSrv.gpu; }
 
     private:
-        DescriptorHeap& m_srvHeap;
         std::unique_ptr<DescriptorHeap> m_dsvHeap;
         ComPtr<ID3D12Resource> m_texture;
-        DescriptorHandle m_dsv;
-        DescriptorHandle m_srv;
-        DescriptorHandle m_debugSrv;
+        OwnedDescriptor m_dsv;
+        OwnedDescriptor m_srv;
+        OwnedDescriptor m_debugSrv;
         uint32_t m_size = 0;
     };
 }

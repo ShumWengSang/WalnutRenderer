@@ -51,11 +51,11 @@ namespace walnut
         m_counterReadback = Buffer(m_device, BufferDesc{ .size = framesInFlight * sizeof(uint32_t),
                                                          .heapType = D3D12_HEAP_TYPE_READBACK, .name = L"ClusterCounterReadback" });
 
-        m_gridSrv = m_srvHeap.Allocate();
-        m_gridUav = m_srvHeap.Allocate();
-        m_indicesSrv = m_srvHeap.Allocate();
-        m_indicesUav = m_srvHeap.Allocate();
-        m_counterUav = m_srvHeap.Allocate();
+        m_gridSrv = OwnedDescriptor(m_srvHeap);
+        m_gridUav = OwnedDescriptor(m_srvHeap);
+        m_indicesSrv = OwnedDescriptor(m_srvHeap);
+        m_indicesUav = OwnedDescriptor(m_srvHeap);
+        m_counterUav = OwnedDescriptor(m_srvHeap);
         CreateStructuredViews(m_device, m_grid.Get(), kClusterCount, 2 * sizeof(uint32_t), &m_gridSrv, m_gridUav);
         CreateStructuredViews(m_device, m_indices.Get(), kIndexCapacity, sizeof(uint32_t), &m_indicesSrv, m_indicesUav);
         CreateStructuredViews(m_device, m_counter.Get(), 1, sizeof(uint32_t), nullptr, m_counterUav);
@@ -63,11 +63,7 @@ namespace walnut
         BuildPipelinesOrThrow();
     }
 
-    ClusterGrid::~ClusterGrid()
-    {
-        for (const DescriptorHandle& handle : { m_gridSrv, m_gridUav, m_indicesSrv, m_indicesUav, m_counterUav })
-            m_srvHeap.Free(handle);
-    }
+    ClusterGrid::~ClusterGrid() = default;
 
     void ClusterGrid::BuildPipelines(PipelineBuilder& builder)
     {

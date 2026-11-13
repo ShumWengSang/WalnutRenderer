@@ -21,18 +21,14 @@ namespace walnut
         m_rtvHeap = std::make_unique<DescriptorHeap>(m_device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, kCount, false, L"GBufferRtvHeap");
         for (uint32_t i = 0; i < kCount; ++i)
         {
-            m_rtvs[i] = m_rtvHeap->Allocate();
+            m_rtvs[i] = OwnedDescriptor(*m_rtvHeap);
             m_rtvHandles[i] = m_rtvs[i].cpu;
-            m_srvs[i] = m_srvHeap.Allocate();
+            m_srvs[i] = OwnedDescriptor(m_srvHeap);
         }
         CreateTargets(width, height);
     }
 
-    GBuffer::~GBuffer()
-    {
-        for (const DescriptorHandle& srv : m_srvs)
-            m_srvHeap.Free(srv);
-    }
+    GBuffer::~GBuffer() = default;
 
     void GBuffer::Resize(uint32_t width, uint32_t height)
     {

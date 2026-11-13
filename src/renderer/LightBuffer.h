@@ -32,6 +32,6 @@ namespace walnut
     private:
         ID3D12Device10* m_device = nullptr;
         DescriptorHeap& m_srvHeap;
-        std::vector<DescriptorHandle> m_srvs; // one per frame in flight
+        std::vector<OwnedDescriptor> m_srvs; // one per frame in flight
     };
 }

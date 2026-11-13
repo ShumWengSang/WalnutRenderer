@@ -1,5 +1,6 @@
 #include "gfx/DescriptorHeap.h"
 
+#include "core/Log.h"
 #include "gfx/GpuUtils.h"
 
 namespace walnut
@@ -24,6 +25,7 @@ namespace walnut
         m_freeList.reserve(capacity);
         for (uint32_t i = capacity; i > 0; --i)
             m_freeList.push_back(i - 1);
+        m_allocated.assign(capacity, false);
     }
 
     DescriptorHandle DescriptorHeap::Allocate()
@@ -32,19 +34,31 @@ namespace walnut
             throw std::runtime_error("DescriptorHeap is full");
         const uint32_t index = m_freeList.back();
         m_freeList.pop_back();
+        m_allocated[index] = true;
         return GetHandle(index);
     }
 
     void DescriptorHeap::Free(const DescriptorHandle& handle)
     {
-        if (handle.IsValid())
-            m_freeList.push_back(handle.index);
+        if (!handle.IsValid())
+            return;
+        if (handle.index >= m_capacity || !m_allocated[handle.index] || handle.cpu.ptr != GetHandle(handle.index).cpu.ptr)
+        {
+            log::Error("DescriptorHeap::Free: slot {} isn't allocated from this heap (double free?)", handle.index);
+            return;
+        }
+        m_allocated[handle.index] = false;
+        m_freeList.push_back(handle.index);
     }
 
     void DescriptorHeap::Free(D3D12_CPU_DESCRIPTOR_HANDLE cpu)
     {
-        const uint32_t index = static_cast<uint32_t>((cpu.ptr - m_cpuStart.ptr) / m_increment);
-        m_freeList.push_back(index);
+        if (cpu.ptr < m_cpuStart.ptr || (cpu.ptr - m_cpuStart.ptr) % m_increment != 0)
+        {
+            log::Error("DescriptorHeap::Free: descriptor isn't from this heap");
+            return;
+        }
+        Free(GetHandle(static_cast<uint32_t>((cpu.ptr - m_cpuStart.ptr) / m_increment)));
     }
 
     DescriptorHandle DescriptorHeap::GetHandle(uint32_t index) const

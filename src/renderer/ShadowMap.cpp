@@ -14,7 +14,7 @@ namespace walnut
     }
 
     ShadowMap::ShadowMap(Device& device, DescriptorHeap& srvHeap, uint32_t size)
-        : m_srvHeap(srvHeap), m_size(size)
+        : m_size(size)
     {
         ID3D12Device10* d3d = device.Get();
 
@@ -32,26 +32,22 @@ namespace walnut
         SetDebugName(m_texture.Get(), L"SunShadowMap");
 
         m_dsvHeap = std::make_unique<DescriptorHeap>(d3d, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false, L"ShadowDsvHeap");
-        m_dsv = m_dsvHeap->Allocate();
+        m_dsv = OwnedDescriptor(*m_dsvHeap);
         const D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = Texture2DDsv(kDepthFormat);
         d3d->CreateDepthStencilView(m_texture.Get(), &dsvDesc, m_dsv.cpu);
 
         const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = Texture2DSrv(kReadFormat); // reads (depth, 0, 0, 1)
-        m_srv = srvHeap.Allocate();
+        m_srv = OwnedDescriptor(srvHeap);
         d3d->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_srv.cpu);
 
         // The UI's image shader shows whatever RGB it samples. A one-channel texture would come out red, so this
         // view's component mapping ("swizzle") returns the depth in red, green and blue: a gray image.
         const D3D12_SHADER_RESOURCE_VIEW_DESC debugSrvDesc = Texture2DSrv(kReadFormat, 1, Swizzle::RedAsGray);
-        m_debugSrv = srvHeap.Allocate();
+        m_debugSrv = OwnedDescriptor(srvHeap);
         d3d->CreateShaderResourceView(m_texture.Get(), &debugSrvDesc, m_debugSrv.cpu);
     }
 
-    ShadowMap::~ShadowMap()
-    {
-        m_srvHeap.Free(m_srv);
-        m_srvHeap.Free(m_debugSrv);
-    }
+    ShadowMap::~ShadowMap() = default;
 
     void ShadowMap::Begin(ID3D12GraphicsCommandList7* commandList) const
     {

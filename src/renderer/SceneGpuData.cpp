@@ -121,7 +121,7 @@ namespace walnut
         // must fetch the triangle's 3 vertex indices itself to look up their UVs (alpha-tested shadow rays).
         const D3D12_SHADER_RESOURCE_VIEW_DESC indexSrvDesc =
             StructuredBufferSrv(static_cast<uint32_t>(scene.indices.size()), sizeof(uint32_t));
-        m_indexSrv = m_srvHeap.Allocate();
+        m_indexSrv = OwnedDescriptor(m_srvHeap);
         m_device->CreateShaderResourceView(m_indexBuffer.Get(), &indexSrvDesc, m_indexSrv.cpu);
 
         log::Info("Scene on the GPU: {} draws ({} double-sided, {} alpha-tested), {} materials, {:.1f} MB of buffers, {} textures ({:.1f} MB) on the GPU",
@@ -160,24 +160,15 @@ namespace walnut
             D3D12_RESOURCE_ALLOCATION_INFO1 info{};
             m_textureBytes += m_device->GetResourceAllocationInfo2(0, 1, &texture.GetResourceDesc(), &info).SizeInBytes;
 
-            const DescriptorHandle srv = m_srvHeap.Allocate();
+            const OwnedDescriptor& srv = m_textureSrvs.emplace_back(m_srvHeap);
             texture.CreateSrv(m_device, srv.cpu);
             srvIndices[i] = srv.index;
-            m_textureSrvs.push_back(srv);
             m_textures.push_back(std::move(texture));
         }
         return srvIndices;
     }
 
-    SceneGpuData::~SceneGpuData()
-    {
-        m_srvHeap.Free(m_vertexSrv);
-        m_srvHeap.Free(m_instanceSrv);
-        m_srvHeap.Free(m_materialSrv);
-        m_srvHeap.Free(m_indexSrv);
-        for (const DescriptorHandle& srv : m_textureSrvs)
-            m_srvHeap.Free(srv);
-    }
+    SceneGpuData::~SceneGpuData() = default;
 
     uint64_t SceneGpuData::GetBufferBytes() const
     {
@@ -185,14 +176,14 @@ namespace walnut
     }
 
     Buffer SceneGpuData::CreateStructuredBuffer(UploadContext& upload, const void* data, uint32_t count, uint32_t stride,
-                                             const wchar_t* name, DescriptorHandle& srv)
+                                             const wchar_t* name, OwnedDescriptor& srv)
     {
         const uint64_t size = static_cast<uint64_t>(count) * stride;
         Buffer buffer(m_device, BufferDesc{ .size = size, .heapType = D3D12_HEAP_TYPE_DEFAULT, .name = name });
         upload.UploadBuffer(buffer, data, size);
 
         const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = StructuredBufferSrv(count, stride);
-        srv = m_srvHeap.Allocate();
+        srv = OwnedDescriptor(m_srvHeap);
         m_device->CreateShaderResourceView(buffer.Get(), &srvDesc, srv.cpu);
         return buffer;
     }

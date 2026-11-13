@@ -13,14 +13,10 @@ namespace walnut
         : m_device(device.Get()), m_srvHeap(srvHeap)
     {
         for (uint32_t i = 0; i < framesInFlight; ++i)
-            m_srvs.push_back(m_srvHeap.Allocate());
+            m_srvs.emplace_back(m_srvHeap);
     }
 
-    LightBuffer::~LightBuffer()
-    {
-        for (const DescriptorHandle& srv : m_srvs)
-            m_srvHeap.Free(srv);
-    }
+    LightBuffer::~LightBuffer() = default;
 
     uint32_t LightBuffer::Upload(FrameAllocator& allocator, uint32_t frameIndex, std::span<const PointLightGpu> lights)
     {

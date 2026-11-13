@@ -36,27 +36,22 @@ namespace walnut
         {
             // A view of ONE slice of the array: the face being rendered.
             const D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = Texture2DArraySliceDsv(ShadowMap::kDepthFormat, slice);
-            m_dsvs.push_back(m_dsvHeap->Allocate());
+            m_dsvs.emplace_back(*m_dsvHeap);
             d3d->CreateDepthStencilView(m_texture.Get(), &dsvDesc, m_dsvs.back().cpu);
 
             // And of the same slice for the UI, as gray (like ShadowMap's debug view).
             const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = Texture2DArraySrv(ShadowMap::kReadFormat, slice, 1, Swizzle::RedAsGray);
-            m_faceDebugSrvs.push_back(m_srvHeap.Allocate());
+            m_faceDebugSrvs.emplace_back(m_srvHeap);
             d3d->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_faceDebugSrvs.back().cpu);
         }
 
         // The same 2D array, seen as cubes: every 6 slices are one cube, in the order +X, -X, +Y, -Y, +Z, -Z.
         const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = TextureCubeArraySrv(ShadowMap::kReadFormat, kMaxShadowedLights);
-        m_cubeArraySrv = m_srvHeap.Allocate();
+        m_cubeArraySrv = OwnedDescriptor(m_srvHeap);
         d3d->CreateShaderResourceView(m_texture.Get(), &srvDesc, m_cubeArraySrv.cpu);
     }
 
-    PointShadowMaps::~PointShadowMaps()
-    {
-        for (const DescriptorHandle& srv : m_faceDebugSrvs)
-            m_srvHeap.Free(srv);
-        m_srvHeap.Free(m_cubeArraySrv);
-    }
+    PointShadowMaps::~PointShadowMaps() = default;
 
     DirectX::XMMATRIX PointShadowMaps::GetFaceViewProjection(const DirectX::XMFLOAT3& position, float range, uint32_t face)
     {

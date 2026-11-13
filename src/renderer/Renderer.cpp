@@ -36,14 +36,14 @@ namespace walnut
 
         // Depth-stencil views, like RTVs, live in a CPU-only (non-shader-visible) heap.
         m_dsvHeap = std::make_unique<DescriptorHeap>(device, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1, false, L"DsvHeap");
-        m_dsv = m_dsvHeap->Allocate();
-        m_depthSrv = m_srvHeap->Allocate();
+        m_dsv = OwnedDescriptor(*m_dsvHeap);
+        m_depthSrv = OwnedDescriptor(*m_srvHeap);
         CreateDepthBuffer(m_swapChain->GetWidth(), m_swapChain->GetHeight());
         m_gbuffer = std::make_unique<GBuffer>(*m_device, *m_srvHeap, m_swapChain->GetWidth(), m_swapChain->GetHeight());
 
         m_rtvHeap = std::make_unique<DescriptorHeap>(device, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1, false, L"SceneRtvHeap");
-        m_sceneRtv = m_rtvHeap->Allocate();
-        m_sceneSrv = m_srvHeap->Allocate();
+        m_sceneRtv = OwnedDescriptor(*m_rtvHeap);
+        m_sceneSrv = OwnedDescriptor(*m_srvHeap);
         CreateSceneColorTarget(m_swapChain->GetWidth(), m_swapChain->GetHeight());
 
         for (uint32_t i = 0; i < kFramesInFlight; ++i)

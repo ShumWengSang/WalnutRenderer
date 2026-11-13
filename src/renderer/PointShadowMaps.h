@@ -65,9 +65,9 @@ namespace walnut
         DescriptorHeap& m_srvHeap;
         std::unique_ptr<DescriptorHeap> m_dsvHeap;
         ComPtr<ID3D12Resource> m_texture;
-        std::vector<DescriptorHandle> m_dsvs;          // one per slice
-        std::vector<DescriptorHandle> m_faceDebugSrvs; // one per slice
-        DescriptorHandle m_cubeArraySrv;
+        std::vector<OwnedDescriptor> m_dsvs;          // one per slice
+        std::vector<OwnedDescriptor> m_faceDebugSrvs; // one per slice
+        OwnedDescriptor m_cubeArraySrv;
         uint64_t m_bytes = 0;
     };
 }

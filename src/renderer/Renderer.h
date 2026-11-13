@@ -152,13 +152,13 @@ namespace walnut
         std::unique_ptr<DescriptorHeap> m_srvHeap;
         ComPtr<ID3D12RootSignature> m_rootSignature;
         std::unique_ptr<DescriptorHeap> m_dsvHeap;
-        DescriptorHandle m_dsv;
-        DescriptorHandle m_depthSrv; // the depth buffer as Texture2D<float> (bindless)
+        OwnedDescriptor m_dsv;
+        OwnedDescriptor m_depthSrv; // the depth buffer as Texture2D<float> (bindless)
         ComPtr<ID3D12Resource> m_depthBuffer;
         std::unique_ptr<GBuffer> m_gbuffer;
         std::unique_ptr<DescriptorHeap> m_rtvHeap; // for the scene color target (the swapchain has its own)
-        DescriptorHandle m_sceneRtv;
-        DescriptorHandle m_sceneSrv;
+        OwnedDescriptor m_sceneRtv;
+        OwnedDescriptor m_sceneSrv;
         ComPtr<ID3D12Resource> m_sceneColor;
         std::unique_ptr<FrameAllocator> m_frameAllocator;
         std::array<FrameContext, kFramesInFlight> m_frames;

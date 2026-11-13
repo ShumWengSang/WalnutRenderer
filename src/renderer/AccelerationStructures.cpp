@@ -40,7 +40,6 @@ namespace walnut
 
     AccelerationStructures::AccelerationStructures(Device& device, CommandQueue& queue, DescriptorHeap& srvHeap,
                                                    const Scene& scene, const SceneGpuData& gpuData)
-        : m_srvHeap(srvHeap)
     {
         const Buffer& vertices = gpuData.GetVertexBuffer();
         const Buffer& indices = gpuData.GetIndexBuffer();
@@ -197,7 +196,7 @@ namespace walnut
         // Shaders find the TLAS through the bindless heap. An acceleration-structure SRV has no resource: just the
         // GPU address of the TLAS.
         const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = AccelerationStructureSrv(m_tlasBuffer.GetGpuAddress());
-        m_tlasSrv = srvHeap.Allocate();
+        m_tlasSrv = OwnedDescriptor(srvHeap);
         d3d->CreateShaderResourceView(nullptr, &srvDesc, m_tlasSrv.cpu);
 
         m_stats.blasCount = static_cast<uint32_t>(primitiveCount);
@@ -216,8 +215,5 @@ namespace walnut
                   m_stats.buildMs);
     }
 
-    AccelerationStructures::~AccelerationStructures()
-    {
-        m_srvHeap.Free(m_tlasSrv);
-    }
+    AccelerationStructures::~AccelerationStructures() = default;
 }
