@@ -7,6 +7,7 @@
 
 #include "common/Bindless.hlsli"
 #include "common/Brdf.hlsli"
+#include "common/Clusters.hlsli"
 #include "common/DebugViews.hlsli"
 #include "common/FrameConstants.hlsli"
 #include "common/SceneData.hlsli"
@@ -299,12 +300,33 @@ float3 ShadowDifferenceColor(float rayShadow, float mapShadow)
     return lerp(color, float3(0.1f, 0.35f, 1.0f), saturate(difference));
 }
 
+// A heat-map color for a count: dark blue at 0, through cyan, green and yellow, to red at 'maxCount' and above.
+float3 HeatColor(uint count, uint maxCount)
+{
+    if (count == 0)
+        return float3(0.02f, 0.02f, 0.08f);
+    const float t = saturate(float(count) / float(maxCount)) * 4.0f;
+    const float3 ramp[5] = { float3(0.1f, 0.1f, 0.9f), float3(0.0f, 0.8f, 0.9f), float3(0.1f, 0.85f, 0.1f),
+                             float3(0.95f, 0.9f, 0.1f), float3(0.95f, 0.1f, 0.05f) };
+    const uint i = min(uint(t), 3u);
+    return lerp(ramp[i], ramp[i + 1], t - float(i));
+}
+
 // The debug views both rendering paths can show (they only need the material sample and the shading). Returns
 // false for views that need what only the forward pass has: texture coordinates, instance and material ids, the raw
 // normal map, alpha mode and face orientation.
-bool SharedViewColor(uint view, MaterialSample mat, ShadingResult shading, out float3 color)
+bool SharedViewColor(uint view, float3 worldPosition, MaterialSample mat, ShadingResult shading, out float3 color)
 {
     color = 0.0f;
+    if (view == kViewClusterLights)
+    {
+        // How many lights the pixel's cluster lists (red = 64 or more), over a dim copy of the shaded image.
+        StructuredBuffer<uint2> grid = ResourceDescriptorHeap[g_frame.clusterGridIndex];
+        const uint count = grid[ClusterOf(worldPosition)].y;
+        const float brightness = dot(shading.color, float3(0.2126f, 0.7152f, 0.0722f));
+        color = HeatColor(count, 64) * (0.6f + 0.4f * saturate(brightness));
+        return true;
+    }
     if (view == kViewLit)                   color = shading.color;
     else if (view == kViewLightingOnly)     color = shading.lighting;
     else if (view == kViewSunSpecular)      color = shading.sunSpecular;

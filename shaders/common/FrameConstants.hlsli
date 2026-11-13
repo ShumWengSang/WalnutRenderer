@@ -35,6 +35,15 @@ struct FrameConstants
     uint   pointLightBufferIndex; // bindless StructuredBuffer<PointLight> (Lighting.hlsli)
     uint   pointLightCount;
     uint2  padding5;
+
+    row_major float4x4 view;     // world -> view space (clustered lighting)
+    float  tanHalfFovX;
+    float  tanHalfFovY;
+    float  clusterNear;          // view-space depth range of the cluster slices
+    float  clusterFar;
+    uint   clusterGridIndex;         // StructuredBuffer<uint2> (first, count) per cluster (Clusters.hlsli)
+    uint   clusterLightIndicesIndex; // StructuredBuffer<uint>
+    uint2  padding6;
 };
 ConstantBuffer<FrameConstants> g_frame : register(b2);
 

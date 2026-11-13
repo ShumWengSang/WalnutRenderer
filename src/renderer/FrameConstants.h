@@ -48,6 +48,17 @@ namespace walnut
         uint32_t pointLightBufferIndex = UINT32_MAX;
         uint32_t pointLightCount = 0;
         uint32_t padding5[2] = {};
+
+        // Clustered lighting (L3): the camera's view matrix and field of view (cluster boxes are built in view space),
+        // the depth range the slices cover, and the grid itself.
+        DirectX::XMFLOAT4X4 view;
+        float tanHalfFovX = 1.0f;
+        float tanHalfFovY = 1.0f;
+        float clusterNear = 0.1f;  // view-space depth (meters) where slice 0 starts: the camera's near plane
+        float clusterFar = 100.0f; // ... and where the last slice ends: the farthest corner of the scene
+        uint32_t clusterGridIndex = UINT32_MAX;         // StructuredBuffer<uint2>: (first index, count) per cluster
+        uint32_t clusterLightIndicesIndex = UINT32_MAX; // StructuredBuffer<uint>: the clusters' light indices
+        uint32_t padding6[2] = {};
     };
-    static_assert(sizeof(FrameConstants) == 336);
+    static_assert(sizeof(FrameConstants) == 432);
 }

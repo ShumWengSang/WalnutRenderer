@@ -3,6 +3,7 @@
 #include "core/Input.h"
 #include "core/Timer.h"
 #include "renderer/AccelerationStructures.h"
+#include "renderer/ClusterGrid.h"
 #include "renderer/ScenePass.h"
 #include "renderer/ShadowMap.h"
 #include "renderer/DeferredPass.h"
@@ -85,6 +86,7 @@ namespace walnut
         std::unique_ptr<DeferredPass> m_deferredPass;
         std::unique_ptr<LightBuffer> m_lightBuffer;
         std::unique_ptr<LightMarkerPass> m_lightMarkerPass;
+        std::unique_ptr<ClusterGrid> m_clusterGrid;
         std::unique_ptr<ImGuiLayer> m_imgui;
         Timer m_timer;
 

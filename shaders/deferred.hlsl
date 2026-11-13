@@ -77,7 +77,7 @@ float4 PSMain(float4 position : SV_Position) : SV_Target
 
     const ShadingResult shading = ShadeSurface(worldPosition, mat, g_draw.debugView == kViewShadowDifference);
     float3 color;
-    if (!SharedViewColor(g_draw.debugView, mat, shading, color))
+    if (!SharedViewColor(g_draw.debugView, worldPosition, mat, shading, color))
         color = float3(1.0f, 0.0f, 1.0f); // forward-only view (the UI doesn't offer it in deferred mode)
     return float4(color, 1.0f);
 }

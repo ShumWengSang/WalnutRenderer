@@ -199,7 +199,9 @@ namespace walnut
     {
         // Root arguments stay bound across PSO changes (they belong to the root signature), so this one call
         // covers every pass that uses the shared root signature this frame.
-        m_commandList->SetGraphicsRootConstantBufferView(RootParam::FrameData, m_frameAllocator->AllocateConstants(constants));
+        const D3D12_GPU_VIRTUAL_ADDRESS address = m_frameAllocator->AllocateConstants(constants);
+        m_commandList->SetGraphicsRootConstantBufferView(RootParam::FrameData, address);
+        m_commandList->SetComputeRootConstantBufferView(RootParam::FrameData, address);
     }
 
     void Renderer::BeginBackBufferPass()
@@ -249,6 +251,8 @@ namespace walnut
         ID3D12DescriptorHeap* heaps[] = { m_srvHeap->Get() };
         commandList->SetDescriptorHeaps(_countof(heaps), heaps);
         commandList->SetGraphicsRootSignature(m_rootSignature.Get());
+        // The same root signature for compute shaders: compute has its own set of root arguments.
+        commandList->SetComputeRootSignature(m_rootSignature.Get());
     }
 
     void Renderer::EndFrame()

@@ -1,0 +1,71 @@
+#pragma once
+
+#include "gfx/Buffer.h"
+#include "gfx/D3D12Common.h"
+#include "gfx/DescriptorHeap.h"
+
+#include <cstdint>
+#include <filesystem>
+#include <string>
+
+namespace walnut
+{
+    class Device;
+    class ShaderCompiler;
+
+    // The cluster grid of clustered lighting (shaders/clusters.hlsl, layout in shaders/common/Clusters.hlsli): every
+    // frame a compute shader lists, for each of the 16 x 9 x 24 view-space clusters, the point lights that reach it.
+    class ClusterGrid
+    {
+    public:
+        static constexpr uint32_t kCountX = 16; // must match Clusters.hlsli
+        static constexpr uint32_t kCountY = 9;
+        static constexpr uint32_t kCountZ = 24;
+        static constexpr uint32_t kClusterCount = kCountX * kCountY * kCountZ;
+        // Room in the shared index list. Every (cluster, light) pair takes one slot: 3456 clusters x ~300 lights.
+        static constexpr uint32_t kIndexCapacity = 1u << 20;
+
+        ClusterGrid(Device& device, DescriptorHeap& srvHeap, const ShaderCompiler& compiler,
+                    std::filesystem::path shaderPath, ID3D12RootSignature* rootSignature, uint32_t framesInFlight);
+        ~ClusterGrid();
+
+        ClusterGrid(const ClusterGrid&) = delete;
+        ClusterGrid& operator=(const ClusterGrid&) = delete;
+
+        // Recompiles the shaders and rebuilds the PSOs. On failure the previous PSOs are kept.
+        // The old PSOs are released on success, so the GPU must be idle before calling this.
+        bool ReloadShaders();
+        const std::string& GetLastError() const { return m_lastError; }
+
+        // Records the build (expects the bindless state and the frame constants, with the point lights and the
+        // cluster fields, to be bound). Afterwards the grid is readable by pixel shaders. Call after
+        // Renderer::BeginFrame: it also reads back how full the index list got the last time this frame slot ran.
+        void Build(ID3D12GraphicsCommandList7* commandList, uint32_t frameIndex);
+
+        // (cluster, light) pairs written by a recent build (a frame or two old: read back from the GPU), and the most
+        // that fit. Beyond the capacity, clusters lose lights.
+        uint32_t GetUsedIndices() const { return m_usedIndices; }
+
+        uint32_t GetGridSrvIndex() const { return m_gridSrv.index; }
+        uint32_t GetIndicesSrvIndex() const { return m_indicesSrv.index; }
+        uint64_t GetBytes() const { return m_grid.GetSize() + m_indices.GetSize() + m_counter.GetSize(); }
+
+    private:
+        ID3D12Device10* m_device = nullptr;
+        DescriptorHeap& m_srvHeap;
+        const ShaderCompiler& m_compiler;
+        std::filesystem::path m_shaderPath;
+        ID3D12RootSignature* m_rootSignature = nullptr; // owned by the Renderer
+
+        Buffer m_grid;    // uint2 per cluster: (first index, count)
+        Buffer m_indices; // uint per (cluster, light) pair
+        Buffer m_counter; // one uint: how much of m_indices is in use
+        Buffer m_counterReadback; // one uint per frame in flight, copied from m_counter for the CPU
+        uint32_t m_usedIndices = 0;
+        DescriptorHandle m_gridSrv, m_gridUav, m_indicesSrv, m_indicesUav, m_counterUav;
+
+        ComPtr<ID3D12PipelineState> m_resetPipeline;
+        ComPtr<ID3D12PipelineState> m_buildPipeline;
+        std::string m_lastError;
+    };
+}

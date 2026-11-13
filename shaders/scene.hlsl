@@ -312,7 +312,7 @@ float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
     const ShadingResult shading = ShadeSurface(input.worldPosition, mat, g_draw.debugView == kViewShadowDifference);
 
     float3 color;
-    if (SharedViewColor(g_draw.debugView, mat, shading, color))
+    if (SharedViewColor(g_draw.debugView, input.worldPosition, mat, shading, color))
         return float4(color, 1.0f);
 
     // Views only the forward pass can show: they need the draw's own inputs.

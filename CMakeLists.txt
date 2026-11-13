@@ -55,6 +55,8 @@ set(WALNUT_SOURCES
 
     src/renderer/AccelerationStructures.cpp
     src/renderer/AccelerationStructures.h
+    src/renderer/ClusterGrid.cpp
+    src/renderer/ClusterGrid.h
     src/renderer/DeferredPass.cpp
     src/renderer/DeferredPass.h
     src/renderer/FrameConstants.h

@@ -181,6 +181,9 @@ namespace walnut
                                                         m_shaderDir / "deferred.hlsl", m_renderer->GetRootSignature(),
                                                         Renderer::kSceneColorFormat, m_renderer->GetDevice().SupportsInlineRaytracing());
         m_lightBuffer = std::make_unique<LightBuffer>(m_renderer->GetDevice(), m_renderer->GetSrvHeap(), Renderer::kFramesInFlight);
+        m_clusterGrid = std::make_unique<ClusterGrid>(m_renderer->GetDevice(), m_renderer->GetSrvHeap(), *m_shaderCompiler,
+                                                      m_shaderDir / "clusters.hlsl", m_renderer->GetRootSignature(),
+                                                      Renderer::kFramesInFlight);
         m_lightMarkerPass = std::make_unique<LightMarkerPass>(m_renderer->GetDevice(), *m_shaderCompiler,
                                                               m_shaderDir / "lightmarkers.hlsl", m_renderer->GetRootSignature(),
                                                               Renderer::kSceneColorFormat, Renderer::kDepthFormat);
@@ -216,6 +219,7 @@ namespace walnut
         m_deferredPass.reset();
         m_lightBuffer.reset();
         m_lightMarkerPass.reset();
+        m_clusterGrid.reset();
         m_shaderCompiler.reset();
         m_renderer.reset();
         m_window.reset();
@@ -276,6 +280,26 @@ namespace walnut
             const DirectX::XMMATRIX viewProjection = m_camera.GetViewProjectionMatrix(aspect);
             DirectX::XMStoreFloat4x4(&frameConstants.viewProjection, viewProjection);
             DirectX::XMStoreFloat4x4(&frameConstants.inverseViewProjection, DirectX::XMMatrixInverse(nullptr, viewProjection));
+            // Clustered lighting: view space, the field of view, and the depths the slices span (the near plane to
+            // the farthest corner of the scene's bounds: nothing visible is farther).
+            DirectX::XMStoreFloat4x4(&frameConstants.view, m_camera.GetViewMatrix());
+            frameConstants.tanHalfFovY = std::tan(m_camera.verticalFov * 0.5f);
+            frameConstants.tanHalfFovX = frameConstants.tanHalfFovY * aspect;
+            frameConstants.clusterNear = m_camera.nearZ;
+            {
+                float farthest = m_camera.nearZ * 2.0f;
+                for (int corner = 0; corner < 8; ++corner)
+                {
+                    const DirectX::XMFLOAT3 p{ (corner & 1) ? m_scene.boundsMax.x : m_scene.boundsMin.x,
+                                               (corner & 2) ? m_scene.boundsMax.y : m_scene.boundsMin.y,
+                                               (corner & 4) ? m_scene.boundsMax.z : m_scene.boundsMin.z };
+                    const float dx = p.x - m_camera.position.x, dy = p.y - m_camera.position.y, dz = p.z - m_camera.position.z;
+                    farthest = std::max(farthest, std::sqrt(dx * dx + dy * dy + dz * dz));
+                }
+                frameConstants.clusterFar = farthest;
+            }
+            frameConstants.clusterGridIndex = m_clusterGrid->GetGridSrvIndex();
+            frameConstants.clusterLightIndicesIndex = m_clusterGrid->GetIndicesSrvIndex();
             frameConstants.cameraPosition = m_camera.position;
             frameConstants.sunDirection = m_lighting.GetSunDirection();
             const auto scaled = [](const DirectX::XMFLOAT3& color, float intensity) {
@@ -322,6 +346,10 @@ namespace walnut
                 frameConstants.pointLightCount = static_cast<uint32_t>(m_pointLightData.size());
                 m_renderer->SetFrameConstants(frameConstants);
                 ID3D12GraphicsCommandList7* commandList = m_renderer->GetCommandList();
+
+                // 0. Sort the point lights into the cluster grid (compute), before anything reads it.
+                if (m_scenePass)
+                    m_clusterGrid->Build(commandList, m_renderer->GetFrameIndex());
 
                 // 1. Depth from the sun's point of view, into the shadow map. With ray-traced shadows the casters are
                 //    skipped (nothing reads the map), except for the difference view, which compares both. The pass
@@ -423,7 +451,8 @@ namespace walnut
         const bool tonemapOk = m_tonemapPass->ReloadShaders();
         const bool deferredOk = m_deferredPass->ReloadShaders();
         const bool markersOk = m_lightMarkerPass->ReloadShaders();
-        if (sceneOk && tonemapOk && deferredOk && markersOk)
+        const bool clustersOk = m_clusterGrid->ReloadShaders();
+        if (sceneOk && tonemapOk && deferredOk && markersOk && clustersOk)
             log::Info("Shaders reloaded");
     }
 
@@ -510,7 +539,8 @@ namespace walnut
         // Shader errors first: they would otherwise be easy to miss inside a closed section.
         const std::string noError;
         for (const std::string* error : { m_scenePass ? &m_scenePass->GetLastError() : &noError, &m_tonemapPass->GetLastError(),
-                                          &m_deferredPass->GetLastError(), &m_lightMarkerPass->GetLastError() })
+                                          &m_deferredPass->GetLastError(), &m_lightMarkerPass->GetLastError(),
+                                          &m_clusterGrid->GetLastError() })
         {
             if (error->empty())
                 continue;
@@ -528,7 +558,7 @@ namespace walnut
                                     "Sun shadow", "Shadow difference (ray traced vs map)",
                                     "Roughness", "Metallic", "Normal map (tangent space)", "Occlusion", "Emissive",
                                     "Sun specular (highlights)", "Ambient (sky + ground, occluded)",
-                                    "Geometric normals (no normal map)", "Point lights only" };
+                                    "Geometric normals (no normal map)", "Point lights only", "Lights per cluster (heat map)" };
             const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
 
             // Forward or deferred. Deferred can show everything computed from the G-buffer, but not views that need a
@@ -671,6 +701,11 @@ namespace walnut
                 ImGui::Checkbox("Markers", &m_lighting.showPointLightMarkers);
                 ImGui::SameLine();
                 ImGui::TextDisabled("brute force: every pixel visits every lamp");
+                const uint32_t used = m_clusterGrid->GetUsedIndices();
+                ImGui::Text("Clusters: %ux%ux%u, %u light entries (%.1f per cluster, %.0f%% of the list)",
+                            ClusterGrid::kCountX, ClusterGrid::kCountY, ClusterGrid::kCountZ, used,
+                            static_cast<double>(used) / ClusterGrid::kClusterCount,
+                            100.0 * used / ClusterGrid::kIndexCapacity);
                 ImGui::TreePop();
             }
             {
