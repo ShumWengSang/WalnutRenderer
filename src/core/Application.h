@@ -9,6 +9,7 @@
 #include "renderer/DeferredPass.h"
 #include "renderer/LightBuffer.h"
 #include "renderer/LightMarkerPass.h"
+#include "renderer/PointShadowMaps.h"
 #include "renderer/TonemapPass.h"
 #include "scene/Assets.h"
 #include "scene/Camera.h"
@@ -87,6 +88,7 @@ namespace walnut
         std::unique_ptr<LightBuffer> m_lightBuffer;
         std::unique_ptr<LightMarkerPass> m_lightMarkerPass;
         std::unique_ptr<ClusterGrid> m_clusterGrid;
+        std::unique_ptr<PointShadowMaps> m_pointShadowMaps;
         std::unique_ptr<ImGuiLayer> m_imgui;
         Timer m_timer;
 
@@ -97,6 +99,10 @@ namespace walnut
         SceneLighting m_lighting;
         PointLights m_pointLights;
         std::vector<PointLightGpu> m_pointLightData; // this frame's lights, rebuilt every frame
+        std::vector<uint32_t> m_shadowedLights;      // light index of each cube shadow map slot, this frame
+        uint32_t m_pointShadowDraws = 0;             // draws recorded into the cube shadow maps last frame
+        int m_pointShadowViewSlot = 0;               // which cube the UI shows
+
         bool m_shadowsEnabled = true;
         float m_roughnessOverrideValue = 0.3f; // slider values kept while an override is switched off
         float m_metallicOverrideValue = 1.0f;

@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cfloat>
 
 namespace walnut
 {
@@ -92,8 +93,22 @@ namespace walnut
             const SceneMaterial& material = scene.materials[primitive.materialIndex];
             gpu.materialIndex = primitive.materialIndex;
             gpu.firstIndex = primitive.firstIndex;
-            m_draws.push_back({ primitive.indexCount, primitive.firstIndex, static_cast<uint32_t>(m_draws.size()),
-                                material.doubleSided, material.alphaMode == AlphaMode::Mask });
+            // World-space bounds: the box around the primitive's 8 transformed corners (for culling).
+            XMVECTOR boundsMin = XMVectorReplicate(FLT_MAX), boundsMax = XMVectorReplicate(-FLT_MAX);
+            for (int corner = 0; corner < 8; ++corner)
+            {
+                const XMVECTOR p = XMVector3TransformCoord(
+                    XMVectorSet((corner & 1) ? primitive.boundsMax.x : primitive.boundsMin.x,
+                                (corner & 2) ? primitive.boundsMax.y : primitive.boundsMin.y,
+                                (corner & 4) ? primitive.boundsMax.z : primitive.boundsMin.z, 1.0f), world);
+                boundsMin = XMVectorMin(boundsMin, p);
+                boundsMax = XMVectorMax(boundsMax, p);
+            }
+            DrawItem& draw = m_draws.emplace_back(DrawItem{ primitive.indexCount, primitive.firstIndex,
+                                                            static_cast<uint32_t>(m_draws.size()), material.doubleSided,
+                                                            material.alphaMode == AlphaMode::Mask, {}, {} });
+            XMStoreFloat3(&draw.boundsMin, boundsMin);
+            XMStoreFloat3(&draw.boundsMax, boundsMax);
         }
         // Sorted by PSO: opaque single-sided, opaque double-sided, masked single-sided, masked double-sided. Each PSO
         // is then set once per frame. Opaque goes first on purpose: alpha-tested pixels are slower (see scene.hlsl),
@@ -245,12 +260,15 @@ namespace walnut
         const ShaderCompileResult vsPrepassAlpha = m_compiler.Compile({ m_shaderPath, L"VSDepthPrepassAlphaTest", ShaderStage::Vertex });
         const ShaderCompileResult psDepthAlpha = m_compiler.Compile({ m_shaderPath, L"PSDepthAlphaTest", ShaderStage::Pixel });
         const ShaderCompileResult psGBuffer = m_compiler.Compile({ m_shaderPath, L"PSGBuffer", ShaderStage::Pixel });
+        const ShaderCompileResult vsPointShadow = m_compiler.Compile({ m_shaderPath, L"VSPointShadow", ShaderStage::Vertex });
+        const ShaderCompileResult vsPointShadowAlpha = m_compiler.Compile({ m_shaderPath, L"VSPointShadowAlphaTest", ShaderStage::Vertex });
         if (!vs.Succeeded() || !ps.Succeeded() || !psAlphaTest.Succeeded() || !vsShadow.Succeeded() ||
             !vsShadowAlpha.Succeeded() || !vsPrepass.Succeeded() || !vsPrepassAlpha.Succeeded() ||
-            !psDepthAlpha.Succeeded() || !psGBuffer.Succeeded())
+            !psDepthAlpha.Succeeded() || !psGBuffer.Succeeded() || !vsPointShadow.Succeeded() || !vsPointShadowAlpha.Succeeded())
         {
             m_lastError = vs.errors + ps.errors + psAlphaTest.errors + vsShadow.errors + vsShadowAlpha.errors +
-                          vsPrepass.errors + vsPrepassAlpha.errors + psDepthAlpha.errors + psGBuffer.errors;
+                          vsPrepass.errors + vsPrepassAlpha.errors + psDepthAlpha.errors + psGBuffer.errors +
+                          vsPointShadow.errors + vsPointShadowAlpha.errors;
             return false;
         }
 
@@ -370,6 +388,22 @@ namespace walnut
             }
         }
 
+        // Point shadow pipelines (M1): the same depth-only drawing into a cube face, with the face's camera from b1.
+        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> pointShadowPipelines;
+        for (int alphaTest = 0; alphaTest < 2 && SUCCEEDED(hr); ++alphaTest)
+        {
+            desc.VS = alphaTest ? vsPointShadowAlpha.GetBytecode() : vsPointShadow.GetBytecode();
+            desc.PS = alphaTest ? psDepthAlpha.GetBytecode() : D3D12_SHADER_BYTECODE{};
+            for (int cullNone = 0; cullNone < 2 && SUCCEEDED(hr); ++cullNone)
+            {
+                desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
+                hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pointShadowPipelines[alphaTest][cullNone]));
+                if (SUCCEEDED(hr))
+                    SetDebugName(pointShadowPipelines[alphaTest][cullNone].Get(),
+                                 std::format(L"PointShadowPSO_{}_{}", alphaTest ? L"AlphaTest" : L"Opaque", cullNone ? L"CullNone" : L"CullBack").c_str());
+            }
+        }
+
         // Depth pre-pass pipelines: the same depth-only drawing, from the camera into the scene's depth buffer.
         desc.DSVFormat = m_dsvFormat;
         std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> prepassPipelines;
@@ -398,6 +432,7 @@ namespace walnut
         m_equalPipelines = std::move(equalPipelines);
         m_gbufferPipelines = std::move(gbufferPipelines);
         m_prepassPipelines = std::move(prepassPipelines);
+        m_pointShadowPipelines = std::move(pointShadowPipelines);
         m_lastError.clear();
         return true;
     }
@@ -426,7 +461,17 @@ namespace walnut
         RecordDraws(commandList, settings, DrawMode::GBuffer);
     }
 
-    void ScenePass::RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings, DrawMode mode) const
+    uint32_t ScenePass::RenderPointShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings,
+                                               D3D12_GPU_VIRTUAL_ADDRESS faceViewProjection,
+                                               const DirectX::XMFLOAT3& lightPosition, float lightRange) const
+    {
+        commandList->SetGraphicsRootConstantBufferView(RootParam::DrawData, faceViewProjection);
+        const CullSphere cull{ lightPosition, lightRange };
+        return RecordDraws(commandList, settings, DrawMode::PointShadowDepth, &cull);
+    }
+
+    uint32_t ScenePass::RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings, DrawMode mode,
+                                    const CullSphere* cull) const
     {
         // The camera and lights come from the frame constants (b2), which the renderer has already bound.
         // Everything else shared by all draws is set once here.
@@ -453,8 +498,18 @@ namespace walnut
         // Per draw, only one 32-bit root constant changes. SV_InstanceID can't carry the instance index instead:
         // in D3D12 it always counts from 0 within a draw, ignoring StartInstanceLocation.
         ID3D12PipelineState* currentPipeline = nullptr;
+        uint32_t drawCount = 0;
         for (const DrawItem& draw : m_draws)
         {
+            if (cull)
+            {
+                // Sphere vs box: the box's closest point to the sphere's center, within the radius?
+                const float cx = std::clamp(cull->center.x, draw.boundsMin.x, draw.boundsMax.x) - cull->center.x;
+                const float cy = std::clamp(cull->center.y, draw.boundsMin.y, draw.boundsMax.y) - cull->center.y;
+                const float cz = std::clamp(cull->center.z, draw.boundsMin.z, draw.boundsMax.z) - cull->center.z;
+                if (cx * cx + cy * cy + cz * cz > cull->radius * cull->radius)
+                    continue;
+            }
             // Double-sided materials are never culled; masked ones use the discarding pixel shader. The draws are
             // sorted by these two flags, so each PSO is set once.
             const bool alphaTest = settings.alphaTest && draw.alphaTest;
@@ -466,6 +521,7 @@ namespace walnut
             case DrawMode::ShadowDepth: pipeline = m_shadowPipelines[alphaTest][cullNone].Get(); break;
             case DrawMode::DepthPrepass: pipeline = m_prepassPipelines[alphaTest][cullNone].Get(); break;
             case DrawMode::GBuffer: pipeline = m_gbufferPipelines[cullNone].Get(); break;
+            case DrawMode::PointShadowDepth: pipeline = m_pointShadowPipelines[alphaTest][cullNone].Get(); break;
             case DrawMode::Scene:
                 pipeline = settings.depthPrepass ? m_equalPipelines[raytraced][cullNone].Get()
                                                  : m_pipelines[raytraced][alphaTest][cullNone].Get();
@@ -479,6 +535,8 @@ namespace walnut
             commandList->SetGraphicsRoot32BitConstant(RootParam::DrawConstants, draw.instanceIndex, kInstanceIndexConstant);
             // BaseVertexLocation = 0: the loader already added each primitive's first vertex to its indices.
             commandList->DrawIndexedInstanced(draw.indexCount, 1, draw.firstIndex, 0, 0);
+            ++drawCount;
         }
+        return drawCount;
     }
 }

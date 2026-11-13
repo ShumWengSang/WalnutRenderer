@@ -13,7 +13,7 @@ namespace walnut
         DirectX::XMFLOAT3 position; // world space
         float range;                // meters: the light fades smoothly to exactly zero here
         DirectX::XMFLOAT3 intensity; // linear color * intensity: at distance d, a surface facing it receives intensity / d^2
-        uint32_t padding = 0;
+        uint32_t shadowSlot = UINT32_MAX; // which cube of PointShadowMaps holds its shadow; UINT32_MAX: none
     };
 
     // A field of colored lamps scattered through a scene, for testing many lights. Positions and colors come from a

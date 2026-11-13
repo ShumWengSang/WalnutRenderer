@@ -179,7 +179,7 @@ struct PointLight
     float3 position;  // world space
     float  range;     // meters: the light fades to exactly zero here
     float3 intensity; // linear color * intensity
-    uint   padding;
+    uint   shadowSlot; // cube shadow map slot (PointShadowMaps), 0xFFFFFFFF: no shadow
 };
 
 // How much of a point light reaches a surface at distance^2 = distanceSquared, per unit of intensity.

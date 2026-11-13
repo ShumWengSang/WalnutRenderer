@@ -181,6 +181,7 @@ namespace walnut
                                                         m_shaderDir / "deferred.hlsl", m_renderer->GetRootSignature(),
                                                         Renderer::kSceneColorFormat, m_renderer->GetDevice().SupportsInlineRaytracing());
         m_lightBuffer = std::make_unique<LightBuffer>(m_renderer->GetDevice(), m_renderer->GetSrvHeap(), Renderer::kFramesInFlight);
+        m_pointShadowMaps = std::make_unique<PointShadowMaps>(m_renderer->GetDevice(), m_renderer->GetSrvHeap());
         m_clusterGrid = std::make_unique<ClusterGrid>(m_renderer->GetDevice(), m_renderer->GetSrvHeap(), *m_shaderCompiler,
                                                       m_shaderDir / "clusters.hlsl", m_renderer->GetRootSignature(),
                                                       Renderer::kFramesInFlight);
@@ -220,6 +221,7 @@ namespace walnut
         m_lightBuffer.reset();
         m_lightMarkerPass.reset();
         m_clusterGrid.reset();
+        m_pointShadowMaps.reset();
         m_shaderCompiler.reset();
         m_renderer.reset();
         m_window.reset();
@@ -342,6 +344,29 @@ namespace walnut
                     m_pointLights.Update(m_timer.GetTotalSeconds(), static_cast<uint32_t>(m_lighting.pointLightCount),
                                          m_lighting.pointLightRange, m_lighting.pointLightIntensity,
                                          m_lighting.animatePointLights, m_pointLightData);
+                // Which lamps get a cube shadow map: the ones closest to the camera (by how far the camera is from
+                // the edge of their light, so a lamp lighting the space around the camera always qualifies).
+                m_shadowedLights.clear();
+                {
+                    const uint32_t budget = std::min<uint32_t>(static_cast<uint32_t>(std::max(m_lighting.pointShadowBudget, 0)),
+                                                               PointShadowMaps::kMaxShadowedLights);
+                    std::vector<std::pair<float, uint32_t>> byDistance;
+                    byDistance.reserve(m_pointLightData.size());
+                    for (uint32_t i = 0; i < m_pointLightData.size(); ++i)
+                    {
+                        const PointLightGpu& light = m_pointLightData[i];
+                        const float dx = light.position.x - m_camera.position.x, dy = light.position.y - m_camera.position.y,
+                                    dz = light.position.z - m_camera.position.z;
+                        byDistance.emplace_back(std::max(std::sqrt(dx * dx + dy * dy + dz * dz) - light.range, 0.0f), i);
+                    }
+                    const size_t count = std::min<size_t>(budget, byDistance.size());
+                    std::partial_sort(byDistance.begin(), byDistance.begin() + count, byDistance.end());
+                    for (size_t slot = 0; slot < count; ++slot)
+                    {
+                        m_pointLightData[byDistance[slot].second].shadowSlot = static_cast<uint32_t>(slot);
+                        m_shadowedLights.push_back(byDistance[slot].second);
+                    }
+                }
                 frameConstants.pointLightBufferIndex = m_lightBuffer->Upload(m_renderer->GetFrameAllocator(),
                                                                              m_renderer->GetFrameIndex(), m_pointLightData);
                 frameConstants.pointLightCount = static_cast<uint32_t>(m_pointLightData.size());
@@ -364,6 +389,29 @@ namespace walnut
                     if (m_scenePass && needShadowMap)
                         m_scenePass->RenderShadowDepth(commandList, m_sceneView);
                     m_shadowMap->End(commandList);
+                }
+
+                // 1b. Cube shadow maps for the shadowed point lights: six 90-degree depth renders per lamp, each with
+                //     only the meshes whose bounds reach the lamp's sphere.
+                {
+                    PIXScopedEvent(commandList, pix::kColorGpu, L"Point shadows");
+                    m_pointShadowMaps->Begin(commandList);
+                    m_pointShadowDraws = 0;
+                    for (uint32_t slot = 0; slot < m_shadowedLights.size(); ++slot)
+                    {
+                        const PointLightGpu& light = m_pointLightData[m_shadowedLights[slot]];
+                        for (uint32_t face = 0; face < PointShadowMaps::kFaceCount; ++face)
+                        {
+                            DirectX::XMFLOAT4X4 faceViewProjection;
+                            DirectX::XMStoreFloat4x4(&faceViewProjection,
+                                                     PointShadowMaps::GetFaceViewProjection(light.position, light.range, face));
+                            m_pointShadowMaps->BeginFace(commandList, slot, face);
+                            m_pointShadowDraws += m_scenePass->RenderPointShadowDepth(
+                                commandList, m_sceneView, m_renderer->GetFrameAllocator().AllocateConstants(faceViewProjection),
+                                light.position, light.range);
+                        }
+                    }
+                    m_pointShadowMaps->End(commandList);
                 }
 
                 // 2. The scene from the camera, into the HDR scene color target. With the depth pre-pass, depth
@@ -698,6 +746,32 @@ namespace walnut
                 ImGui::SetItemTooltip("Each lamp's light fades smoothly to zero at this distance.");
                 ImGui::SliderFloat("Intensity##point", &m_lighting.pointLightIntensity, 0.0f, 1000.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
                 ImGui::SetItemTooltip("Light received 1 m from a lamp, facing it. Falls off as 1 / distance^2.");
+                ImGui::SliderInt("Shadowed lamps", &m_lighting.pointShadowBudget, 0,
+                                 static_cast<int>(PointShadowMaps::kMaxShadowedLights));
+                ImGui::SetItemTooltip("The lamps nearest the camera get a cube shadow map (6 x %u^2 depth faces each).",
+                                      PointShadowMaps::kFaceSize);
+                ImGui::TextDisabled("%zu cube maps, %zu faces, %u shadow draws (%.0f MB for %u cubes)", m_shadowedLights.size(),
+                                    m_shadowedLights.size() * PointShadowMaps::kFaceCount, m_pointShadowDraws,
+                                    static_cast<double>(m_pointShadowMaps->GetBytes()) / (1024.0 * 1024.0),
+                                    PointShadowMaps::kMaxShadowedLights);
+                if (!m_shadowedLights.empty() && ImGui::TreeNode("Cube shadow map"))
+                {
+                    m_pointShadowViewSlot = std::clamp(m_pointShadowViewSlot, 0, static_cast<int>(m_shadowedLights.size()) - 1);
+                    ImGui::SliderInt("Cube", &m_pointShadowViewSlot, 0, static_cast<int>(m_shadowedLights.size()) - 1);
+                    // The six faces as an unfolded cube: -X +Z +X -Z in a row, +Y above +Z, -Y below it.
+                    // Reversed-Z perspective depth: bright = close to the lamp, dark = towards its range.
+                    const float size = std::min(ImGui::GetContentRegionAvail().x / 4.0f - 4.0f, 96.0f);
+                    const uint32_t slot = static_cast<uint32_t>(m_pointShadowViewSlot);
+                    static constexpr const char* kFaceNames[PointShadowMaps::kFaceCount] = { "+X", "-X", "+Y", "-Y", "+Z", "-Z" };
+                    const auto face = [&](uint32_t f) {
+                        ImGui::Image(static_cast<ImTextureID>(m_pointShadowMaps->GetFaceDebugSrv(slot, f).ptr), ImVec2(size, size));
+                        ImGui::SetItemTooltip("%s", kFaceNames[f]);
+                    };
+                    ImGui::Dummy(ImVec2(size, size)); ImGui::SameLine(); face(2);
+                    face(1); ImGui::SameLine(); face(4); ImGui::SameLine(); face(0); ImGui::SameLine(); face(5);
+                    ImGui::Dummy(ImVec2(size, size)); ImGui::SameLine(); face(3);
+                    ImGui::TreePop();
+                }
                 ImGui::Checkbox("Animate", &m_lighting.animatePointLights);
                 ImGui::SameLine();
                 ImGui::Checkbox("Markers", &m_lighting.showPointLightMarkers);

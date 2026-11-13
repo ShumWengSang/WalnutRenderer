@@ -104,6 +104,11 @@ namespace walnut
         // Deferred shading: writes every visible pixel's material into the bound G-buffer. Needs the depth pre-pass
         // first (it tests depth EQUAL).
         void RenderGBuffer(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const;
+        // One face of a point light's cube shadow map (M1): depth only, with the face camera's view-projection at b1.
+        // Draws only the instances whose bounds reach the light's sphere. Returns how many draws it recorded.
+        uint32_t RenderPointShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings,
+                                        D3D12_GPU_VIRTUAL_ADDRESS faceViewProjection,
+                                        const DirectX::XMFLOAT3& lightPosition, float lightRange) const;
 
         uint32_t GetDrawCount() const { return static_cast<uint32_t>(m_draws.size()); }
         uint32_t GetTextureCount() const { return static_cast<uint32_t>(m_textures.size()); }
@@ -127,15 +132,24 @@ namespace walnut
             uint32_t instanceIndex;
             bool doubleSided; // drawn without back-face culling
             bool alphaTest;   // alpha-mask material: drawn with the discarding pixel shader
+            DirectX::XMFLOAT3 boundsMin, boundsMax; // world space (the primitive's box, transformed)
         };
 
         Buffer CreateStructuredBuffer(UploadContext& upload, const void* data, uint32_t count, uint32_t stride,
                                       const wchar_t* name, DescriptorHandle& srv);
         // Uploads every loaded scene texture; returns each one's bindless SRV index (kNoTexture if it wasn't loaded).
         std::vector<uint32_t> CreateTextures(UploadContext& upload, const Scene& scene);
-        enum class DrawMode { Scene, ShadowDepth, DepthPrepass, GBuffer };
-        // Binds the geometry and issues every draw, with the PSOs for the given pass.
-        void RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings, DrawMode mode) const;
+        enum class DrawMode { Scene, ShadowDepth, DepthPrepass, GBuffer, PointShadowDepth };
+        // Optional culling: only draws whose bounds touch this sphere.
+        struct CullSphere
+        {
+            DirectX::XMFLOAT3 center;
+            float radius;
+        };
+        // Binds the geometry and issues every draw (or those touching 'cull'), with the PSOs for the given pass.
+        // Returns how many draws it recorded.
+        uint32_t RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings, DrawMode mode,
+                             const CullSphere* cull = nullptr) const;
 
         ID3D12Device10* m_device = nullptr;
         DescriptorHeap& m_srvHeap;
@@ -163,6 +177,7 @@ namespace walnut
         PipelineTable m_pipelines;
         std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_shadowPipelines; // [alphaTest][cullNone]
         std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_prepassPipelines; // [alphaTest][cullNone]
+        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_pointShadowPipelines; // [alphaTest][cullNone]
         // Scene pass after a depth pre-pass: depth EQUAL, no depth writes, no discard. [raytraced][cullNone]
         std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_equalPipelines;
         std::array<ComPtr<ID3D12PipelineState>, 2> m_gbufferPipelines; // [cullNone]; depth EQUAL, 4 render targets

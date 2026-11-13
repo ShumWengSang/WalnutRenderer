@@ -124,6 +124,25 @@ DepthAlphaInput VSDepthPrepassAlphaTest(uint vertexId : SV_VertexID)
     return DepthAlphaTestVertex(vertexId, g_frame.viewProjection);
 }
 
+// Point light cube shadow maps (M1): the same depth-only drawing, seen by one of the six face cameras of a light.
+// There are up to 32 x 6 faces per frame, more than fit in the frame constants, so each face's camera comes in its own
+// small constant buffer at b1 (set by ScenePass::RenderPointShadowDepth before the face's draws).
+struct PointShadowFace
+{
+    row_major float4x4 viewProjection;
+};
+ConstantBuffer<PointShadowFace> g_pointShadowFace : register(b1);
+
+float4 VSPointShadow(uint vertexId : SV_VertexID) : SV_Position
+{
+    return DepthOnlyPosition(vertexId, g_pointShadowFace.viewProjection);
+}
+
+DepthAlphaInput VSPointShadowAlphaTest(uint vertexId : SV_VertexID)
+{
+    return DepthAlphaTestVertex(vertexId, g_pointShadowFace.viewProjection);
+}
+
 void PSDepthAlphaTest(DepthAlphaInput input)
 {
     StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];

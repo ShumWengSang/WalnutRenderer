@@ -66,6 +66,8 @@ set(WALNUT_SOURCES
     src/renderer/LightBuffer.h
     src/renderer/LightMarkerPass.cpp
     src/renderer/LightMarkerPass.h
+    src/renderer/PointShadowMaps.cpp
+    src/renderer/PointShadowMaps.h
     src/renderer/Renderer.cpp
     src/renderer/Renderer.h
     src/renderer/ScenePass.cpp

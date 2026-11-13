@@ -35,6 +35,10 @@ namespace walnut
         bool showPointLightMarkers = true; // a small glowing dot at each lamp
         bool clusteredLighting = true;     // each pixel visits only its cluster's lights (false: every light)
 
+        // Point light shadows (Step 6): the lamps nearest the camera get a cube shadow map, up to this many
+        // (at most PointShadowMaps::kMaxShadowedLights). 0: no point light shadows.
+        int pointShadowBudget = 16;
+
         // Shadow-map bias, in shadow-map texels (see SunShadow in scene.hlsl).
         float shadowConstantBias = 0.5f;
         float shadowSlopeBias = 1.0f;
