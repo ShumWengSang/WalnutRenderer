@@ -130,7 +130,8 @@ src/renderer/             Renderer (frames in flight, targets, pass setup), Scen
                           AccelerationStructures (BLAS/TLAS), GBuffer, DeferredPass, LightBuffer, ClusterGrid,
                           LightMarkerPass, PointShadowMaps, TonemapPass
 src/scene/                Camera, fly controller, lighting, point lights, bounds (Aabb), glTF loading (cgltf) into a flat Scene, image decoding (stb_image)
-src/ui/                   ImGuiLayer (Win32 + DX12 backends)
+src/ui/                   ImGuiLayer (Win32 + DX12 backends), SettingsPanel (the Settings window, one function per section),
+                          Widgets (EnumRadio, EnumCombo, OverrideSlider, DebugViewCombo)
 tools/                    fetch-assets.ps1 (download glTF models), pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher),
                           screenshot-matrix.ps1 + compare-images.ps1 (before/after image comparisons)
 ```

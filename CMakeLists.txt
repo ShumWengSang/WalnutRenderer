@@ -113,6 +113,10 @@ set(WALNUT_SOURCES
 
     src/ui/ImGuiLayer.cpp
     src/ui/ImGuiLayer.h
+    src/ui/SettingsPanel.cpp
+    src/ui/SettingsPanel.h
+    src/ui/Widgets.cpp
+    src/ui/Widgets.h
 
     # Shared with the shaders (see shaders/shared/Shared.h).
     shaders/shared/Constants.h

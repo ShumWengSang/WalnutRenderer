@@ -13,6 +13,7 @@
 #include "scene/GltfLoader.h"
 #include "scene/Lighting.h"
 #include "scene/PointLights.h"
+#include "ui/SettingsPanel.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -41,9 +42,6 @@ namespace walnut
 
     private:
         void Update(float deltaSeconds);
-        void DrawUI(float deltaSeconds);
-        void DrawStatsOverlay() const;
-        void DrawPixUI();
         void ReloadShaders();
         void RequestGpuCapture();
         // The names --set and --list-settings know (core/SettingsRegistry.h).
@@ -62,12 +60,8 @@ namespace walnut
         AppOptions m_options;
         std::filesystem::path m_exeDir;
         std::filesystem::path m_shaderDir; // where .hlsl files are compiled from (source tree, or next to the exe)
-        std::filesystem::path m_scenePath; // m_options.scene resolved against the asset directory
-        std::optional<GltfSummary> m_sceneSummary; // set when the scene parsed successfully
-        std::string m_sceneError;                  // why it didn't, otherwise
-        double m_sceneLoadMs = 0.0;
+        SceneFileInfo m_sceneFile;
         Scene m_scene; // CPU copy of the scene; SceneRenderer uploads it
-        double m_sceneBuildMs = 0.0;
 
         std::unique_ptr<Window> m_window;
         Input m_input;
@@ -84,17 +78,14 @@ namespace walnut
         SceneLighting m_lighting;
         PointLights m_pointLights;
         std::vector<PointLightGpu> m_pointLightData; // this frame's lights, rebuilt every frame
-        int m_pointShadowViewSlot = 0;               // which cube the UI shows
 
-        float m_roughnessOverrideValue = 0.3f; // slider values kept while an override is switched off
-        float m_metallicOverrideValue = 1.0f;
         Camera m_camera;
         Camera m_homeCamera; // where "Reset camera" goes: framing the loaded scene
         FlyCameraController m_cameraController;
-        bool m_showDemoWindow = false;
         bool m_showUI = true; // F1
-        float m_smoothedFrameMs = 0.0f;
         std::filesystem::path m_lastCapturePath;
         SettingsRegistry m_settings;
+        // Last: it refers to the members above.
+        std::unique_ptr<SettingsPanel> m_settingsPanel;
     };
 }
