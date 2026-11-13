@@ -33,7 +33,7 @@ void ClusterBounds(uint3 cell, out float3 boxMin, out float3 boxMax)
 {
     const float2 ndcMin = float2(float(cell.x) / kClusterCountX * 2.0f - 1.0f, 1.0f - float(cell.y + 1) / kClusterCountY * 2.0f);
     const float2 ndcMax = float2(float(cell.x + 1) / kClusterCountX * 2.0f - 1.0f, 1.0f - float(cell.y) / kClusterCountY * 2.0f);
-    const float2 tanHalfFov = float2(g_frame.tanHalfFovX, g_frame.tanHalfFovY);
+    const float2 tanHalfFov = float2(g_frame.camera.tanHalfFovX, g_frame.camera.tanHalfFovY);
     const float zNear = ClusterSliceDepth(cell.z);
     const float zFar = ClusterSliceDepth(cell.z + 1);
 
@@ -63,18 +63,18 @@ groupshared float4 s_lights[kThreadsPerGroup]; // xyz = view-space center, w = r
 // indices into the cluster's range [first, first + capacity).
 uint TestLights(uint groupIndex, bool valid, float3 boxMin, float3 boxMax, bool write, uint first, uint capacity)
 {
-    StructuredBuffer<PointLight> lights = ResourceDescriptorHeap[g_frame.pointLightBufferIndex];
+    StructuredBuffer<PointLight> lights = ResourceDescriptorHeap[g_frame.points.bufferIndex];
     RWStructuredBuffer<uint> indices = ResourceDescriptorHeap[g_draw.indicesUavIndex];
     uint count = 0;
-    for (uint base = 0; base < g_frame.pointLightCount; base += kThreadsPerGroup)
+    for (uint base = 0; base < g_frame.points.count; base += kThreadsPerGroup)
     {
         // Every thread of the group loads one light of the batch...
         const uint lightIndex = base + groupIndex;
         float4 viewLight = float4(0.0f, 0.0f, 0.0f, -1.0f);
-        if (lightIndex < g_frame.pointLightCount)
+        if (lightIndex < g_frame.points.count)
         {
             const PointLight light = lights[lightIndex];
-            viewLight = float4(mul(float4(light.position, 1.0f), g_frame.view).xyz, light.range);
+            viewLight = float4(mul(float4(light.position, 1.0f), g_frame.camera.view).xyz, light.range);
         }
         s_lights[groupIndex] = viewLight;
         // ... and waits until all 64 are there. (Every thread of the group must reach this line, so threads without a
@@ -83,7 +83,7 @@ uint TestLights(uint groupIndex, bool valid, float3 boxMin, float3 boxMax, bool 
 
         if (valid)
         {
-            const uint batchSize = min(kThreadsPerGroup, g_frame.pointLightCount - base);
+            const uint batchSize = min(kThreadsPerGroup, g_frame.points.count - base);
             for (uint k = 0; k < batchSize; ++k)
             {
                 const float4 light = s_lights[k];

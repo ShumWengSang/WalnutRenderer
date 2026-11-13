@@ -42,7 +42,7 @@ namespace walnut
         // All of these expect the bindless state (descriptor heap + root signature) and the frame constants to be
         // bound already.
         void Render(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene, const FrameSettings& frame) const;
-        // Every instance into the bound shadow map: depth only, from the sun (frame constants' sunViewProjection).
+        // Every instance into the bound shadow map: depth only, from the sun (frame constants' sunShadow.viewProjection).
         void RenderShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
                                const FrameSettings& frame) const;
         // Every instance into the bound depth buffer from the camera, depth only. With frame.depthPrepass, Render()

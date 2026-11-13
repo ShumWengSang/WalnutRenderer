@@ -16,10 +16,10 @@
 //   -> sample the base color texture's alpha -> compare with the cutoff.
 bool IsOpaqueHit(uint instanceIndex, uint triangleIndex, float2 barycentrics)
 {
-    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_frame.instanceBufferIndex];
-    StructuredBuffer<Material> materials = ResourceDescriptorHeap[g_frame.materialBufferIndex];
-    StructuredBuffer<uint> indices = ResourceDescriptorHeap[g_frame.indexBufferIndex];
-    StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[g_frame.vertexBufferIndex];
+    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_frame.scene.instanceBufferIndex];
+    StructuredBuffer<Material> materials = ResourceDescriptorHeap[g_frame.scene.materialBufferIndex];
+    StructuredBuffer<uint> indices = ResourceDescriptorHeap[g_frame.scene.indexBufferIndex];
+    StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[g_frame.scene.vertexBufferIndex];
 
     const Instance instance = instances[instanceIndex];
     const Material material = materials[instance.materialIndex];
@@ -59,7 +59,7 @@ bool IsOpaqueHit(uint instanceIndex, uint triangleIndex, float2 barycentrics)
 // Shared by the sun (to infinity) and the point lights (up to the lamp, M3): 1 = nothing in the way, 0 = blocked.
 float TraceShadowRay(float3 origin, float3 direction, float maxDistance)
 {
-    RaytracingAccelerationStructure scene = ResourceDescriptorHeap[g_frame.tlasIndex];
+    RaytracingAccelerationStructure scene = ResourceDescriptorHeap[g_frame.scene.tlasIndex];
 
     RayDesc ray;
     ray.Origin = origin;
@@ -71,7 +71,7 @@ float TraceShadowRay(float3 origin, float3 direction, float maxDistance)
     // SKIP_PROCEDURAL_PRIMITIVES: the scene only has triangles; lets the compiler drop that path.
     // FORCE_OPAQUE (only with alpha testing turned off): treat every triangle as solid, no candidates at all.
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
-    query.TraceRayInline(scene, g_frame.rayAlphaTest ? RAY_FLAG_NONE : RAY_FLAG_FORCE_OPAQUE, 0xFF /*instance mask: all*/, ray);
+    query.TraceRayInline(scene, g_frame.scene.rayAlphaTest ? RAY_FLAG_NONE : RAY_FLAG_FORCE_OPAQUE, 0xFF /*instance mask: all*/, ray);
     while (query.Proceed())
     {
         // Only non-opaque triangles stop here (no procedural geometry in the scene).
@@ -83,12 +83,12 @@ float TraceShadowRay(float3 origin, float3 direction, float maxDistance)
 
 float RayTracedSunShadow(float3 worldPosition, float3 normal)
 {
-    if (g_frame.shadowsEnabled == 0)
+    if (g_frame.sunShadow.enabled == 0)
         return 1.0f;
     // Start a little above the surface: from exactly on it, floating-point rounding could make the ray hit the very
     // triangle it starts on ("self-intersection", the ray tracing cousin of shadow acne). 1 cm here.
     // TMax "far enough": the sun is infinitely far away; anything in the scene counts as a blocker.
-    return TraceShadowRay(worldPosition + normal * 0.01f, g_frame.sunDirection, 1.0e4f);
+    return TraceShadowRay(worldPosition + normal * 0.01f, g_frame.sun.direction, 1.0e4f);
 }
 
 // The same question for a point light (M3): is anything between this point and the lamp? The ray stops at the lamp

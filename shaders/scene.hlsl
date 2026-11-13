@@ -61,7 +61,7 @@ PSInput VSMain(uint vertexId : SV_VertexID)
     const float4 worldPosition = mul(float4(vertex.position, 1.0f), instance.world);
 
     PSInput output;
-    output.position = ClipPosition(vertex.position, instance.world, g_frame.viewProjection);
+    output.position = ClipPosition(vertex.position, instance.world, g_frame.camera.viewProjection);
     output.worldPosition = worldPosition.xyz;
     output.normal = mul(float4(vertex.normal, 0.0f), instance.normalMatrix).xyz; // w = 0: directions don't move
     // A tangent lies IN the surface (unlike the normal, which sticks out of it), so it moves with the surface:
@@ -83,12 +83,12 @@ float4 DepthOnlyPosition(uint vertexId, float4x4 viewProjection)
 
 float4 VSShadow(uint vertexId : SV_VertexID) : SV_Position
 {
-    return DepthOnlyPosition(vertexId, g_frame.sunViewProjection);
+    return DepthOnlyPosition(vertexId, g_frame.sunShadow.viewProjection);
 }
 
 float4 VSDepthPrepass(uint vertexId : SV_VertexID) : SV_Position
 {
-    return DepthOnlyPosition(vertexId, g_frame.viewProjection);
+    return DepthOnlyPosition(vertexId, g_frame.camera.viewProjection);
 }
 
 // Alpha-tested geometry (leaves): the rectangle's depth must only be written where the leaf texture is opaque, so
@@ -114,12 +114,12 @@ DepthAlphaInput DepthAlphaTestVertex(uint vertexId, float4x4 viewProjection)
 
 DepthAlphaInput VSShadowAlphaTest(uint vertexId : SV_VertexID)
 {
-    return DepthAlphaTestVertex(vertexId, g_frame.sunViewProjection);
+    return DepthAlphaTestVertex(vertexId, g_frame.sunShadow.viewProjection);
 }
 
 DepthAlphaInput VSDepthPrepassAlphaTest(uint vertexId : SV_VertexID)
 {
-    return DepthAlphaTestVertex(vertexId, g_frame.viewProjection);
+    return DepthAlphaTestVertex(vertexId, g_frame.camera.viewProjection);
 }
 
 // Point light cube shadow maps (M1): the same depth-only drawing, seen by one of the six face cameras of a light.
@@ -209,7 +209,7 @@ MaterialSample SampleMaterial(PSInput input, bool isFrontFace, Material material
     // ddx/ddy give how the world position changes to the neighbouring pixel, and their cross product is
     // perpendicular to the surface. Computed outside the 'if': derivatives need every pixel of the 2x2 group.
     float3 flatNormal = normalize(cross(ddy(input.worldPosition), ddx(input.worldPosition)));
-    if (dot(flatNormal, g_frame.cameraPosition - input.worldPosition) < 0.0f)
+    if (dot(flatNormal, g_frame.camera.position - input.worldPosition) < 0.0f)
         flatNormal = -flatNormal; // we see this side, so it faces us
     const bool hasVertexNormal = dot(normal, normal) > 1e-12f;
     normal = hasVertexNormal ? normalize(normal) : flatNormal; // interpolation shortens normals, so normalize again
@@ -284,10 +284,10 @@ MaterialSample SampleMaterial(PSInput input, bool isFrontFace, Material material
     const float4 metallicRoughness = SampleMaterialTexture(material.metallicRoughnessTexture, input.uv, 1.0f);
     result.roughness = metallicRoughness.g * material.roughnessFactor;
     result.metallic = saturate(metallicRoughness.b * material.metallicFactor);
-    if (g_frame.roughnessOverride >= 0.0f)
-        result.roughness = g_frame.roughnessOverride; // View > Roughness override
-    if (g_frame.metallicOverride >= 0.0f)
-        result.metallic = g_frame.metallicOverride;
+    if (g_frame.shading.roughnessOverride >= 0.0f)
+        result.roughness = g_frame.shading.roughnessOverride; // View > Roughness override
+    if (g_frame.shading.metallicOverride >= 0.0f)
+        result.metallic = g_frame.shading.metallicOverride;
 
     result.occlusion = lerp(1.0f, SampleMaterialTexture(material.occlusionTexture, input.uv, 1.0f).r,
                             material.occlusionStrength);

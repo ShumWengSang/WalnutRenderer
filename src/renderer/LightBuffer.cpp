@@ -25,7 +25,7 @@ namespace walnut
     uint32_t LightBuffer::Upload(FrameAllocator& allocator, uint32_t frameIndex, std::span<const PointLightGpu> lights)
     {
         constexpr uint64_t kStride = sizeof(PointLightGpu);
-        // At least one element: a buffer view can't be empty. The shader loops over FrameConstants.pointLightCount
+        // At least one element: a buffer view can't be empty. The shader loops over FrameConstants.points.count
         // lights, so an unused element is never read.
         const uint64_t count = std::max<uint64_t>(lights.size(), 1);
         // Aligned to the stride: a structured buffer view starts at a whole element (FirstElement = offset / stride).

@@ -30,12 +30,12 @@ float PointShadow(PointLight light, float3 worldPosition, float3 geometricNormal
     // view-space z is the largest component of the offset; the reversed-Z projection (near = nearScale * range,
     // far = range) turns it into near * (range - z) / ((range - near) * z): 1 at the near plane, 0 at the range.
     const float z = max(max(abs(offset.x), abs(offset.y)), abs(offset.z)) - kPointShadowDepthBias * texel;
-    const float nearZ = g_frame.pointShadowNearScale * light.range;
+    const float nearZ = g_frame.points.shadowNearScale * light.range;
     const float depth = nearZ * (light.range - z) / ((light.range - nearZ) * max(z, nearZ));
 
     // Soft edges: the hardware's 2x2 comparison filter (sampler s6) at four points around the direction, half a texel
     // out on two axes perpendicular to it.
-    TextureCubeArray<float> cubes = ResourceDescriptorHeap[g_frame.pointShadowMapIndex];
+    TextureCubeArray<float> cubes = ResourceDescriptorHeap[g_frame.points.shadowMapIndex];
     const float3 dir = offset / length(offset);
     const float3 axisA = normalize(cross(dir, abs(dir.y) < 0.99f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f)));
     const float3 axisB = cross(dir, axisA);

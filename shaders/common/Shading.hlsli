@@ -29,7 +29,7 @@
 float3 HemisphereLight(float3 direction, float width)
 {
     const float skyShare = saturate(0.5f + 0.5f * direction.y / max(width, 1e-3f));
-    return lerp(g_frame.groundRadiance, g_frame.skyRadiance, skyShare);
+    return lerp(g_frame.ambient.groundRadiance, g_frame.ambient.skyRadiance, skyShare);
 }
 
 
@@ -54,7 +54,7 @@ void AddPointLight(PointLight light, float3 worldPosition, MaterialSample mat, f
     float shadow;
     bool shadowed;
 #if RAYTRACED_SHADOWS
-    if (g_frame.pointShadowTechnique == kPointShadowRayTraced)
+    if (g_frame.points.shadowTechnique == kPointShadowRayTraced)
     {
         shadow = RayTracedPointShadow(worldPosition, mat.geometricNormal, light.position);
         shadowed = true;
@@ -113,12 +113,12 @@ ShadingResult ShadeSurface(float3 worldPosition, MaterialSample mat, bool compar
     //   sun:      BRDF * sunIlluminance * N.L * shadow
     //   ambient:  light from the sky and the ground (J4), see below
     //   emissive: light the surface makes itself (J4)
-    const float NdotL = saturate(dot(mat.normal, g_frame.sunDirection));
+    const float NdotL = saturate(dot(mat.normal, g_frame.sun.direction));
     // Shadow lookups use the real surface (geometricNormal), not the normal-mapped one.
-    const float geometricNdotL = saturate(dot(mat.geometricNormal, g_frame.sunDirection));
+    const float geometricNdotL = saturate(dot(mat.geometricNormal, g_frame.sun.direction));
 #if RAYTRACED_SHADOWS
     // This variant also runs when only the point lights are ray traced: then the sun still uses its map.
-    if (g_frame.sunShadowRaytraced != 0)
+    if (g_frame.sunShadow.raytraced != 0)
     {
         result.shadow = NdotL > 0.0f ? RayTracedSunShadow(worldPosition, mat.geometricNormal) : 0.0f;
         result.mapShadow = compareShadowMap && NdotL > 0.0f ? SunShadow(worldPosition, mat.geometricNormal, geometricNdotL) : 0.0f;
@@ -132,12 +132,12 @@ ShadingResult ShadeSurface(float3 worldPosition, MaterialSample mat, bool compar
     result.shadow = NdotL > 0.0f ? SunShadow(worldPosition, mat.geometricNormal, geometricNdotL) : 0.0f; // facing away: dark anyway, skip the lookup
     result.mapShadow = result.shadow;
 #endif
-    const float3 sunLight = g_frame.sunIlluminance * NdotL * result.shadow;
+    const float3 sunLight = g_frame.sun.illuminance * NdotL * result.shadow;
     result.lighting = sunLight / kPi + HemisphereLight(mat.normal, 1.0f);
 
-    const float3 toCamera = normalize(g_frame.cameraPosition - worldPosition);
+    const float3 toCamera = normalize(g_frame.camera.position - worldPosition);
     const SurfaceBrdf surface = MakeSurfaceBrdf(mat.baseColor, mat.metallic, mat.roughness);
-    const BrdfValue brdf = EvaluateBrdf(surface, mat.normal, toCamera, g_frame.sunDirection);
+    const BrdfValue brdf = EvaluateBrdf(surface, mat.normal, toCamera, g_frame.sun.direction);
     result.sunSpecular = brdf.specular * sunLight;
 
     // Ambient light, split like the sun's into what enters the surface and what bounces off it:
@@ -162,16 +162,16 @@ ShadingResult ShadeSurface(float3 worldPosition, MaterialSample mat, bool compar
     //                     clusters now loop different counts over different lights.
     //
     // Two separate loops (the branch is the same for the whole frame), so each compiles to its own tight loop.
-    StructuredBuffer<PointLight> pointLights = ResourceDescriptorHeap[g_frame.pointLightBufferIndex];
+    StructuredBuffer<PointLight> pointLights = ResourceDescriptorHeap[g_frame.points.bufferIndex];
     float3 pointLightIrradiance = 0.0f; // for the Lambert / lighting-only views
     result.pointLights = 0.0f;
     float shadowSum = 0.0f;
     uint shadowCount = 0;
     result.pointShadowCompare = 0.0f;
-    if (g_frame.clusteredLighting != 0)
+    if (g_frame.clusters.enabled != 0)
     {
-        StructuredBuffer<uint2> grid = ResourceDescriptorHeap[g_frame.clusterGridIndex];
-        StructuredBuffer<uint> clusterLightIndices = ResourceDescriptorHeap[g_frame.clusterLightIndicesIndex];
+        StructuredBuffer<uint2> grid = ResourceDescriptorHeap[g_frame.clusters.gridIndex];
+        StructuredBuffer<uint> clusterLightIndices = ResourceDescriptorHeap[g_frame.clusters.lightIndicesIndex];
         const uint2 entry = grid[ClusterOf(worldPosition)]; // (first, count)
         for (uint i = 0; i < entry.y; ++i)
             AddPointLight(pointLights[clusterLightIndices[entry.x + i]], worldPosition, mat, toCamera, surface,
@@ -180,14 +180,14 @@ ShadingResult ShadeSurface(float3 worldPosition, MaterialSample mat, bool compar
     }
     else
     {
-        for (uint i = 0; i < g_frame.pointLightCount; ++i)
+        for (uint i = 0; i < g_frame.points.count; ++i)
             AddPointLight(pointLights[i], worldPosition, mat, toCamera, surface, comparePointShadows, result.pointLights,
                           pointLightIrradiance, shadowSum, shadowCount, result.pointShadowCompare);
     }
     result.lighting += pointLightIrradiance / kPi;
     result.pointShadow = shadowCount > 0 ? shadowSum / float(shadowCount) : -1.0f;
 
-    if (g_frame.shadingModel == kShadingPbr)
+    if (g_frame.shading.model == kShadingPbr)
         result.color = (brdf.diffuse + brdf.specular) * sunLight + result.pointLights + result.ambient + mat.emissive;
     else
     {

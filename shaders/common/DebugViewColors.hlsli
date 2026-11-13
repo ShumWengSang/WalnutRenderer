@@ -39,7 +39,7 @@ bool SharedViewColor(uint view, float3 worldPosition, MaterialSample mat, Shadin
     if (view == kViewClusterLights)
     {
         // How many lights the pixel's cluster lists (red = 64 or more), over a dim copy of the shaded image.
-        StructuredBuffer<uint2> grid = ResourceDescriptorHeap[g_frame.clusterGridIndex];
+        StructuredBuffer<uint2> grid = ResourceDescriptorHeap[g_frame.clusters.gridIndex];
         const uint count = grid[ClusterOf(worldPosition)].y;
         const float brightness = dot(shading.color, float3(0.2126f, 0.7152f, 0.0722f));
         color = HeatColor(count, 64) * (0.6f + 0.4f * saturate(brightness));

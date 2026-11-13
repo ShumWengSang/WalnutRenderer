@@ -68,6 +68,7 @@ set(WALNUT_SOURCES
     src/renderer/DebugViews.h
     src/renderer/DeferredPass.cpp
     src/renderer/DeferredPass.h
+    src/renderer/FrameConstants.cpp
     src/renderer/FrameConstants.h
     src/renderer/GBuffer.cpp
     src/renderer/GBuffer.h
@@ -114,6 +115,7 @@ set(WALNUT_SOURCES
     # Shared with the shaders (see shaders/shared/Shared.h).
     shaders/shared/Constants.h
     shaders/shared/DebugViewList.h
+    shaders/shared/FrameConstants.h
     shaders/shared/Shared.h
 )
 

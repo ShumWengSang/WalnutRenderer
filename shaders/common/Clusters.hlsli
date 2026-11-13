@@ -3,7 +3,7 @@
 // The grid's size is in shared/Constants.h (shared with ClusterGrid.h).
 //
 //   x, y: 16 x 9 tiles across the screen
-//   z:    24 slices in depth, spaced exponentially between clusterNear and clusterFar (thin near the camera, thick far
+//   z:    24 slices in depth, spaced exponentially between clusters.nearDepth and farDepth (thin near the camera, thick far
 //         away: in perspective a distant pixel covers much more depth, so equal-looking slices need growing depths)
 #ifndef WALNUT_CLUSTERS_HLSLI
 #define WALNUT_CLUSTERS_HLSLI
@@ -19,14 +19,14 @@ uint ClusterIndex(uint3 cell)
 // View-space depth where slice 'slice' starts: near * (far / near)^(slice / count). Slice count ends at far.
 float ClusterSliceDepth(uint slice)
 {
-    return g_frame.clusterNear * pow(g_frame.clusterFar / g_frame.clusterNear, float(slice) / float(kClusterCountZ));
+    return g_frame.clusters.nearDepth * pow(g_frame.clusters.farDepth / g_frame.clusters.nearDepth, float(slice) / float(kClusterCountZ));
 }
 
 // The inverse: which slice a view-space depth falls into, log(z / near) / log(far / near) * count.
 uint ClusterSlice(float viewDepth)
 {
-    const float slice = log(max(viewDepth, g_frame.clusterNear) / g_frame.clusterNear) /
-                        log(g_frame.clusterFar / g_frame.clusterNear) * float(kClusterCountZ);
+    const float slice = log(max(viewDepth, g_frame.clusters.nearDepth) / g_frame.clusters.nearDepth) /
+                        log(g_frame.clusters.farDepth / g_frame.clusters.nearDepth) * float(kClusterCountZ);
     return min(uint(slice), kClusterCountZ - 1);
 }
 
@@ -34,7 +34,7 @@ uint ClusterSlice(float viewDepth)
 // point's place on screen (-1..1), and clip.w itself is its view-space depth (a perspective projection copies z to w).
 uint ClusterOf(float3 worldPosition)
 {
-    const float4 clip = mul(float4(worldPosition, 1.0f), g_frame.viewProjection);
+    const float4 clip = mul(float4(worldPosition, 1.0f), g_frame.camera.viewProjection);
     const float2 ndc = clip.xy / clip.w;
     const float2 screenUv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f); // y down, like pixels
     const uint2 tile = min(uint2(saturate(screenUv) * float2(kClusterCountX, kClusterCountY)),

@@ -315,60 +315,6 @@ namespace walnut
             const SwapChain& swapChain = m_renderer->GetSwapChain();
             const float aspect = static_cast<float>(swapChain.GetWidth()) / static_cast<float>(swapChain.GetHeight());
 
-            // Everything the frame's shaders share: camera and lights. Colors are multiplied by their intensity here,
-            // so shaders only see the resulting light amounts.
-            FrameConstants frameConstants{};
-            const DirectX::XMMATRIX viewProjection = m_camera.GetViewProjectionMatrix(aspect);
-            DirectX::XMStoreFloat4x4(&frameConstants.viewProjection, viewProjection);
-            DirectX::XMStoreFloat4x4(&frameConstants.inverseViewProjection, DirectX::XMMatrixInverse(nullptr, viewProjection));
-            // Clustered lighting: view space, the field of view, and the depths the slices span (the near plane to
-            // the farthest corner of the scene's bounds: nothing visible is farther).
-            DirectX::XMStoreFloat4x4(&frameConstants.view, m_camera.GetViewMatrix());
-            frameConstants.tanHalfFovY = std::tan(m_camera.verticalFov * 0.5f);
-            frameConstants.tanHalfFovX = frameConstants.tanHalfFovY * aspect;
-            frameConstants.clusterNear = m_camera.nearZ;
-            frameConstants.clusterFar = std::max(m_camera.nearZ * 2.0f, m_scene.bounds.FarthestCornerDistance(m_camera.position));
-            frameConstants.clusterGridIndex = m_clusterGrid->GetGridSrvIndex();
-            frameConstants.clusterLightIndicesIndex = m_clusterGrid->GetIndicesSrvIndex();
-            frameConstants.clusteredLighting = m_renderSettings.clusteredLighting ? 1u : 0u;
-            frameConstants.pointShadowMapIndex = m_pointShadowMaps->GetCubeArraySrvIndex();
-            frameConstants.pointShadowNearScale = PointShadowMaps::kNearScale;
-            frameConstants.sunShadowRaytraced = frame.sunRaytraced ? 1u : 0u;
-            frameConstants.pointShadowTechnique = static_cast<uint32_t>(frame.pointShadows);
-            frameConstants.cameraPosition = m_camera.position;
-            frameConstants.sunDirection = m_lighting.GetSunDirection();
-            const auto scaled = [](const DirectX::XMFLOAT3& color, float intensity) {
-                return DirectX::XMFLOAT3{ color.x * intensity, color.y * intensity, color.z * intensity };
-            };
-            frameConstants.sunIlluminance = scaled(m_lighting.sunColor, m_lighting.sunIntensity);
-            frameConstants.skyRadiance = scaled(m_lighting.skyColor, m_lighting.ambientIntensity);
-            frameConstants.groundRadiance = scaled(m_lighting.groundColor, m_lighting.ambientIntensity);
-            frameConstants.roughnessOverride = m_debugSettings.roughnessOverride;
-            frameConstants.metallicOverride = m_debugSettings.metallicOverride;
-            frameConstants.shadingModel = static_cast<uint32_t>(frame.shading);
-            DirectX::XMStoreFloat4x4(&frameConstants.sunViewProjection,
-                                     m_lighting.GetSunViewProjection(m_scene.bounds));
-            frameConstants.shadowMapIndex = m_shadowMap->GetSrvIndex();
-            frameConstants.shadowsEnabled = frame.sunShadows ? 1u : 0u;
-            const float shadowExtent = GetSunShadowExtent(m_scene.bounds);
-            frameConstants.shadowTexelWorldSize = shadowExtent / static_cast<float>(m_shadowMap->GetSize());
-            frameConstants.shadowDepthPerMeter = 1.0f / shadowExtent;
-            frameConstants.shadowConstantBias = m_renderSettings.sunShadows.constantBias;
-            frameConstants.shadowSlopeBias = m_renderSettings.sunShadows.slopeBias;
-            frameConstants.shadowNormalOffset = m_renderSettings.sunShadows.normalOffset;
-            frameConstants.shadowFilterRadius = m_renderSettings.sunShadows.filterRadius < 0 ? UINT32_MAX
-                                                                                  : static_cast<uint32_t>(m_renderSettings.sunShadows.filterRadius);
-            frameConstants.tlasIndex = m_accelerationStructures ? m_accelerationStructures->GetTlasSrvIndex() : UINT32_MAX;
-            frameConstants.rayAlphaTest = frame.alphaTest ? 1u : 0u;
-            if (m_sceneData)
-            {
-                const SceneGpuData::Bindings bindings = m_sceneData->GetBindings();
-                frameConstants.vertexBufferIndex = bindings.vertices;
-                frameConstants.instanceBufferIndex = bindings.instances;
-                frameConstants.materialBufferIndex = bindings.materials;
-                frameConstants.indexBufferIndex = bindings.indices;
-            }
-
             {
                 PIXScopedEvent(pix::kColorCpu, L"Render");
                 m_renderer->BeginFrame(m_debugSettings.clearColor);
@@ -400,10 +346,28 @@ namespace walnut
                         m_shadowedLights.push_back(byDistance[slot].second);
                     }
                 }
-                frameConstants.pointLightBufferIndex = m_lightBuffer->Upload(m_renderer->GetFrameAllocator(),
+                const uint32_t pointLightBufferIndex = m_lightBuffer->Upload(m_renderer->GetFrameAllocator(),
                                                                              m_renderer->GetFrameIndex(), m_pointLightData);
-                frameConstants.pointLightCount = static_cast<uint32_t>(m_pointLightData.size());
-                m_renderer->SetFrameConstants(frameConstants);
+
+                // Everything the frame's shaders share: camera, lights, settings and where the frame's resources are.
+                m_renderer->SetFrameConstants(BuildFrameConstants({
+                    .camera = m_camera,
+                    .aspect = aspect,
+                    .lighting = m_lighting,
+                    .settings = m_renderSettings,
+                    .debug = m_debugSettings,
+                    .frame = frame,
+                    .sceneBounds = m_scene.bounds,
+                    .shadowMapIndex = m_shadowMap->GetSrvIndex(),
+                    .shadowMapSize = m_shadowMap->GetSize(),
+                    .tlasIndex = m_accelerationStructures ? m_accelerationStructures->GetTlasSrvIndex() : UINT32_MAX,
+                    .sceneBindings = m_sceneData ? m_sceneData->GetBindings() : SceneGpuData::Bindings{ UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX },
+                    .pointLightBufferIndex = pointLightBufferIndex,
+                    .pointLightCount = static_cast<uint32_t>(m_pointLightData.size()),
+                    .pointShadowMapIndex = m_pointShadowMaps->GetCubeArraySrvIndex(),
+                    .clusterGridIndex = m_clusterGrid->GetGridSrvIndex(),
+                    .clusterLightIndicesIndex = m_clusterGrid->GetIndicesSrvIndex(),
+                }));
                 ID3D12GraphicsCommandList7* commandList = m_renderer->GetCommandList();
 
                 // 0. Sort the point lights into the cluster grid (compute), before anything reads it (skipped when

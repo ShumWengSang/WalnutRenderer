@@ -25,7 +25,7 @@ struct VSOutput
 
 VSOutput VSMain(uint vertexId : SV_VertexID, uint lightIndex : SV_InstanceID)
 {
-    StructuredBuffer<PointLight> lights = ResourceDescriptorHeap[g_frame.pointLightBufferIndex];
+    StructuredBuffer<PointLight> lights = ResourceDescriptorHeap[g_frame.points.bufferIndex];
     const PointLight light = lights[lightIndex];
 
     // Two triangles: (0,1,2) and (2,1,3) of the corners (-1,-1), (1,-1), (-1,1), (1,1).
@@ -34,7 +34,7 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint lightIndex : SV_InstanceID)
     const float2 corner = float2((c & 1) ? 1.0f : -1.0f, (c & 2) ? 1.0f : -1.0f);
 
     // The square's two axes, both perpendicular to the line from the camera to the light.
-    const float3 toLight = normalize(light.position - g_frame.cameraPosition);
+    const float3 toLight = normalize(light.position - g_frame.camera.position);
     // (Looking straight up or down at a light, "up" and toLight are parallel; use x as the reference instead.)
     const float3 reference = abs(toLight.y) > 0.999f ? float3(1.0f, 0.0f, 0.0f) : float3(0.0f, 1.0f, 0.0f);
     const float3 right = normalize(cross(reference, toLight));
@@ -42,7 +42,7 @@ VSOutput VSMain(uint vertexId : SV_VertexID, uint lightIndex : SV_InstanceID)
     const float3 worldPosition = light.position + (right * corner.x + up * corner.y) * g_draw.markerRadius;
 
     VSOutput output;
-    output.position = mul(float4(worldPosition, 1.0f), g_frame.viewProjection);
+    output.position = mul(float4(worldPosition, 1.0f), g_frame.camera.viewProjection);
     output.corner = corner;
     // The light's color at a fixed brightness (well above 1, so the tonemapper shows it as a bright spot).
     output.color = light.intensity / max(max(light.intensity.r, light.intensity.g), max(light.intensity.b, 1e-6f)) * 8.0f;

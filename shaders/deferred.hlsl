@@ -37,7 +37,7 @@ float4 VSMain(uint vertexId : SV_VertexID) : SV_Position
 float3 WorldPositionFromDepth(float2 pixelCenter, float depth, float2 screenSize)
 {
     const float2 ndc = float2(pixelCenter.x / screenSize.x * 2.0f - 1.0f, 1.0f - pixelCenter.y / screenSize.y * 2.0f);
-    const float4 world = mul(float4(ndc, depth, 1.0f), g_frame.inverseViewProjection);
+    const float4 world = mul(float4(ndc, depth, 1.0f), g_frame.camera.inverseViewProjection);
     return world.xyz / world.w;
 }
 

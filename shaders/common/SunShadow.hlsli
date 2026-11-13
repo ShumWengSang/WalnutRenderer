@@ -28,23 +28,23 @@
 // (2r+2)^2 texels, with weights that fade smoothly at the kernel's border.
 float SunShadow(float3 worldPosition, float3 normal, float NdotL)
 {
-    if (g_frame.shadowsEnabled == 0)
+    if (g_frame.sunShadow.enabled == 0)
         return 1.0f;
 
-    const float texel = g_frame.shadowTexelWorldSize;
-    const float3 offsetPosition = worldPosition + normal * (g_frame.shadowNormalOffset * texel);
-    const float4 lightClip = mul(float4(offsetPosition, 1.0f), g_frame.sunViewProjection);
+    const float texel = g_frame.sunShadow.texelWorldSize;
+    const float3 offsetPosition = worldPosition + normal * (g_frame.sunShadow.normalOffset * texel);
+    const float4 lightClip = mul(float4(offsetPosition, 1.0f), g_frame.sunShadow.viewProjection);
     const float2 uv = float2(lightClip.x * 0.5f + 0.5f, lightClip.y * -0.5f + 0.5f);
 
     const float tanAngle = min(sqrt(saturate(1.0f - NdotL * NdotL)) / max(NdotL, 1e-4f), 10.0f);
     // Wider filters compare texels farther from the point, where a tilted surface's own depth has drifted further:
     // the slope part of the bias grows with the kernel's reach, or the outer taps start shadowing the surface itself.
-    const float kernelReach = g_frame.shadowFilterRadius == 0xFFFFFFFF ? 0.0f : float(g_frame.shadowFilterRadius) + 1.0f;
-    const float biasMeters = (g_frame.shadowConstantBias + g_frame.shadowSlopeBias * tanAngle * (1.0f + kernelReach)) * texel;
-    const float depth = lightClip.z + biasMeters * g_frame.shadowDepthPerMeter; // + = closer to the sun (reversed-Z)
+    const float kernelReach = g_frame.sunShadow.filterRadius == 0xFFFFFFFF ? 0.0f : float(g_frame.sunShadow.filterRadius) + 1.0f;
+    const float biasMeters = (g_frame.sunShadow.constantBias + g_frame.sunShadow.slopeBias * tanAngle * (1.0f + kernelReach)) * texel;
+    const float depth = lightClip.z + biasMeters * g_frame.sunShadow.depthPerMeter; // + = closer to the sun (reversed-Z)
 
-    Texture2D<float> shadowMap = ResourceDescriptorHeap[g_frame.shadowMapIndex];
-    const uint radius = g_frame.shadowFilterRadius;
+    Texture2D<float> shadowMap = ResourceDescriptorHeap[g_frame.sunShadow.mapIndex];
+    const uint radius = g_frame.sunShadow.filterRadius;
     if (radius == 0xFFFFFFFF)
         return shadowMap.SampleCmpLevelZero(g_samplerShadow, uv, depth); // hard: nearest texel only
 
