@@ -303,6 +303,8 @@ namespace walnut
             frameConstants.clusterGridIndex = m_clusterGrid->GetGridSrvIndex();
             frameConstants.clusterLightIndicesIndex = m_clusterGrid->GetIndicesSrvIndex();
             frameConstants.clusteredLighting = m_lighting.clusteredLighting ? 1u : 0u;
+            frameConstants.pointShadowMapIndex = m_pointShadowMaps->GetCubeArraySrvIndex();
+            frameConstants.pointShadowNearScale = PointShadowMaps::kNearScale;
             frameConstants.cameraPosition = m_camera.position;
             frameConstants.sunDirection = m_lighting.GetSunDirection();
             const auto scaled = [](const DirectX::XMFLOAT3& color, float intensity) {
@@ -608,7 +610,8 @@ namespace walnut
                                     "Sun shadow", "Shadow difference (ray traced vs map)",
                                     "Roughness", "Metallic", "Normal map (tangent space)", "Occlusion", "Emissive",
                                     "Sun specular (highlights)", "Ambient (sky + ground, occluded)",
-                                    "Geometric normals (no normal map)", "Point lights only", "Lights per cluster (heat map)" };
+                                    "Geometric normals (no normal map)", "Point lights only", "Lights per cluster (heat map)",
+                                    "Point light shadows (shadowed lamps)" };
             const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
 
             // Forward or deferred. Deferred can show everything computed from the G-buffer, but not views that need a

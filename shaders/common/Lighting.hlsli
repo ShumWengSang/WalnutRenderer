@@ -195,20 +195,73 @@ float PointLightFalloff(float distanceSquared, float range)
     return window * window / max(distanceSquared, 1e-4f);
 }
 
-// Adds one point light's reflected light (radiance) and arriving light (irradiance, for the Lambert views).
-void AddPointLight(PointLight light, float3 worldPosition, float3 N, float3 toCamera, SurfaceBrdf surface,
-                   inout float3 radiance, inout float3 irradianceSum)
+// Point light shadows from cube shadow maps (M2). The lamp's cube was rendered by six 90-degree cameras at the lamp
+// (PointShadowMaps.cpp). Sampling a cube with a direction makes the hardware pick the face and the texel the ray from
+// the lamp's center passes through; SampleCmp then compares our depth with the depth stored there, like SunShadow.
+static const uint  kNoShadowSlot = 0xFFFFFFFF;
+static const float kPointShadowFaceSize = 256.0f;     // PointShadowMaps::kFaceSize
+static const float kPointShadowNormalOffset = 1.5f;   // texels, along the surface normal (towards the lamp)
+static const float kPointShadowDepthBias = 1.0f;      // texels, towards the lamp
+
+float PointShadow(PointLight light, float3 worldPosition, float3 geometricNormal)
+{
+    if (light.shadowSlot == kNoShadowSlot)
+        return 1.0f; // beyond the budget of shadowed lamps (or point shadows off): unblocked
+
+    // One texel of a 90-degree face of N texels covers 2 * distance / N meters at that distance (the face spans from
+    // -45 to +45 degrees: 2 * distance * tan(45) wide). Bias and filter sizes are in texels, so they scale with it.
+    const float3 fromLight = worldPosition - light.position;
+    const float texel = 2.0f * length(fromLight) / kPointShadowFaceSize;
+    // Normal offset: look up a point slightly above the surface, on the lamp's side of it.
+    const float3 n = dot(geometricNormal, fromLight) > 0.0f ? -geometricNormal : geometricNormal;
+    const float3 offset = fromLight + n * (kPointShadowNormalOffset * texel);
+
+    // The depth the face camera would have given this point. A face camera's depth axis is the face's axis, so its
+    // view-space z is the largest component of the offset; the reversed-Z projection (near = nearScale * range,
+    // far = range) turns it into near * (range - z) / ((range - near) * z): 1 at the near plane, 0 at the range.
+    const float z = max(max(abs(offset.x), abs(offset.y)), abs(offset.z)) - kPointShadowDepthBias * texel;
+    const float nearZ = g_frame.pointShadowNearScale * light.range;
+    const float depth = nearZ * (light.range - z) / ((light.range - nearZ) * max(z, nearZ));
+
+    // Soft edges: the hardware's 2x2 comparison filter (sampler s6) at four points around the direction, half a texel
+    // out on two axes perpendicular to it.
+    TextureCubeArray<float> cubes = ResourceDescriptorHeap[g_frame.pointShadowMapIndex];
+    const float3 dir = offset / length(offset);
+    const float3 axisA = normalize(cross(dir, abs(dir.y) < 0.99f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f)));
+    const float3 axisB = cross(dir, axisA);
+    const float spread = 0.75f * 2.0f / kPointShadowFaceSize; // in direction units: 0.75 texel at distance 1
+    float lit = 0.0f;
+    [unroll] for (int i = 0; i < 4; ++i)
+    {
+        const float2 o = float2((i & 1) ? 1.0f : -1.0f, (i & 2) ? 1.0f : -1.0f) * spread;
+        lit += cubes.SampleCmpLevelZero(g_samplerShadowLinear, float4(dir + axisA * o.x + axisB * o.y, light.shadowSlot), depth);
+    }
+    return lit * 0.25f;
+}
+
+// Adds one point light's reflected light (radiance) and arriving light (irradiance, for the Lambert views). The
+// visibility of shadowed lamps that reach the point is summed into shadowSum / shadowCount (the shadow debug view).
+void AddPointLight(PointLight light, float3 worldPosition, MaterialSample mat, float3 toCamera, SurfaceBrdf surface,
+                   inout float3 radiance, inout float3 irradianceSum, inout float shadowSum, inout uint shadowCount)
 {
     const float3 toLight = light.position - worldPosition;
     const float distanceSquared = dot(toLight, toLight);
     if (distanceSquared >= light.range * light.range)
         return;
     const float3 L = toLight * rsqrt(distanceSquared);
-    const float NdotL = saturate(dot(N, L));
+    const float NdotL = saturate(dot(mat.normal, L));
     if (NdotL <= 0.0f)
         return;
-    const float3 irradiance = light.intensity * (PointLightFalloff(distanceSquared, light.range) * NdotL);
-    const BrdfValue brdf = EvaluateBrdf(surface, N, toCamera, L);
+    const float shadow = PointShadow(light, worldPosition, mat.geometricNormal);
+    if (light.shadowSlot != kNoShadowSlot)
+    {
+        shadowSum += shadow;
+        ++shadowCount;
+    }
+    if (shadow <= 0.0f)
+        return;
+    const float3 irradiance = light.intensity * (PointLightFalloff(distanceSquared, light.range) * NdotL * shadow);
+    const BrdfValue brdf = EvaluateBrdf(surface, mat.normal, toCamera, L);
     radiance += (brdf.diffuse + brdf.specular) * irradiance;
     irradianceSum += irradiance;
 }
@@ -221,6 +274,7 @@ struct ShadingResult
     float3 sunSpecular; // the sun's GGX highlight alone
     float3 ambient;     // sky + ground light, diffuse + reflection, darkened by occlusion
     float3 pointLights; // every point light's diffuse + specular (Lambert mode: diffuse only)
+    float  pointShadow; // average visibility of the shadowed lamps reaching the point; -1: none reaches it
     float  shadow;      // the sun's visibility: 1 = lit, 0 = blocked (shadow map, or ray in the ray-traced variant)
     float  mapShadow;   // ray-traced variant with compareShadowMap only: the shadow map's answer for the same point
 };
@@ -284,22 +338,25 @@ ShadingResult ShadeSurface(float3 worldPosition, MaterialSample mat, bool compar
     StructuredBuffer<PointLight> pointLights = ResourceDescriptorHeap[g_frame.pointLightBufferIndex];
     float3 pointLightIrradiance = 0.0f; // for the Lambert / lighting-only views
     result.pointLights = 0.0f;
+    float shadowSum = 0.0f;
+    uint shadowCount = 0;
     if (g_frame.clusteredLighting != 0)
     {
         StructuredBuffer<uint2> grid = ResourceDescriptorHeap[g_frame.clusterGridIndex];
         StructuredBuffer<uint> clusterLightIndices = ResourceDescriptorHeap[g_frame.clusterLightIndicesIndex];
         const uint2 entry = grid[ClusterOf(worldPosition)]; // (first, count)
         for (uint i = 0; i < entry.y; ++i)
-            AddPointLight(pointLights[clusterLightIndices[entry.x + i]], worldPosition, mat.normal, toCamera, surface,
-                          result.pointLights, pointLightIrradiance);
+            AddPointLight(pointLights[clusterLightIndices[entry.x + i]], worldPosition, mat, toCamera, surface,
+                          result.pointLights, pointLightIrradiance, shadowSum, shadowCount);
     }
     else
     {
         for (uint i = 0; i < g_frame.pointLightCount; ++i)
-            AddPointLight(pointLights[i], worldPosition, mat.normal, toCamera, surface, result.pointLights,
-                          pointLightIrradiance);
+            AddPointLight(pointLights[i], worldPosition, mat, toCamera, surface, result.pointLights,
+                          pointLightIrradiance, shadowSum, shadowCount);
     }
     result.lighting += pointLightIrradiance / kPi;
+    result.pointShadow = shadowCount > 0 ? shadowSum / float(shadowCount) : -1.0f;
 
     if (g_frame.shadingModel == kShadingPbr)
         result.color = (brdf.diffuse + brdf.specular) * sunLight + result.pointLights + result.ambient + mat.emissive;
@@ -354,6 +411,8 @@ bool SharedViewColor(uint view, float3 worldPosition, MaterialSample mat, Shadin
     else if (view == kViewSunSpecular)      color = shading.sunSpecular;
     else if (view == kViewAmbient)          color = shading.ambient;
     else if (view == kViewPointLights)      color = shading.pointLights;
+    // Shadowed lamps' visibility: white = lit, black = blocked, dark blue = no shadowed lamp reaches this point.
+    else if (view == kViewPointShadows)     color = shading.pointShadow < 0.0f ? float3(0.03f, 0.05f, 0.15f) : shading.pointShadow.xxx;
     else if (view == kViewSunShadow)        color = shading.shadow.xxx;
     else if (view == kViewShadowDifference)
     {

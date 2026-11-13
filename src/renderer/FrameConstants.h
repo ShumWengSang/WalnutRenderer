@@ -47,7 +47,8 @@ namespace walnut
         // Point lights (L1): StructuredBuffer<PointLight> in the bindless heap, and how many of them to use.
         uint32_t pointLightBufferIndex = UINT32_MAX;
         uint32_t pointLightCount = 0;
-        uint32_t padding5[2] = {};
+        uint32_t pointShadowMapIndex = UINT32_MAX; // TextureCubeArray of the point lights' cube shadow maps
+        float pointShadowNearScale = 0.05f;        // PointShadowMaps::kNearScale
 
         // Clustered lighting (L3): the camera's view matrix and field of view (cluster boxes are built in view space),
         // the depth range the slices cover, and the grid itself.

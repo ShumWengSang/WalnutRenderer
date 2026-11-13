@@ -34,7 +34,8 @@ struct FrameConstants
 
     uint   pointLightBufferIndex; // bindless StructuredBuffer<PointLight> (Lighting.hlsli)
     uint   pointLightCount;
-    uint2  padding5;
+    uint   pointShadowMapIndex;  // bindless TextureCubeArray<float>: the point lights' cube shadow maps (M2)
+    float  pointShadowNearScale; // their face cameras' near plane, as a fraction of the light's range
 
     row_major float4x4 view;     // world -> view space (clustered lighting)
     float  tanHalfFovX;

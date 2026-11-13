@@ -43,6 +43,7 @@ namespace walnut
         GeometricNormals = 17, // the surface's own normal, without the normal map (used for shadows)
         PointLights = 18, // only the point lights' contribution (diffuse + specular)
         ClusterLights = 19, // heat map: how many lights the pixel's cluster lists
+        PointShadows = 20, // average visibility of the shadowed lamps reaching the pixel
     };
 
     // Where the tangent frame for normal mapping comes from. Values must match scene.hlsl.

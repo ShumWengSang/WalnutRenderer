@@ -23,6 +23,7 @@ static const uint kViewAmbient      = 16;
 static const uint kViewGeometricNormals = 17;
 static const uint kViewPointLights  = 18;
 static const uint kViewClusterLights = 19;
+static const uint kViewPointShadows = 20;
 
 static const uint kShadingLambert = 0; // ShadingModel in Lighting.h
 static const uint kShadingPbr     = 1;
