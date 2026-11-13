@@ -186,7 +186,7 @@ namespace walnut
             m_scenePass->RenderGBuffer(commandList, *m_sceneData, frame);
             renderer.BeginDeferredPass();
             m_deferredPass->Render(commandList, renderer.GetGBuffer().GetDeferredInputs(renderer.GetDepthSrvIndex()),
-                                   frame.view, frame.raytracedVariant);
+                                   frame.raytracedVariant);
         }
         else
         {

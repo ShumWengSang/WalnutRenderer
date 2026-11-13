@@ -48,6 +48,8 @@ namespace walnut
         c.shading.model = static_cast<uint32_t>(in.frame.shading);
         c.shading.roughnessOverride = in.debug.roughnessOverride;
         c.shading.metallicOverride = in.debug.metallicOverride;
+        c.shading.debugView = static_cast<uint32_t>(in.frame.view);
+        c.shading.normalMapping = static_cast<uint32_t>(in.frame.normalMapping);
 
         c.points.bufferIndex = in.pointLightBufferIndex;
         c.points.count = in.pointLightCount;

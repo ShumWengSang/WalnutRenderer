@@ -15,16 +15,11 @@
 #include "common/Lighting.hlsli"
 #include "shared/Constants.h" // kNormalMapping*
 
-// Root constants at b0. Must match SceneDrawConstants in ScenePass.cpp.
+// Root constants at b0. Must match SceneDrawConstants in ScenePass.cpp. Everything the same for the whole frame (the
+// scene's buffers, the debug view, normal mapping) is in the frame constants instead.
 struct DrawConstants
 {
-    uint vertexBufferIndex;   // descriptor heap slot of StructuredBuffer<Vertex>
-    uint instanceBufferIndex; // descriptor heap slot of StructuredBuffer<Instance>
-    uint materialBufferIndex; // descriptor heap slot of StructuredBuffer<Material>
-    uint debugView;           // SceneDebugView (shared/DebugViewList.h)
-    uint instanceIndex;       // which instance this draw is
-    uint indexBufferIndex;    // descriptor heap slot of the index buffer as StructuredBuffer<uint> (ray hits)
-    uint normalMapping;       // NormalMapping in RenderSettings.h (values: kNormalMapping*)
+    uint instanceIndex; // which instance this draw is
 };
 ConstantBuffer<DrawConstants> g_draw : register(b0);
 
@@ -53,8 +48,8 @@ float4 ClipPosition(float3 position, float4x4 world, float4x4 viewProjection)
 // into the merged vertex buffer.
 PSInput VSMain(uint vertexId : SV_VertexID)
 {
-    StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[g_draw.vertexBufferIndex];
-    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
+    StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[g_frame.scene.vertexBufferIndex];
+    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_frame.scene.instanceBufferIndex];
     const Vertex vertex = vertices[vertexId];
     const Instance instance = instances[g_draw.instanceIndex];
 
@@ -76,8 +71,8 @@ PSInput VSMain(uint vertexId : SV_VertexID)
 // pixel's depth.
 float4 DepthOnlyPosition(uint vertexId, float4x4 viewProjection)
 {
-    StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[g_draw.vertexBufferIndex];
-    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
+    StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[g_frame.scene.vertexBufferIndex];
+    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_frame.scene.instanceBufferIndex];
     return ClipPosition(vertices[vertexId].position, instances[g_draw.instanceIndex].world, viewProjection);
 }
 
@@ -102,8 +97,8 @@ struct DepthAlphaInput
 
 DepthAlphaInput DepthAlphaTestVertex(uint vertexId, float4x4 viewProjection)
 {
-    StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[g_draw.vertexBufferIndex];
-    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
+    StructuredBuffer<Vertex> vertices = ResourceDescriptorHeap[g_frame.scene.vertexBufferIndex];
+    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_frame.scene.instanceBufferIndex];
     const Vertex vertex = vertices[vertexId];
 
     DepthAlphaInput output;
@@ -143,8 +138,8 @@ DepthAlphaInput VSPointShadowAlphaTest(uint vertexId : SV_VertexID)
 
 void PSDepthAlphaTest(DepthAlphaInput input)
 {
-    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
-    StructuredBuffer<Material> materials = ResourceDescriptorHeap[g_draw.materialBufferIndex];
+    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_frame.scene.instanceBufferIndex];
+    StructuredBuffer<Material> materials = ResourceDescriptorHeap[g_frame.scene.materialBufferIndex];
     const Material material = materials[instances[g_draw.instanceIndex].materialIndex];
 
     float alpha = material.baseColorFactor.a;
@@ -231,12 +226,12 @@ MaterialSample SampleMaterial(PSInput input, bool isFrontFace, Material material
     // (screen-space derivatives), which is what DerivedTangent does. Computed outside the 'if' below because
     // derivatives need the whole 2x2 pixel group.
     const float4 derivedTangent = DerivedTangent(input.worldPosition, input.uv, normal);
-    if (g_draw.normalMapping != kNormalMappingOff && material.normalTexture != kNoTexture)
+    if (g_frame.shading.normalMapping != kNormalMappingOff && material.normalTexture != kNoTexture)
     {
         float4 tangent = input.tangent;
         tangent.xyz -= normal * dot(normal, tangent.xyz); // interpolation bends it: make it perpendicular again
         const bool hasTangent = dot(tangent.xyz, tangent.xyz) > 1e-12f && tangent.w != 0.0f;
-        if (g_draw.normalMapping == kNormalMappingDerived || !hasTangent)
+        if (g_frame.shading.normalMapping == kNormalMappingDerived || !hasTangent)
             tangent = derivedTangent;
 
         if (dot(tangent.xyz, tangent.xyz) > 1e-12f)
@@ -303,8 +298,8 @@ MaterialSample SampleMaterial(PSInput input, bool isFrontFace, Material material
 // GBuffer.hlsli). Drawn after the depth pre-pass with depth EQUAL, so each pixel writes the G-buffer once.
 GBufferOutput PSGBuffer(PSInput input, bool isFrontFace : SV_IsFrontFace)
 {
-    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
-    StructuredBuffer<Material> materials = ResourceDescriptorHeap[g_draw.materialBufferIndex];
+    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_frame.scene.instanceBufferIndex];
+    StructuredBuffer<Material> materials = ResourceDescriptorHeap[g_frame.scene.materialBufferIndex];
     const Material material = materials[instances[g_draw.instanceIndex].materialIndex];
     const MaterialSample mat = SampleMaterial(input, isFrontFace, material);
 
@@ -320,27 +315,27 @@ GBufferOutput PSGBuffer(PSInput input, bool isFrontFace : SV_IsFrontFace)
 float4 PSMain(PSInput input, bool isFrontFace : SV_IsFrontFace) : SV_Target
 {
     // The material is the same for the whole draw, so every pixel reads the same two elements (cheap: cached).
-    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_draw.instanceBufferIndex];
-    StructuredBuffer<Material> materials = ResourceDescriptorHeap[g_draw.materialBufferIndex];
+    StructuredBuffer<Instance> instances = ResourceDescriptorHeap[g_frame.scene.instanceBufferIndex];
+    StructuredBuffer<Material> materials = ResourceDescriptorHeap[g_frame.scene.materialBufferIndex];
     const uint materialIndex = instances[g_draw.instanceIndex].materialIndex;
     const Material material = materials[materialIndex];
 
     const MaterialSample mat = SampleMaterial(input, isFrontFace, material);
-    const ShadingResult shading = ShadeSurface(input.worldPosition, mat, g_draw.debugView == kViewShadowDifference,
-                                               g_draw.debugView == kViewPointShadowDifference);
+    const ShadingResult shading = ShadeSurface(input.worldPosition, mat, g_frame.shading.debugView == kViewShadowDifference,
+                                               g_frame.shading.debugView == kViewPointShadowDifference);
 
     float3 color;
-    if (SharedViewColor(g_draw.debugView, input.worldPosition, mat, shading, color))
+    if (SharedViewColor(g_frame.shading.debugView, input.worldPosition, mat, shading, color))
         return float4(color, 1.0f);
 
     // Views only the forward pass can show: they need the draw's own inputs.
-    if (g_draw.debugView == kViewTexcoords)
+    if (g_frame.shading.debugView == kViewTexcoords)
         color = float3(frac(input.uv), 0.0f); // frac: glTF UVs may go beyond 0..1 (repeating textures)
-    else if (g_draw.debugView == kViewInstances)
+    else if (g_frame.shading.debugView == kViewInstances)
         color = HashColor(g_draw.instanceIndex);
-    else if (g_draw.debugView == kViewMaterials)
+    else if (g_frame.shading.debugView == kViewMaterials)
         color = HashColor(materialIndex);
-    else if (g_draw.debugView == kViewNormalMap)
+    else if (g_frame.shading.debugView == kViewNormalMap)
         // Raw tangent-space normal map: (0.5, 0.5, 1) = "straight out of the surface", the typical light blue.
         color = SampleMaterialTexture(material.normalTexture, input.uv, float4(0.5f, 0.5f, 1.0f, 1.0f)).rgb;
     else

@@ -61,7 +61,9 @@ struct ShadingConstants
     uint   model;             // ShadingModel (renderer/RenderSettings.h): kShadingLambert or kShadingPbr
     float  roughnessOverride; // >= 0: every material uses this roughness (J5 comparisons)
     float  metallicOverride;  // >= 0: every material uses this metallic
-    uint   padding0;
+    uint   debugView;         // what the shaders output: kView* (shared/DebugViewList.h)
+    uint   normalMapping;     // NormalMapping (renderer/RenderSettings.h): kNormalMapping*
+    uint   padding0, padding1, padding2;
 };
 
 // Point lights (L1, M1-M3).
@@ -86,8 +88,8 @@ struct ClusterConstants
     uint   padding0, padding1, padding2;
 };
 
-// The scene's buffers and acceleration structure (bindless SRVs), for shaders that aren't scene draws: shadow rays
-// look up alpha-tested hits in them.
+// The scene's buffers and acceleration structure (bindless SRVs): the scene draws pull their vertices, instances and
+// materials from them, and shadow rays look up alpha-tested hits in them.
 struct SceneBindings
 {
     uint   vertexBufferIndex;
@@ -124,7 +126,7 @@ namespace walnut
     static_assert(sizeof(gpu::SunConstants) == 32);
     static_assert(sizeof(gpu::SunShadowConstants) == 112);
     static_assert(sizeof(gpu::AmbientConstants) == 32);
-    static_assert(sizeof(gpu::ShadingConstants) == 16);
+    static_assert(sizeof(gpu::ShadingConstants) == 32);
     static_assert(sizeof(gpu::PointLightConstants) == 32);
     static_assert(sizeof(gpu::ClusterConstants) == 32);
     static_assert(sizeof(gpu::SceneBindings) == 32);
@@ -133,10 +135,10 @@ namespace walnut
     static_assert(offsetof(FrameConstants, sunShadow) == 256);
     static_assert(offsetof(FrameConstants, ambient) == 368);
     static_assert(offsetof(FrameConstants, shading) == 400);
-    static_assert(offsetof(FrameConstants, points) == 416);
-    static_assert(offsetof(FrameConstants, clusters) == 448);
-    static_assert(offsetof(FrameConstants, scene) == 480);
-    static_assert(sizeof(FrameConstants) == 512);
+    static_assert(offsetof(FrameConstants, points) == 432);
+    static_assert(offsetof(FrameConstants, clusters) == 464);
+    static_assert(offsetof(FrameConstants, scene) == 496);
+    static_assert(sizeof(FrameConstants) == 528);
 }
 #endif
 

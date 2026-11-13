@@ -9,13 +9,8 @@ namespace walnut
 {
     namespace
     {
-        // Root constants for deferred.hlsl (b0). Must match DrawConstants there.
-        struct DeferredDrawConstants
-        {
-            DeferredInputs inputs;
-            uint32_t debugView; // SceneDebugView
-        };
-        static_assert(sizeof(DeferredDrawConstants) <= kNumDrawConstants * sizeof(uint32_t));
+        // The root constants of deferred.hlsl (b0) are the DeferredInputs: must match DrawConstants there.
+        static_assert(sizeof(DeferredInputs) <= kNumDrawConstants * sizeof(uint32_t));
     }
 
     DeferredPass::DeferredPass(Device& device, const ShaderCompiler& compiler, std::filesystem::path shaderPath,
@@ -44,15 +39,13 @@ namespace walnut
         m_pipeline = std::move(pipeline);
         m_rtPipeline = std::move(rtPipeline);
     }
-    void DeferredPass::Render(ID3D12GraphicsCommandList* commandList, const DeferredInputs& inputs, SceneDebugView view,
+    void DeferredPass::Render(ID3D12GraphicsCommandList* commandList, const DeferredInputs& inputs,
                               bool raytracedShadows) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"Deferred lighting");
 
-        const DeferredDrawConstants drawConstants{ .inputs = inputs, .debugView = static_cast<uint32_t>(view) };
         commandList->SetPipelineState(raytracedShadows && m_rtPipeline ? m_rtPipeline.Get() : m_pipeline.Get());
-        commandList->SetGraphicsRoot32BitConstants(RootParam::DrawConstants, sizeof(drawConstants) / sizeof(uint32_t),
-                                                   &drawConstants, 0);
+        commandList->SetGraphicsRoot32BitConstants(RootParam::DrawConstants, sizeof(inputs) / sizeof(uint32_t), &inputs, 0);
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         commandList->DrawInstanced(3, 1, 0, 0); // one triangle covering the screen
     }

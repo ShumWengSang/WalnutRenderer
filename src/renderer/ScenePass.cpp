@@ -15,16 +15,11 @@ namespace walnut
 {
     namespace
     {
-        // Root constants (b0). Must match DrawConstants in scene.hlsl.
+        // Root constants (b0). Must match DrawConstants in scene.hlsl. Only what changes per draw: everything the same
+        // for the whole frame (the scene's buffers, the debug view, normal mapping) is in the frame constants.
         struct SceneDrawConstants
         {
-            uint32_t vertexBufferIndex;
-            uint32_t instanceBufferIndex;
-            uint32_t materialBufferIndex;
-            uint32_t debugView;
-            uint32_t instanceIndex; // the only value that changes between draws
-            uint32_t indexBufferIndex; // the index buffer as StructuredBuffer<uint>, for ray hits
-            uint32_t normalMapping;    // NormalMapping
+            uint32_t instanceIndex;
         };
         static_assert(sizeof(SceneDrawConstants) <= kNumDrawConstants * sizeof(uint32_t));
         constexpr uint32_t kInstanceIndexConstant = offsetof(SceneDrawConstants, instanceIndex) / sizeof(uint32_t);
@@ -248,21 +243,8 @@ namespace walnut
     uint32_t ScenePass::RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
                                     const FrameSettings& frame, Kind kind, const CullSphere* cull) const
     {
-        // The camera and lights come from the frame constants (b2), which the renderer has already bound.
-        // Everything else shared by all draws is set once here.
-        const SceneGpuData::Bindings bindings = scene.GetBindings();
-        const SceneDrawConstants drawConstants{
-            .vertexBufferIndex = bindings.vertices,
-            .instanceBufferIndex = bindings.instances,
-            .materialBufferIndex = bindings.materials,
-            .debugView = static_cast<uint32_t>(frame.view),
-            .instanceIndex = 0,
-            .indexBufferIndex = bindings.indices,
-            .normalMapping = static_cast<uint32_t>(frame.normalMapping),
-        };
-        commandList->SetGraphicsRoot32BitConstants(RootParam::DrawConstants, sizeof(drawConstants) / sizeof(uint32_t),
-                                                   &drawConstants, 0);
-
+        // The camera, lights and the scene's buffers come from the frame constants (b2), which the renderer has already
+        // bound. The index buffer is bound here, once for all draws.
         const D3D12_INDEX_BUFFER_VIEW indexBufferView = scene.GetIndexBufferView();
         commandList->IASetIndexBuffer(&indexBufferView);
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);

@@ -12,7 +12,6 @@ namespace walnut
 {
     class Device;
     class ShaderCompiler;
-    enum class SceneDebugView : uint32_t;
 
 
     // Deferred shading's fullscreen pass (shaders/deferred.hlsl): reads the G-buffer once per screen pixel, rebuilds
@@ -27,8 +26,7 @@ namespace walnut
 
 
         // Expects the bindless state and frame constants to be bound, and Renderer::BeginDeferredPass.
-        void Render(ID3D12GraphicsCommandList* commandList, const DeferredInputs& inputs, SceneDebugView view,
-                    bool raytracedShadows) const;
+        void Render(ID3D12GraphicsCommandList* commandList, const DeferredInputs& inputs, bool raytracedShadows) const;
 
     private:
         void BuildPipelines(PipelineBuilder& builder) override;
