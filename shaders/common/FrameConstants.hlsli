@@ -43,7 +43,8 @@ struct FrameConstants
     float  clusterFar;
     uint   clusterGridIndex;         // StructuredBuffer<uint2> (first, count) per cluster (Clusters.hlsli)
     uint   clusterLightIndicesIndex; // StructuredBuffer<uint>
-    uint2  padding6;
+    uint   clusteredLighting;    // 1: point lights from the pixel's cluster list; 0: every light (brute force)
+    uint   padding6;
 };
 ConstantBuffer<FrameConstants> g_frame : register(b2);
 

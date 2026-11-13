@@ -195,6 +195,24 @@ float PointLightFalloff(float distanceSquared, float range)
     return window * window / max(distanceSquared, 1e-4f);
 }
 
+// Adds one point light's reflected light (radiance) and arriving light (irradiance, for the Lambert views).
+void AddPointLight(PointLight light, float3 worldPosition, float3 N, float3 toCamera, SurfaceBrdf surface,
+                   inout float3 radiance, inout float3 irradianceSum)
+{
+    const float3 toLight = light.position - worldPosition;
+    const float distanceSquared = dot(toLight, toLight);
+    if (distanceSquared >= light.range * light.range)
+        return;
+    const float3 L = toLight * rsqrt(distanceSquared);
+    const float NdotL = saturate(dot(N, L));
+    if (NdotL <= 0.0f)
+        return;
+    const float3 irradiance = light.intensity * (PointLightFalloff(distanceSquared, light.range) * NdotL);
+    const BrdfValue brdf = EvaluateBrdf(surface, N, toCamera, L);
+    radiance += (brdf.diffuse + brdf.specular) * irradiance;
+    irradianceSum += irradiance;
+}
+
 // The light leaving a surface towards the camera, split into the parts the debug views show.
 struct ShadingResult
 {
@@ -254,28 +272,32 @@ ShadingResult ShadeSurface(float3 worldPosition, MaterialSample mat, bool compar
     result.ambient = (surface.diffuseColor * (1.0f - environmentBrdf) * HemisphereLight(mat.normal, 1.0f)
                     + environmentBrdf * HemisphereLight(reflected, surface.alpha)) * mat.occlusion;
 
-    // Point lights (L1): the same BRDF as the sun, but each light has its own direction and gets weaker with
-    // distance. No shadows: their light goes through walls. Brute force for now: every pixel visits every light, and
-    // skips the ones out of range or behind the surface. The loop count is the same for the whole screen, so all
-    // pixels read the same light at the same time (the GPU fetches it once for a whole wave of pixels).
+    // Point lights: the same BRDF as the sun, but each light has its own direction and gets weaker with distance.
+    // No shadows: their light goes through walls. Lights out of range or behind the surface are skipped.
+    //   Brute force (L1): every pixel visits every light. The loop is the same for the whole screen, so a wave of
+    //                     pixels reads each light together (one fetch for all of them).
+    //   Clustered (L4):   the pixel looks up its cluster (ClusterOf: screen tile + depth slice) and visits only the
+    //                     lights the compute pass listed there. Fewer lights, but neighbouring pixels in different
+    //                     clusters now loop different counts over different lights.
+    //
+    // Two separate loops (the branch is the same for the whole frame), so each compiles to its own tight loop.
     StructuredBuffer<PointLight> pointLights = ResourceDescriptorHeap[g_frame.pointLightBufferIndex];
     float3 pointLightIrradiance = 0.0f; // for the Lambert / lighting-only views
     result.pointLights = 0.0f;
-    for (uint i = 0; i < g_frame.pointLightCount; ++i)
+    if (g_frame.clusteredLighting != 0)
     {
-        const PointLight light = pointLights[i];
-        const float3 toLight = light.position - worldPosition;
-        const float distanceSquared = dot(toLight, toLight);
-        if (distanceSquared >= light.range * light.range)
-            continue;
-        const float3 L = toLight * rsqrt(distanceSquared);
-        const float pointNdotL = saturate(dot(mat.normal, L));
-        if (pointNdotL <= 0.0f)
-            continue;
-        const float3 irradiance = light.intensity * (PointLightFalloff(distanceSquared, light.range) * pointNdotL);
-        const BrdfValue pointBrdf = EvaluateBrdf(surface, mat.normal, toCamera, L);
-        result.pointLights += (pointBrdf.diffuse + pointBrdf.specular) * irradiance;
-        pointLightIrradiance += irradiance;
+        StructuredBuffer<uint2> grid = ResourceDescriptorHeap[g_frame.clusterGridIndex];
+        StructuredBuffer<uint> clusterLightIndices = ResourceDescriptorHeap[g_frame.clusterLightIndicesIndex];
+        const uint2 entry = grid[ClusterOf(worldPosition)]; // (first, count)
+        for (uint i = 0; i < entry.y; ++i)
+            AddPointLight(pointLights[clusterLightIndices[entry.x + i]], worldPosition, mat.normal, toCamera, surface,
+                          result.pointLights, pointLightIrradiance);
+    }
+    else
+    {
+        for (uint i = 0; i < g_frame.pointLightCount; ++i)
+            AddPointLight(pointLights[i], worldPosition, mat.normal, toCamera, surface, result.pointLights,
+                          pointLightIrradiance);
     }
     result.lighting += pointLightIrradiance / kPi;
 

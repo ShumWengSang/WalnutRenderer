@@ -300,6 +300,7 @@ namespace walnut
             }
             frameConstants.clusterGridIndex = m_clusterGrid->GetGridSrvIndex();
             frameConstants.clusterLightIndicesIndex = m_clusterGrid->GetIndicesSrvIndex();
+            frameConstants.clusteredLighting = m_lighting.clusteredLighting ? 1u : 0u;
             frameConstants.cameraPosition = m_camera.position;
             frameConstants.sunDirection = m_lighting.GetSunDirection();
             const auto scaled = [](const DirectX::XMFLOAT3& color, float intensity) {
@@ -347,8 +348,9 @@ namespace walnut
                 m_renderer->SetFrameConstants(frameConstants);
                 ID3D12GraphicsCommandList7* commandList = m_renderer->GetCommandList();
 
-                // 0. Sort the point lights into the cluster grid (compute), before anything reads it.
-                if (m_scenePass)
+                // 0. Sort the point lights into the cluster grid (compute), before anything reads it. Brute force
+                //    doesn't read it (except the heat map view), so it's skipped there: a fair comparison.
+                if (m_scenePass && (m_lighting.clusteredLighting || m_sceneView.debugView == SceneDebugView::ClusterLights))
                     m_clusterGrid->Build(commandList, m_renderer->GetFrameIndex());
 
                 // 1. Depth from the sun's point of view, into the shadow map. With ray-traced shadows the casters are
@@ -700,7 +702,16 @@ namespace walnut
                 ImGui::SameLine();
                 ImGui::Checkbox("Markers", &m_lighting.showPointLightMarkers);
                 ImGui::SameLine();
-                ImGui::TextDisabled("brute force: every pixel visits every lamp");
+                {
+                    int clustered = m_lighting.clusteredLighting ? 1 : 0;
+                    ImGui::RadioButton("Brute force##lights", &clustered, 0);
+                    ImGui::SetItemTooltip("Every pixel visits every lamp.");
+                    ImGui::SameLine();
+                    ImGui::RadioButton("Clustered##lights", &clustered, 1);
+                    ImGui::SetItemTooltip("A compute pass lists the lamps reaching each of 16x9x24 view-space clusters;\n"
+                                          "every pixel visits only its cluster's list.");
+                    m_lighting.clusteredLighting = clustered != 0;
+                }
                 const uint32_t used = m_clusterGrid->GetUsedIndices();
                 ImGui::Text("Clusters: %ux%ux%u, %u light entries (%.1f per cluster, %.0f%% of the list)",
                             ClusterGrid::kCountX, ClusterGrid::kCountY, ClusterGrid::kCountZ, used,

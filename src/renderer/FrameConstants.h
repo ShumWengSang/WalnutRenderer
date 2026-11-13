@@ -58,7 +58,8 @@ namespace walnut
         float clusterFar = 100.0f; // ... and where the last slice ends: the farthest corner of the scene
         uint32_t clusterGridIndex = UINT32_MAX;         // StructuredBuffer<uint2>: (first index, count) per cluster
         uint32_t clusterLightIndicesIndex = UINT32_MAX; // StructuredBuffer<uint>: the clusters' light indices
-        uint32_t padding6[2] = {};
+        uint32_t clusteredLighting = 1; // 1: shade point lights from the pixel's cluster list; 0: brute force
+        uint32_t padding6 = 0;
     };
     static_assert(sizeof(FrameConstants) == 432);
 }
