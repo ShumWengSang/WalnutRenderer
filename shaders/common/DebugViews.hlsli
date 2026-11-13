@@ -21,6 +21,7 @@ static const uint kViewEmissive     = 14;
 static const uint kViewSunSpecular  = 15;
 static const uint kViewAmbient      = 16;
 static const uint kViewGeometricNormals = 17;
+static const uint kViewPointLights  = 18;
 
 static const uint kShadingLambert = 0; // ShadingModel in Lighting.h
 static const uint kShadingPbr     = 1;

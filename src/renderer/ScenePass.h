@@ -41,6 +41,7 @@ namespace walnut
         SunSpecular = 15, // only the sun's GGX specular reflection (the highlights)
         Ambient = 16,     // only the ambient light: sky/ground diffuse + reflection, times occlusion
         GeometricNormals = 17, // the surface's own normal, without the normal map (used for shadows)
+        PointLights = 18, // only the point lights' contribution (diffuse + specular)
     };
 
     // Where the tangent frame for normal mapping comes from. Values must match scene.hlsl.

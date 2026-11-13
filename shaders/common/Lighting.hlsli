@@ -172,6 +172,28 @@ float3 HemisphereLight(float3 direction, float width)
     return lerp(g_frame.groundRadiance, g_frame.skyRadiance, skyShare);
 }
 
+// One point light (L1). Must match PointLightGpu in PointLights.h (32 bytes).
+struct PointLight
+{
+    float3 position;  // world space
+    float  range;     // meters: the light fades to exactly zero here
+    float3 intensity; // linear color * intensity
+    uint   padding;
+};
+
+// How much of a point light reaches a surface at distance^2 = distanceSquared, per unit of intensity.
+//   1 / d^2:  the inverse-square law. The light spreads over a sphere whose area grows with d^2, so twice as far
+//             gets a quarter of the light. (max with 1 cm^2 so a surface touching the light doesn't get infinity.)
+//   window:   real light never reaches zero, but a light that affects the whole scene can't be skipped anywhere.
+//             (1 - (d/range)^4)^2 is ~1 close up and bends smoothly down to exactly 0 at the range, so beyond it the
+//             light can be ignored without a visible edge (the falloff used by Unreal and Frostbite).
+float PointLightFalloff(float distanceSquared, float range)
+{
+    const float ratio2 = distanceSquared / (range * range);
+    const float window = saturate(1.0f - ratio2 * ratio2);
+    return window * window / max(distanceSquared, 1e-4f);
+}
+
 // The light leaving a surface towards the camera, split into the parts the debug views show.
 struct ShadingResult
 {
@@ -179,6 +201,7 @@ struct ShadingResult
     float3 lighting;    // what a white matte surface would show: the sun's share plus the ambient around the normal
     float3 sunSpecular; // the sun's GGX highlight alone
     float3 ambient;     // sky + ground light, diffuse + reflection, darkened by occlusion
+    float3 pointLights; // every point light's diffuse + specular (Lambert mode: diffuse only)
     float  shadow;      // the sun's visibility: 1 = lit, 0 = blocked (shadow map, or ray in the ray-traced variant)
     float  mapShadow;   // ray-traced variant with compareShadowMap only: the shadow map's answer for the same point
 };
@@ -230,10 +253,38 @@ ShadingResult ShadeSurface(float3 worldPosition, MaterialSample mat, bool compar
     result.ambient = (surface.diffuseColor * (1.0f - environmentBrdf) * HemisphereLight(mat.normal, 1.0f)
                     + environmentBrdf * HemisphereLight(reflected, surface.alpha)) * mat.occlusion;
 
+    // Point lights (L1): the same BRDF as the sun, but each light has its own direction and gets weaker with
+    // distance. No shadows: their light goes through walls. Brute force for now: every pixel visits every light, and
+    // skips the ones out of range or behind the surface. The loop count is the same for the whole screen, so all
+    // pixels read the same light at the same time (the GPU fetches it once for a whole wave of pixels).
+    StructuredBuffer<PointLight> pointLights = ResourceDescriptorHeap[g_frame.pointLightBufferIndex];
+    float3 pointLightIrradiance = 0.0f; // for the Lambert / lighting-only views
+    result.pointLights = 0.0f;
+    for (uint i = 0; i < g_frame.pointLightCount; ++i)
+    {
+        const PointLight light = pointLights[i];
+        const float3 toLight = light.position - worldPosition;
+        const float distanceSquared = dot(toLight, toLight);
+        if (distanceSquared >= light.range * light.range)
+            continue;
+        const float3 L = toLight * rsqrt(distanceSquared);
+        const float pointNdotL = saturate(dot(mat.normal, L));
+        if (pointNdotL <= 0.0f)
+            continue;
+        const float3 irradiance = light.intensity * (PointLightFalloff(distanceSquared, light.range) * pointNdotL);
+        const BrdfValue pointBrdf = EvaluateBrdf(surface, mat.normal, toCamera, L);
+        result.pointLights += (pointBrdf.diffuse + pointBrdf.specular) * irradiance;
+        pointLightIrradiance += irradiance;
+    }
+    result.lighting += pointLightIrradiance / kPi;
+
     if (g_frame.shadingModel == kShadingPbr)
-        result.color = (brdf.diffuse + brdf.specular) * sunLight + result.ambient + mat.emissive;
+        result.color = (brdf.diffuse + brdf.specular) * sunLight + result.pointLights + result.ambient + mat.emissive;
     else
+    {
+        result.pointLights = mat.baseColor * pointLightIrradiance / kPi;
         result.color = mat.baseColor * result.lighting; // Lambert: matte only, no occlusion map, no emission
+    }
     return result;
 }
 
@@ -258,6 +309,7 @@ bool SharedViewColor(uint view, MaterialSample mat, ShadingResult shading, out f
     else if (view == kViewLightingOnly)     color = shading.lighting;
     else if (view == kViewSunSpecular)      color = shading.sunSpecular;
     else if (view == kViewAmbient)          color = shading.ambient;
+    else if (view == kViewPointLights)      color = shading.pointLights;
     else if (view == kViewSunShadow)        color = shading.shadow.xxx;
     else if (view == kViewShadowDifference)
     {

@@ -108,6 +108,7 @@ namespace walnut
         bool GetVsync() const { return m_vsync; }
         void SetVsync(bool vsync) { m_vsync = vsync; }
         uint64_t GetFrameCount() const { return m_frameCount; }
+        uint32_t GetFrameIndex() const { return m_frameIndex; } // which of the kFramesInFlight slots is recording
 
     private:
         struct FrameContext

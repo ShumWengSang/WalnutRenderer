@@ -43,6 +43,11 @@ namespace walnut
         uint32_t instanceBufferIndex = UINT32_MAX;
         uint32_t materialBufferIndex = UINT32_MAX;
         uint32_t indexBufferIndex = UINT32_MAX;
+
+        // Point lights (L1): StructuredBuffer<PointLight> in the bindless heap, and how many of them to use.
+        uint32_t pointLightBufferIndex = UINT32_MAX;
+        uint32_t pointLightCount = 0;
+        uint32_t padding5[2] = {};
     };
-    static_assert(sizeof(FrameConstants) == 320);
+    static_assert(sizeof(FrameConstants) == 336);
 }

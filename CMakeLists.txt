@@ -60,6 +60,8 @@ set(WALNUT_SOURCES
     src/renderer/FrameConstants.h
     src/renderer/GBuffer.cpp
     src/renderer/GBuffer.h
+    src/renderer/LightBuffer.cpp
+    src/renderer/LightBuffer.h
     src/renderer/Renderer.cpp
     src/renderer/Renderer.h
     src/renderer/ScenePass.cpp
@@ -81,6 +83,8 @@ set(WALNUT_SOURCES
     src/scene/ImageDecoder.h
     src/scene/Lighting.cpp
     src/scene/Lighting.h
+    src/scene/PointLights.cpp
+    src/scene/PointLights.h
     src/scene/Scene.cpp
     src/scene/Scene.h
 

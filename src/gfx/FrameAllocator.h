@@ -14,6 +14,7 @@ namespace walnut
         void* cpu = nullptr;                    // where the CPU writes (write-combined: write once, never read)
         D3D12_GPU_VIRTUAL_ADDRESS gpu = 0;      // what the GPU reads, e.g. passed to SetGraphicsRootConstantBufferView
         uint64_t size = 0;
+        uint64_t offset = 0;                    // from the start of GetResource(), e.g. for a buffer SRV's FirstElement
     };
 
     // Short-lived, CPU-written GPU memory for one frame: constants, small dynamic data.
@@ -46,6 +47,7 @@ namespace walnut
             return allocation.gpu;
         }
 
+        ID3D12Resource* GetResource() const { return m_buffer.Get(); }
         uint64_t GetUsedBytes() const { return m_offset - m_regionStart; }
         uint64_t GetBytesPerFrame() const { return m_bytesPerFrame; }
 

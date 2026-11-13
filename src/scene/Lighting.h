@@ -26,6 +26,13 @@ namespace walnut
         float ambientIntensity = 0.25f;
         ShadingModel shadingModel = ShadingModel::Pbr;
 
+        // Point lights (PointLights): how many of the generated lamps to use, and their shared range and intensity.
+        // Range and intensity are set to fit the scene's size when it loads.
+        int pointLightCount = 128;
+        float pointLightRange = 4.0f;     // meters
+        float pointLightIntensity = 8.0f; // at 1 m, a surface facing the lamp receives this much (falls off as 1/d^2)
+        bool animatePointLights = true;
+
         // Shadow-map bias, in shadow-map texels (see SunShadow in scene.hlsl).
         float shadowConstantBias = 0.5f;
         float shadowSlopeBias = 1.0f;

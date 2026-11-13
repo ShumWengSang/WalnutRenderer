@@ -6,12 +6,14 @@
 #include "renderer/ScenePass.h"
 #include "renderer/ShadowMap.h"
 #include "renderer/DeferredPass.h"
+#include "renderer/LightBuffer.h"
 #include "renderer/TonemapPass.h"
 #include "scene/Assets.h"
 #include "scene/Camera.h"
 #include "scene/FlyCameraController.h"
 #include "scene/GltfLoader.h"
 #include "scene/Lighting.h"
+#include "scene/PointLights.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -80,6 +82,7 @@ namespace walnut
         static constexpr uint32_t kShadowMapSize = 2048;
         std::unique_ptr<TonemapPass> m_tonemapPass;
         std::unique_ptr<DeferredPass> m_deferredPass;
+        std::unique_ptr<LightBuffer> m_lightBuffer;
         std::unique_ptr<ImGuiLayer> m_imgui;
         Timer m_timer;
 
@@ -88,6 +91,8 @@ namespace walnut
         TonemapSettings m_tonemapSettings;
         SceneViewSettings m_sceneView;
         SceneLighting m_lighting;
+        PointLights m_pointLights;
+        std::vector<PointLightGpu> m_pointLightData; // this frame's lights, rebuilt every frame
         bool m_shadowsEnabled = true;
         float m_roughnessOverrideValue = 0.3f; // slider values kept while an override is switched off
         float m_metallicOverrideValue = 1.0f;

@@ -31,6 +31,10 @@ struct FrameConstants
     uint   instanceBufferIndex;
     uint   materialBufferIndex;
     uint   indexBufferIndex;
+
+    uint   pointLightBufferIndex; // bindless StructuredBuffer<PointLight> (Lighting.hlsli)
+    uint   pointLightCount;
+    uint2  padding5;
 };
 ConstantBuffer<FrameConstants> g_frame : register(b2);
 

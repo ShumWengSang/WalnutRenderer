@@ -43,6 +43,7 @@ namespace walnut
             .cpu = static_cast<uint8_t*>(m_buffer.GetMappedData()) + start,
             .gpu = m_buffer.GetGpuAddress() + start,
             .size = size,
+            .offset = start,
         };
     }
 }

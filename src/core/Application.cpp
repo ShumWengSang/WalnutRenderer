@@ -167,6 +167,12 @@ namespace walnut
             const float diameter = DirectX::XMVectorGetX(DirectX::XMVector3Length(
                 DirectX::XMVectorSubtract(DirectX::XMLoadFloat3(&m_scene.boundsMax), DirectX::XMLoadFloat3(&m_scene.boundsMin))));
             m_cameraController.moveSpeed = std::clamp(diameter / 8.0f, 0.1f, 100.0f);
+
+            // Lamps scaled to the scene: Sponza (37 m across) gets ~2.6 m of range, small pools of light that only
+            // overlap where lamps are close. Intensity grows with range^2, so the pools look the same at any scale.
+            m_pointLights.Generate(m_scene.boundsMin, m_scene.boundsMax);
+            m_lighting.pointLightRange = 0.07f * diameter;
+            m_lighting.pointLightIntensity = 0.3f * m_lighting.pointLightRange * m_lighting.pointLightRange;
         }
         m_tonemapPass = std::make_unique<TonemapPass>(m_renderer->GetDevice(), *m_shaderCompiler,
                                                       m_shaderDir / "tonemap.hlsl", m_renderer->GetRootSignature(),
@@ -174,6 +180,7 @@ namespace walnut
         m_deferredPass = std::make_unique<DeferredPass>(m_renderer->GetDevice(), *m_shaderCompiler,
                                                         m_shaderDir / "deferred.hlsl", m_renderer->GetRootSignature(),
                                                         Renderer::kSceneColorFormat, m_renderer->GetDevice().SupportsInlineRaytracing());
+        m_lightBuffer = std::make_unique<LightBuffer>(m_renderer->GetDevice(), m_renderer->GetSrvHeap(), Renderer::kFramesInFlight);
         m_shadowMap = std::make_unique<ShadowMap>(m_renderer->GetDevice(), m_renderer->GetSrvHeap(), kShadowMapSize);
 
         // Execute every upload recorded while loading, before the first frame reads that data.
@@ -204,6 +211,7 @@ namespace walnut
         m_shadowMap.reset();
         m_tonemapPass.reset();
         m_deferredPass.reset();
+        m_lightBuffer.reset();
         m_shaderCompiler.reset();
         m_renderer.reset();
         m_window.reset();
@@ -300,6 +308,14 @@ namespace walnut
             {
                 PIXScopedEvent(pix::kColorCpu, L"Render");
                 m_renderer->BeginFrame(m_clearColor);
+                // The point lights go into this frame's upload memory, which BeginFrame just made reusable.
+                if (m_scenePass)
+                    m_pointLights.Update(m_timer.GetTotalSeconds(), static_cast<uint32_t>(m_lighting.pointLightCount),
+                                         m_lighting.pointLightRange, m_lighting.pointLightIntensity,
+                                         m_lighting.animatePointLights, m_pointLightData);
+                frameConstants.pointLightBufferIndex = m_lightBuffer->Upload(m_renderer->GetFrameAllocator(),
+                                                                             m_renderer->GetFrameIndex(), m_pointLightData);
+                frameConstants.pointLightCount = static_cast<uint32_t>(m_pointLightData.size());
                 m_renderer->SetFrameConstants(frameConstants);
                 ID3D12GraphicsCommandList7* commandList = m_renderer->GetCommandList();
 
@@ -499,7 +515,7 @@ namespace walnut
                                     "Sun shadow", "Shadow difference (ray traced vs map)",
                                     "Roughness", "Metallic", "Normal map (tangent space)", "Occlusion", "Emissive",
                                     "Sun specular (highlights)", "Ambient (sky + ground, occluded)",
-                                    "Geometric normals (no normal map)" };
+                                    "Geometric normals (no normal map)", "Point lights only" };
             const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
 
             // Forward or deferred. Deferred can show everything computed from the G-buffer, but not views that need a
@@ -541,6 +557,8 @@ namespace walnut
                         ImGui::SeparatorText("Lighting terms");
                     else if (i == static_cast<int>(SceneDebugView::GeometricNormals))
                         ImGui::SeparatorText("Geometry");
+                    else if (i == static_cast<int>(SceneDebugView::PointLights))
+                        ImGui::SeparatorText("Point lights");
                     ImGui::BeginDisabled((needsTracing && !canTrace) || (deferred && !inGBuffer(static_cast<SceneDebugView>(i))));
                     if (ImGui::Selectable(views[i], i == current))
                         m_sceneView.debugView = static_cast<SceneDebugView>(i);
@@ -614,6 +632,32 @@ namespace walnut
             ImGui::SliderFloat("Ambient intensity", &m_lighting.ambientIntensity, 0.0f, 5.0f, "%.3f", ImGuiSliderFlags_Logarithmic);
             const DirectX::XMFLOAT3 sun = m_lighting.GetSunDirection();
             ImGui::TextDisabled("Towards the sun: (%.2f, %.2f, %.2f)", sun.x, sun.y, sun.z);
+            // Lamps are easiest to see at night: no sun, a faint sky. Day puts the defaults back.
+            if (ImGui::Button("Night"))
+            {
+                m_lighting.sunIntensity = 0.0f;
+                m_lighting.ambientIntensity = 0.02f;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Day"))
+            {
+                const SceneLighting defaults;
+                m_lighting.sunIntensity = defaults.sunIntensity;
+                m_lighting.ambientIntensity = defaults.ambientIntensity;
+            }
+            if (m_scenePass && ImGui::TreeNodeEx("Point lights", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                ImGui::SliderInt("Count", &m_lighting.pointLightCount, 0, static_cast<int>(PointLights::kMaxLights), "%d",
+                                 ImGuiSliderFlags_Logarithmic);
+                ImGui::SliderFloat("Range", &m_lighting.pointLightRange, 0.01f, 50.0f, "%.2f m", ImGuiSliderFlags_Logarithmic);
+                ImGui::SetItemTooltip("Each lamp's light fades smoothly to zero at this distance.");
+                ImGui::SliderFloat("Intensity##point", &m_lighting.pointLightIntensity, 0.0f, 1000.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+                ImGui::SetItemTooltip("Light received 1 m from a lamp, facing it. Falls off as 1 / distance^2.");
+                ImGui::Checkbox("Animate", &m_lighting.animatePointLights);
+                ImGui::SameLine();
+                ImGui::TextDisabled("brute force: every pixel visits every lamp");
+                ImGui::TreePop();
+            }
             {
                 int shading = static_cast<int>(m_lighting.shadingModel);
                 ImGui::RadioButton("Lambert##shading", &shading, static_cast<int>(ShadingModel::Lambert));
