@@ -7,6 +7,7 @@
 #endif
 
 #include "common/Bindless.hlsli"
+#include "common/Fullscreen.hlsli"
 #include "common/GBuffer.hlsli"
 #include "common/Lighting.hlsli"
 
@@ -22,11 +23,10 @@ struct DrawConstants
 };
 ConstantBuffer<DrawConstants> g_draw : register(b0);
 
-// One triangle that covers the whole screen (see tonemap.hlsl).
+// One triangle that covers the whole screen (common/Fullscreen.hlsli).
 float4 VSMain(uint vertexId : SV_VertexID) : SV_Position
 {
-    const float2 corner = float2((vertexId << 1) & 2, vertexId & 2);
-    return float4(corner * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f), 0.0f, 1.0f);
+    return FullscreenTrianglePosition(vertexId);
 }
 
 // The G-buffer doesn't store positions: the depth buffer already says how far away each pixel's surface is, and the

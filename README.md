@@ -112,7 +112,9 @@ cmake/Dependencies.cmake  FetchContent: DirectX-Headers, Agility SDK, DXC, Dear 
 shaders/                  HLSL sources, compiled at runtime straight from here (a copy next to the exe is the fallback):
                           scene.hlsl (draws), deferred.hlsl (deferred lighting), clusters.hlsl (compute: light clusters),
                           lightmarkers.hlsl, tonemap.hlsl; common/ holds the shared includes (bindless, frame constants,
-                          scene data, BRDF, lighting, clusters, G-buffer layout, debug views)
+                          scene data, fullscreen triangle, BRDF, clusters, G-buffer layout, debug views). Lighting.hlsli
+                          pulls in the lighting pieces: Material, SunShadow, ShadowRays, PointLight, PointShadows,
+                          Shading (ShadeSurface) and DebugViewColors
 src/core/                 Application loop, command line, settings registry (--set), Win32 Window, Input, Timer, Log
 src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, RootSignature (shared bindless),
                           Buffer, Texture, UploadContext (staging ring), FrameAllocator (per-frame constants),
@@ -177,7 +179,7 @@ Example prompt: *"Survey captures\WalnutRenderer_timing_….wpix with PixMcp: fr
    - At load (not per frame), when ray tracing is supported, `AccelerationStructures` builds one BLAS per primitive from the scene's vertex/index buffers and a TLAS over the instances.
 7. The scene from the camera. `ScenePass` records one draw per instance (opaque first, then alpha-tested; PSOs switch only between those groups).
    - **Depth pre-pass** (`Renderer::BeginDepthPrepass()`, depth only): every draw writes its depth with no pixel shader (alpha-tested ones run a small shader that only discards). Shared, `precise` vertex math keeps the depths bit-identical to the next pass's.
-   - **Forward** (`Renderer::BeginScenePass()`): the draws again, depth test EQUAL and no depth writes, so the pixel shader runs once per visible pixel. It samples the material (`SampleMaterial`) and lights it (`ShadeSurface` in `shaders/common/Lighting.hlsli`).
+   - **Forward** (`Renderer::BeginScenePass()`): the draws again, depth test EQUAL and no depth writes, so the pixel shader runs once per visible pixel. It samples the material (`SampleMaterial`) and lights it (`ShadeSurface` in `shaders/common/Shading.hlsli`).
    - **Deferred** (`Renderer::BeginGBufferPass()`): the same EQUAL draws write the material into four G-buffer render targets instead. `Renderer::BeginDeferredPass()` then makes the G-buffer and depth buffer readable (RENDER_TARGET / DEPTH_STENCIL_WRITE → DIRECT_QUEUE_SHADER_RESOURCE), and `DeferredPass` draws one fullscreen triangle that rebuilds each pixel's world position from depth and calls the same `ShadeSurface`.
    - Either way, pixels are shaded with the glTF metallic-roughness BRDF: sun (diffuse + GGX specular) plus a sky/ground ambient (diffuse + reflection, darkened by the occlusion map) plus emission, plus the point lights (every one, or only the pixel's cluster's list). The sun's visibility comes from the shadow map (slope-scaled bias, normal offset, PCF) or, with **Lighting → Ray traced**, from one `RayQuery` shadow ray per pixel against the TLAS. In ray-traced mode the shadow map pass is cleared but draws nothing.
    - **Light markers** (`Renderer::BeginOverlayPass()`, which turns a read depth buffer back into a depth target): one `DrawInstanced(6, lightCount)`, a camera-facing square per light built in the vertex shader, blended additively and hidden by closer geometry.

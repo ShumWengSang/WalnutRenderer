@@ -2,12 +2,10 @@
 // The engine's first compute shader: no vertices, no pixels, just threads. Dispatch(N) runs N groups of [numthreads]
 // threads; each thread finds its own job from SV_DispatchThreadID (here: which cluster it handles).
 
-#define RAYTRACED_SHADOWS 0 // Lighting.hlsli is only included for the PointLight layout
-
 #include "common/Bindless.hlsli"
 #include "common/Clusters.hlsli"
 #include "common/FrameConstants.hlsli"
-#include "common/Lighting.hlsli"
+#include "common/PointLight.hlsli"
 
 // Root constants at b0. Must match ClusterBuildConstants in ClusterGrid.cpp.
 struct DrawConstants

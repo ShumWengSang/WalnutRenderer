@@ -5,11 +5,9 @@
 // so there is no vertex buffer at all. Drawn after the scene with additive blending (the glow adds to what's behind)
 // and the depth test on but no depth writes: walls in front of a lamp hide its marker.
 
-#define RAYTRACED_SHADOWS 0 // Lighting.hlsli is only included for the PointLight layout
-
 #include "common/Bindless.hlsli"
 #include "common/FrameConstants.hlsli"
-#include "common/Lighting.hlsli"
+#include "common/PointLight.hlsli"
 
 // Root constants at b0. Must match LightMarkerDrawConstants in LightMarkerPass.cpp.
 struct DrawConstants
