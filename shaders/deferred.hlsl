@@ -3,7 +3,7 @@
 // only where its inputs come from differs.
 
 #ifndef RAYTRACED_SHADOWS
-#define RAYTRACED_SHADOWS 0 // DeferredPass compiles a second variant with 1 (shadow rays), like ScenePass
+#define RAYTRACED_SHADOWS 0 // DeferredPass compiles a second variant with 1 (shadow rays, sun and/or points), like ScenePass
 #endif
 
 #include "common/Bindless.hlsli"

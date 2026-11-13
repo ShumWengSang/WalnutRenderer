@@ -20,7 +20,7 @@ namespace walnut
     class UploadContext;
     struct Scene;
 
-    // What the scene shader outputs. Values must match scene.hlsl.
+    // What the scene shaders output. Values must match shaders/common/DebugViews.hlsli.
     enum class SceneDebugView : uint32_t
     {
         Lit = 0,          // base color lit by the sun (Lambert diffuse) plus ambient

@@ -16,7 +16,7 @@ namespace walnut
     {
         ID3D12Device10* d3d = device.Get();
 
-        // No DENY_SHADER_RESOURCE (unlike the main depth buffer): this depth texture is meant to be sampled.
+        // No DENY_SHADER_RESOURCE: this depth texture is meant to be sampled.
         const CD3DX12_HEAP_PROPERTIES heapProps(D3D12_HEAP_TYPE_DEFAULT);
         const CD3DX12_RESOURCE_DESC1 desc = CD3DX12_RESOURCE_DESC1::Tex2D(
             kResourceFormat, size, size, 1 /*array size*/, 1 /*mip levels*/, 1 /*samples*/, 0,

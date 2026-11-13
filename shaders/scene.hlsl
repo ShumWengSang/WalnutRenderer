@@ -5,7 +5,7 @@
 #define ALPHA_TEST 0 // ScenePass compiles the pixel shader twice: with ALPHA_TEST=1 for alpha-mask materials
 #endif
 #ifndef RAYTRACED_SHADOWS
-#define RAYTRACED_SHADOWS 0 // 1: sun shadows from a ray query against the TLAS instead of the shadow map
+#define RAYTRACED_SHADOWS 0 // 1: the variant that can trace shadow rays (sun and/or point lights, per frame constants)
 #endif
 
 #include "common/Bindless.hlsli"

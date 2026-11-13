@@ -35,7 +35,7 @@ namespace walnut
         bool IsSrgb() const { return content == MipContent::Srgb; }
     };
 
-    // How a material's alpha is used (glTF alphaMode). Values must match scene.hlsl.
+    // How a material's alpha is used (glTF alphaMode). Values must match shaders/common/SceneData.hlsli.
     enum class AlphaMode : uint32_t
     {
         Opaque = 0, // alpha ignored

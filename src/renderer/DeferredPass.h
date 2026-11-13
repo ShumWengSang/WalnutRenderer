@@ -27,7 +27,8 @@ namespace walnut
     class DeferredPass
     {
     public:
-        // With raytracingSupported, a second pipeline traces the sun's shadow rays (RAYTRACED_SHADOWS=1).
+        // With raytracingSupported, a second pipeline can trace shadow rays (RAYTRACED_SHADOWS=1): the sun's, the
+        // point lights', or both, as the frame constants choose.
         DeferredPass(Device& device, const ShaderCompiler& compiler, std::filesystem::path shaderPath,
                      ID3D12RootSignature* rootSignature, DXGI_FORMAT outputFormat, bool raytracingSupported);
 

@@ -383,7 +383,8 @@ ShadingResult ShadeSurface(float3 worldPosition, MaterialSample mat, bool compar
                     + environmentBrdf * HemisphereLight(reflected, surface.alpha)) * mat.occlusion;
 
     // Point lights: the same BRDF as the sun, but each light has its own direction and gets weaker with distance.
-    // No shadows: their light goes through walls. Lights out of range or behind the surface are skipped.
+    // Their shadows come from cube maps or rays (AddPointLight, Step 6). Lights out of range or behind the surface are
+    // skipped.
     //   Brute force (L1): every pixel visits every light. The loop is the same for the whole screen, so a wave of
     //                     pixels reads each light together (one fetch for all of them).
     //   Clustered (L4):   the pixel looks up its cluster (ClusterOf: screen tile + depth slice) and visits only the
@@ -469,7 +470,6 @@ bool SharedViewColor(uint view, float3 worldPosition, MaterialSample mat, Shadin
     else if (view == kViewSunSpecular)      color = shading.sunSpecular;
     else if (view == kViewAmbient)          color = shading.ambient;
     else if (view == kViewPointLights)      color = shading.pointLights;
-    // Shadowed lamps' visibility: white = lit, black = blocked, dark blue = no shadowed lamp reaches this point.
     else if (view == kViewPointShadowDifference)
     {
         // Cube maps vs rays, for the lamps that have a cube: the same colors as the sun's difference view (red: only
@@ -477,6 +477,7 @@ bool SharedViewColor(uint view, float3 worldPosition, MaterialSample mat, Shadin
         const float3 c = shading.pointShadowCompare;
         color = c.z > 0.0f ? ShadowDifferenceColor(c.y / c.z, c.x / c.z) : float3(0.03f, 0.05f, 0.15f);
     }
+    // Shadowed lamps' visibility: white = lit, black = blocked, dark blue = no shadowed lamp reaches this point.
     else if (view == kViewPointShadows)     color = shading.pointShadow < 0.0f ? float3(0.03f, 0.05f, 0.15f) : shading.pointShadow.xxx;
     else if (view == kViewSunShadow)        color = shading.shadow.xxx;
     else if (view == kViewShadowDifference)

@@ -28,12 +28,20 @@ namespace walnut
     // Owns the core D3D12 objects and drives the per-frame command list.
     //
     //   renderer.BeginFrame(clearColor);   // waits for this frame slot; scene color + depth cleared
-    //   renderer.SetFrameConstants(...);   // camera + lights at b2 for every pass
-    //   ... shadow map pass ...            //   (its own depth target)
-    //   renderer.BeginDepthPrepass();      // optional: camera depth only, no color target
+    //   renderer.SetFrameConstants(...);   // camera + lights at b2 for every pass (graphics and compute)
+    //   ... compute (light clusters) ...
+    //   ... shadow map + cube shadow passes ...  // (their own depth targets)
+    //   renderer.BeginDepthPrepass();      // camera depth only, no color target (optional for forward)
     //   ... depth pre-pass ...
-    //   renderer.BeginScenePass();         // scene color + depth bound
-    //   ... draw the 3D scene ...          //   (into the HDR scene color target, not the back buffer)
+    //   either forward:
+    //     renderer.BeginScenePass();       // scene color + depth bound
+    //     ... draw the 3D scene ...        //   (into the HDR scene color target, not the back buffer)
+    //   or deferred:
+    //     renderer.BeginGBufferPass();     // the G-buffer's 4 targets + depth
+    //     ... G-buffer draws ...
+    //     renderer.BeginDeferredPass();    // G-buffer + depth readable; scene color is the target
+    //     ... fullscreen lighting ...
+    //   renderer.BeginOverlayPass();       // optional: scene color + depth again (light markers)
     //   renderer.BeginBackBufferPass();    // scene color becomes readable; back buffer (_SRGB view) is the target
     //   ... tonemap pass ...
     //   renderer.BeginUiPass();            // back buffer's plain (UNORM) view is the target

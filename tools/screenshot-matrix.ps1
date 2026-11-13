@@ -57,10 +57,12 @@ foreach ($v in $views) {
 }
 
 $failed = 0
+$ran = 0
 foreach ($shot in $Shots) {
     $parts = $shot -split ' ', 2
     $name = $parts[0]
     if ($name -notlike $Filter) { continue }
+    $ran++
     $argList = @($common) + @($parts[1] -split ' ' | Where-Object { $_ }) + "--screenshot=$(Join-Path $OutDir "$name.png")"
     if ($GpuValidation) { $argList += '--gpu-validation' }
     $p = Start-Process $exe -ArgumentList $argList -WorkingDirectory (Split-Path $exe) -PassThru -Wait -WindowStyle Normal
@@ -74,5 +76,5 @@ foreach ($shot in $Shots) {
         Write-Verbose "ok   $name"
     }
 }
-Write-Host "$($Shots.Count) shots -> $OutDir, $failed failed"
+Write-Host "$ran shots -> $OutDir, $failed failed"
 if ($failed) { exit 1 }

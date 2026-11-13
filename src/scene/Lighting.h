@@ -12,7 +12,7 @@ namespace walnut
         RayTraced = 2, // every lamp: one shadow ray per lamp that reaches the pixel (needs inline ray tracing)
     };
 
-    // How surfaces respond to light. Values must match scene.hlsl.
+    // How surfaces respond to light. Values must match shaders/common/DebugViews.hlsli.
     enum class ShadingModel : uint32_t
     {
         Lambert = 0, // matte only: baseColor / pi (Step 1-2)
@@ -48,7 +48,7 @@ namespace walnut
         int pointShadowBudget = 16;
         PointShadowTechnique pointShadowTechnique = PointShadowTechnique::CubeMaps;
 
-        // Shadow-map bias, in shadow-map texels (see SunShadow in scene.hlsl).
+        // Shadow-map bias, in shadow-map texels (see SunShadow in shaders/common/Lighting.hlsli).
         float shadowConstantBias = 0.5f;
         float shadowSlopeBias = 1.0f;
         float shadowNormalOffset = 1.0f;

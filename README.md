@@ -138,7 +138,7 @@ The code uses WinPixEventRuntime (`src/gfx/Pix.h`). `USE_PIX` is defined in ever
 | Timeline | Events |
 |---|---|
 | CPU | `Frame` › `PumpMessages`, `Update + UI`, `Render` › `Wait for frame fence`, `ImGui::Render`, `Present` |
-| GPU (command list) | `Frame` › `Clear scene`, `ShadowMap` › `Shadow casters`, `ScenePass`, `Tonemap`, `ImGui` |
+| GPU (command list) | `Frame` › `Clear scene`, `Light clusters`, `ShadowMap` › `Shadow casters`, `Point shadows`, `Depth pre-pass`, `ScenePass` or `G-buffer` + `Deferred lighting`, `Light markers`, `Tonemap`, `ImGui` |
 | Counter | `Frame time (ms)`, recorded with `PIXReportCounter` every frame |
 
 Keep event names constant, with no frame numbers formatted into them. PIX groups executions by name, so a name that changes every frame creates a separate event each frame and breaks per-event statistics.
