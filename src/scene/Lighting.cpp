@@ -14,17 +14,16 @@ namespace walnut
         return { cosElevation * std::sin(sunAzimuth), std::sin(sunElevation), cosElevation * std::cos(sunAzimuth) };
     }
 
-    float GetSunShadowExtent(const XMFLOAT3& boundsMin, const XMFLOAT3& boundsMax)
+    float GetSunShadowExtent(const Aabb& bounds)
     {
-        const XMVECTOR diagonal = XMLoadFloat3(&boundsMax) - XMLoadFloat3(&boundsMin);
-        return std::max(XMVectorGetX(XMVector3Length(diagonal)), 0.01f);
+        return std::max(bounds.Diagonal(), 0.01f);
     }
 
-    XMMATRIX SceneLighting::GetSunViewProjection(const XMFLOAT3& boundsMin, const XMFLOAT3& boundsMax) const
+    XMMATRIX SceneLighting::GetSunViewProjection(const Aabb& bounds) const
     {
-        const float extent = GetSunShadowExtent(boundsMin, boundsMax);
+        const float extent = GetSunShadowExtent(bounds);
         const float radius = extent * 0.5f;
-        const XMVECTOR center = (XMLoadFloat3(&boundsMin) + XMLoadFloat3(&boundsMax)) * 0.5f;
+        const XMVECTOR center = (XMLoadFloat3(&bounds.min) + XMLoadFloat3(&bounds.max)) * 0.5f;
         const XMFLOAT3 sunDirection = GetSunDirection();
         const XMVECTOR towardsSun = XMLoadFloat3(&sunDirection);
 

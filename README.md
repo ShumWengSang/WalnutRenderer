@@ -122,10 +122,11 @@ src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapCha
                           Buffer, Texture, UploadContext (staging ring), FrameAllocator (per-frame constants),
                           MipChain, ShaderCompiler, PipelineBuilder (+ ShaderReloadable: F5), Pix, Views (view descriptions), Barriers (named barrier states +
                           BarrierBatch)
-src/renderer/             Renderer (frames in flight, frame constants, pass setup), ScenePass, DebugViews, ShadowMap,
+src/renderer/             Renderer (frames in flight, frame constants, pass setup), SceneGpuData (the scene's buffers,
+                          textures and draws), ScenePass (its PSOs, one recipe per way of drawing it), DebugViews, ShadowMap,
                           AccelerationStructures (BLAS/TLAS), GBuffer, DeferredPass, LightBuffer, ClusterGrid,
                           LightMarkerPass, PointShadowMaps, TonemapPass
-src/scene/                Camera, fly controller, lighting, point lights, glTF loading (cgltf) into a flat Scene, image decoding (stb_image)
+src/scene/                Camera, fly controller, lighting, point lights, bounds (Aabb), glTF loading (cgltf) into a flat Scene, image decoding (stb_image)
 src/ui/                   ImGuiLayer (Win32 + DX12 backends)
 tools/                    fetch-assets.ps1 (download glTF models), pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher),
                           screenshot-matrix.ps1 + compare-images.ps1 (before/after image comparisons)

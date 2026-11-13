@@ -6,6 +6,7 @@
 #include "core/Timer.h"
 #include "renderer/AccelerationStructures.h"
 #include "renderer/ClusterGrid.h"
+#include "renderer/SceneGpuData.h"
 #include "renderer/ScenePass.h"
 #include "renderer/ShadowMap.h"
 #include "renderer/DeferredPass.h"
@@ -51,7 +52,7 @@ namespace walnut
         void DrawStatsOverlay() const;
         void DrawPixUI();
         void ReloadShaders();
-        // Every pass whose shaders F5 recompiles (the scene pass only once a scene is loaded).
+        // Every pass whose shaders F5 recompiles.
         std::vector<ShaderReloadable*> GetShaderReloadables() const;
         void RequestGpuCapture();
         // The names --set and --list-settings know (core/SettingsRegistry.h).
@@ -73,7 +74,8 @@ namespace walnut
         Input m_input;
         std::unique_ptr<Renderer> m_renderer;
         std::unique_ptr<ShaderCompiler> m_shaderCompiler;
-        std::unique_ptr<ScenePass> m_scenePass; // null when no scene loaded
+        std::unique_ptr<SceneGpuData> m_sceneData; // null when no scene loaded
+        std::unique_ptr<ScenePass> m_scenePass;
         std::unique_ptr<ShadowMap> m_shadowMap;
         std::unique_ptr<AccelerationStructures> m_accelerationStructures; // null without inline ray tracing support
         static constexpr uint32_t kShadowMapSize = 2048;

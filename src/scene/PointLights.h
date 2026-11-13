@@ -1,5 +1,6 @@
 #pragma once
 
+#include "scene/Bounds.h"
 #include "shared/Constants.h"
 
 #include <DirectXMath.h>
@@ -27,7 +28,7 @@ namespace walnut
 
         // Places kMaxLights lamps inside the given bounds: across most of the floor area, between 10% and 45% of the
         // height (where the floor and walls are, not up in the roof).
-        void Generate(const DirectX::XMFLOAT3& boundsMin, const DirectX::XMFLOAT3& boundsMax);
+        void Generate(const Aabb& bounds);
 
         // Writes the first 'count' lamps (at most kMaxLights) for this moment. 'animate' bobs each lamp up and down
         // by 15% of its range, each at its own phase.

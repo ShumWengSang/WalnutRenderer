@@ -19,13 +19,15 @@ namespace walnut
         }
     }
 
-    void PointLights::Generate(const DirectX::XMFLOAT3& boundsMin, const DirectX::XMFLOAT3& boundsMax)
+    void PointLights::Generate(const Aabb& bounds)
     {
+        const DirectX::XMFLOAT3& boundsMin = bounds.min;
+        const DirectX::XMFLOAT3& boundsMax = bounds.max;
         std::mt19937 random(1234);
         std::uniform_real_distribution<float> unit(0.0f, 1.0f);
         const auto between = [&](float a, float b) { return a + (b - a) * unit(random); };
 
-        const DirectX::XMFLOAT3 size{ boundsMax.x - boundsMin.x, boundsMax.y - boundsMin.y, boundsMax.z - boundsMin.z };
+        const DirectX::XMFLOAT3 size = bounds.Size();
         m_lamps.resize(kMaxLights);
         for (Lamp& lamp : m_lamps)
         {

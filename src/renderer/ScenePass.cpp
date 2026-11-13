@@ -1,61 +1,20 @@
 #include "renderer/ScenePass.h"
 
-#include "core/Log.h"
-#include "core/StringUtils.h"
 #include "gfx/Device.h"
-#include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
 #include "gfx/RootSignature.h"
-#include "gfx/ShaderCompiler.h"
-#include "gfx/UploadContext.h"
-#include "gfx/Views.h"
 #include "renderer/GBuffer.h"
+#include "renderer/PointShadowMaps.h"
+#include "renderer/SceneGpuData.h"
 #include "renderer/ShadowMap.h"
-#include "scene/Scene.h"
 
-#include <algorithm>
-#include <array>
-#include <cfloat>
+#include <format>
+#include <string>
 
 namespace walnut
 {
     namespace
     {
-        // One element of the instance buffer. Must match struct Instance in scene.hlsl.
-        struct InstanceGpuData
-        {
-            DirectX::XMFLOAT4X4 world;
-            // Normals can't use 'world' when it scales unevenly (they'd lean towards the stretched axis); they need
-            // the inverse-transpose of it. Computed once here instead of per vertex.
-            DirectX::XMFLOAT4X4 normalMatrix;
-            uint32_t materialIndex;
-            uint32_t firstIndex; // where its triangles start in the index buffer (ray hits look up their UVs from it)
-            uint32_t padding[2]; // keeps the stride a multiple of 16 bytes, which GPUs read most efficiently
-        };
-        static_assert(sizeof(InstanceGpuData) == 144);
-
-        // One element of the material buffer. Must match struct Material in scene.hlsl.
-        struct MaterialGpuData
-        {
-            DirectX::XMFLOAT4 baseColorFactor;
-            DirectX::XMFLOAT3 emissiveFactor;
-            float metallicFactor;
-            float roughnessFactor;
-            float alphaCutoff;
-            uint32_t alphaMode; // AlphaMode
-            uint32_t doubleSided;
-            // Bindless SRV indices, or kNoTexture.
-            uint32_t baseColorTexture;
-            uint32_t metallicRoughnessTexture;
-            uint32_t normalTexture;
-            uint32_t occlusionTexture;
-            uint32_t emissiveTexture;
-            float normalScale;
-            float occlusionStrength;
-            uint32_t padding;
-        };
-        static_assert(sizeof(MaterialGpuData) == 80);
-
         // Root constants (b0). Must match DrawConstants in scene.hlsl.
         struct SceneDrawConstants
         {
@@ -69,367 +28,242 @@ namespace walnut
         };
         static_assert(sizeof(SceneDrawConstants) <= kNumDrawConstants * sizeof(uint32_t));
         constexpr uint32_t kInstanceIndexConstant = offsetof(SceneDrawConstants, instanceIndex) / sizeof(uint32_t);
+
+        enum class PixelShader
+        {
+            DepthOnly, // none for opaque draws (the rasterizer writes depth by itself); PSDepthAlphaTest for masked ones
+            Lit,       // PSMain: the material, lit (variants: ALPHA_TEST, RAYTRACED_SHADOWS)
+            GBuffer,   // PSGBuffer: the material into the G-buffer
+        };
+        enum class RenderTargets { None, SceneColor, GBuffer };
+        enum class DepthTarget { Scene, SunShadowMap, PointShadowMap };
+
+        // How to build the PSOs of one way of drawing the scene. Every recipe gets one PSO per cull mode (back /
+        // none), times the variants it has: alpha test (the masked materials' shaders) and ray-traced shadows.
+        struct PassRecipe
+        {
+            ScenePass::Kind kind;
+            const wchar_t* name; // debug name prefix
+            const wchar_t* vs;
+            const wchar_t* vsAlphaTest;
+            PixelShader ps;
+            D3D12_COMPARISON_FUNC depthFunc;
+            bool depthWrite;
+            RenderTargets targets;
+            DepthTarget depth;
+            bool alphaVariant;
+            bool raytracedVariant;
+        };
+
+        // In ScenePass::Kind order. Reversed-Z: GREATER = closer.
+        constexpr PassRecipe kRecipes[] = {
+            // The sun's shadow map: depth only. Alpha-tested casters need a small pixel shader that discards the
+            // see-through texels of the leaf texture.
+            { ScenePass::Kind::SunShadow, L"ShadowPSO", L"VSShadow", L"VSShadowAlphaTest", PixelShader::DepthOnly,
+              D3D12_COMPARISON_FUNC_GREATER, true, RenderTargets::None, DepthTarget::SunShadowMap, true, false },
+            // A face of a point light's cube shadow map (M1): the same, with the face's camera from b1.
+            { ScenePass::Kind::PointShadow, L"PointShadowPSO", L"VSPointShadow", L"VSPointShadowAlphaTest", PixelShader::DepthOnly,
+              D3D12_COMPARISON_FUNC_GREATER, true, RenderTargets::None, DepthTarget::PointShadowMap, true, false },
+            // The depth pre-pass: the same, from the camera into the scene's depth buffer.
+            { ScenePass::Kind::DepthPrepass, L"DepthPrepassPSO", L"VSDepthPrepass", L"VSDepthPrepassAlphaTest", PixelShader::DepthOnly,
+              D3D12_COMPARISON_FUNC_GREATER, true, RenderTargets::None, DepthTarget::Scene, true, false },
+            // Forward shading without a pre-pass: the usual depth test and write.
+            { ScenePass::Kind::Forward, L"ScenePSO", L"VSMain", L"VSMain", PixelShader::Lit,
+              D3D12_COMPARISON_FUNC_GREATER, true, RenderTargets::SceneColor, DepthTarget::Scene, true, true },
+            // Forward shading after the pre-pass: the depth buffer already holds the closest surface of every pixel,
+            // so only fragments with EQUAL depth are shaded (exactly one per pixel), and depth isn't written.
+            // Alpha-tested materials don't need 'discard' any more: the pre-pass already cut their holes into the
+            // depth buffer, and EQUAL rejects the see-through fragments. So the opaque pixel shader serves both, and
+            // early-Z (testing depth before the pixel shader runs) works for everything.
+            { ScenePass::Kind::ForwardAfterPrepass, L"ScenePSO_DepthEqual", L"VSMain", L"VSMain", PixelShader::Lit,
+              D3D12_COMPARISON_FUNC_EQUAL, false, RenderTargets::SceneColor, DepthTarget::Scene, false, true },
+            // The G-buffer (deferred shading): the same EQUAL test after the pre-pass, but the pixel shader writes
+            // four render targets instead of one lit color.
+            { ScenePass::Kind::GBuffer, L"GBufferPSO", L"VSMain", L"VSMain", PixelShader::GBuffer,
+              D3D12_COMPARISON_FUNC_EQUAL, false, RenderTargets::GBuffer, DepthTarget::Scene, false, false },
+        };
+        static_assert(std::size(kRecipes) == static_cast<size_t>(ScenePass::Kind::Count));
+        static_assert([] {
+            for (size_t i = 0; i < std::size(kRecipes); ++i)
+                if (static_cast<size_t>(kRecipes[i].kind) != i)
+                    return false;
+            return true;
+        }(), "kRecipes must be in ScenePass::Kind order");
+
+        const PassRecipe& RecipeOf(ScenePass::Kind kind) { return kRecipes[static_cast<size_t>(kind)]; }
     }
 
-    ScenePass::ScenePass(Device& device, UploadContext& upload, DescriptorHeap& srvHeap, const ShaderCompiler& compiler,
-                         std::filesystem::path shaderPath, ID3D12RootSignature* rootSignature,
-                         DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat, const Scene& scene)
+    ScenePass::ScenePass(Device& device, const ShaderCompiler& compiler, std::filesystem::path shaderPath,
+                         ID3D12RootSignature* rootSignature, DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat)
         : ShaderReloadable("scene", device.Get(), compiler, rootSignature, std::move(shaderPath)),
-          m_device(device.Get()), m_srvHeap(srvHeap), m_rtvFormat(rtvFormat), m_dsvFormat(dsvFormat),
-          m_raytracingSupported(device.SupportsInlineRaytracing())
+          m_rtvFormat(rtvFormat), m_dsvFormat(dsvFormat), m_raytracingSupported(device.SupportsInlineRaytracing())
     {
-        using namespace DirectX;
-
-        // Instance data for the GPU, and one draw per instance.
-        std::vector<InstanceGpuData> instances;
-        instances.reserve(scene.instances.size());
-        for (const SceneInstance& instance : scene.instances)
-        {
-            const XMMATRIX world = XMLoadFloat4x4(&instance.world);
-            InstanceGpuData& gpu = instances.emplace_back();
-            gpu.world = instance.world;
-            XMStoreFloat4x4(&gpu.normalMatrix, XMMatrixTranspose(XMMatrixInverse(nullptr, world)));
-
-            const ScenePrimitive& primitive = scene.primitives[instance.primitiveIndex];
-            const SceneMaterial& material = scene.materials[primitive.materialIndex];
-            gpu.materialIndex = primitive.materialIndex;
-            gpu.firstIndex = primitive.firstIndex;
-            // World-space bounds: the box around the primitive's 8 transformed corners (for culling).
-            XMVECTOR boundsMin = XMVectorReplicate(FLT_MAX), boundsMax = XMVectorReplicate(-FLT_MAX);
-            for (int corner = 0; corner < 8; ++corner)
-            {
-                const XMVECTOR p = XMVector3TransformCoord(
-                    XMVectorSet((corner & 1) ? primitive.boundsMax.x : primitive.boundsMin.x,
-                                (corner & 2) ? primitive.boundsMax.y : primitive.boundsMin.y,
-                                (corner & 4) ? primitive.boundsMax.z : primitive.boundsMin.z, 1.0f), world);
-                boundsMin = XMVectorMin(boundsMin, p);
-                boundsMax = XMVectorMax(boundsMax, p);
-            }
-            DrawItem& draw = m_draws.emplace_back(DrawItem{ primitive.indexCount, primitive.firstIndex,
-                                                            static_cast<uint32_t>(m_draws.size()), material.doubleSided,
-                                                            material.alphaMode == AlphaMode::Mask, {}, {} });
-            XMStoreFloat3(&draw.boundsMin, boundsMin);
-            XMStoreFloat3(&draw.boundsMax, boundsMax);
-        }
-        // Sorted by PSO: opaque single-sided, opaque double-sided, masked single-sided, masked double-sided. Each PSO
-        // is then set once per frame. Opaque goes first on purpose: alpha-tested pixels are slower (see scene.hlsl),
-        // and drawing them last lets the depth test reject the ones hidden behind walls before they're shaded.
-        std::ranges::stable_sort(m_draws, {}, [](const DrawItem& draw) { return draw.alphaTest * 2 + draw.doubleSided; });
-
-        // Textures first: materials refer to them by their slot in the bindless heap, which is only known once
-        // each texture's SRV exists.
-        const std::vector<uint32_t> textureSrvIndex = CreateTextures(upload, scene);
-
-        std::vector<MaterialGpuData> materials;
-        const auto srv = [&](uint32_t texture) { return texture != kNoTexture ? textureSrvIndex[texture] : kNoTexture; };
-        for (const SceneMaterial& material : scene.materials)
-        {
-            materials.push_back({
-                .baseColorFactor = material.baseColorFactor,
-                .emissiveFactor = material.emissiveFactor,
-                .metallicFactor = material.metallicFactor,
-                .roughnessFactor = material.roughnessFactor,
-                .alphaCutoff = material.alphaCutoff,
-                .alphaMode = static_cast<uint32_t>(material.alphaMode),
-                .doubleSided = material.doubleSided ? 1u : 0u,
-                .baseColorTexture = srv(material.baseColorTexture),
-                .metallicRoughnessTexture = srv(material.metallicRoughnessTexture),
-                .normalTexture = srv(material.normalTexture),
-                .occlusionTexture = srv(material.occlusionTexture),
-                .emissiveTexture = srv(material.emissiveTexture),
-                .normalScale = material.normalScale,
-                .occlusionStrength = material.occlusionStrength,
-            });
-        }
-
-        // Static geometry: DEFAULT heap, filled once through the staging ring.
-        m_vertexBuffer = CreateStructuredBuffer(upload, scene.vertices.data(), static_cast<uint32_t>(scene.vertices.size()),
-                                                sizeof(SceneVertex), L"SceneVertices", m_vertexSrv);
-        m_instanceBuffer = CreateStructuredBuffer(upload, instances.data(), static_cast<uint32_t>(instances.size()),
-                                                  sizeof(InstanceGpuData), L"SceneInstances", m_instanceSrv);
-        m_materialBuffer = CreateStructuredBuffer(upload, materials.data(), static_cast<uint32_t>(materials.size()),
-                                                  sizeof(MaterialGpuData), L"SceneMaterials", m_materialSrv);
-
-        // Indices stay a real index buffer instead of being pulled by the shader too: the input assembler reads
-        // them, and the GPU can then reuse the vertex shader result of an index it has just seen (the
-        // post-transform cache). Each SV_VertexID the shader receives is the index value read from here.
-        const uint64_t indexBytes = scene.indices.size() * sizeof(uint32_t);
-        m_indexBuffer = Buffer(m_device, BufferDesc{ .size = indexBytes, .heapType = D3D12_HEAP_TYPE_DEFAULT, .name = L"SceneIndices" });
-        upload.UploadBuffer(m_indexBuffer, scene.indices.data(), indexBytes);
-
-        // The same index buffer is also readable by shaders: a ray that hits a triangle gets only its number, and
-        // must fetch the triangle's 3 vertex indices itself to look up their UVs (alpha-tested shadow rays).
-        const D3D12_SHADER_RESOURCE_VIEW_DESC indexSrvDesc =
-            StructuredBufferSrv(static_cast<uint32_t>(scene.indices.size()), sizeof(uint32_t));
-        m_indexSrv = m_srvHeap.Allocate();
-        m_device->CreateShaderResourceView(m_indexBuffer.Get(), &indexSrvDesc, m_indexSrv.cpu);
-
         BuildPipelinesOrThrow();
-        log::Info("ScenePass: {} draws ({} double-sided, {} alpha-tested), {} materials, {:.1f} MB of buffers, {} textures ({:.1f} MB) on the GPU",
-                  m_draws.size(), std::ranges::count_if(m_draws, [](const DrawItem& draw) { return draw.doubleSided; }),
-                  std::ranges::count_if(m_draws, [](const DrawItem& draw) { return draw.alphaTest; }),
-                  materials.size(), static_cast<double>(GetGpuBytes()) / (1024.0 * 1024.0), m_textures.size(),
-                  static_cast<double>(m_textureBytes) / (1024.0 * 1024.0));
     }
 
-    std::vector<uint32_t> ScenePass::CreateTextures(UploadContext& upload, const Scene& scene)
+    ScenePass::PipelineKey ScenePass::Normalize(PipelineKey key) const
     {
-        std::vector<uint32_t> srvIndices(scene.textures.size(), kNoTexture);
-        for (size_t i = 0; i < scene.textures.size(); ++i)
-        {
-            const SceneTexture& source = scene.textures[i];
-            if (source.mips.empty())
-                continue;
-
-            // The same bytes, read two ways: _SRGB makes the sampler decode sRGB to linear light (before filtering,
-            // so blending between texels is done in linear light too); plain UNORM returns the bytes / 255.
-            Texture texture(m_device, TextureDesc{
-                .width = source.mips[0].width,
-                .height = source.mips[0].height,
-                .mipLevels = static_cast<uint16_t>(source.mips.size()),
-                .format = source.IsSrgb() ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM,
-                .initialLayout = D3D12_BARRIER_LAYOUT_COPY_DEST,
-                .name = ToWide(source.name),
-            });
-
-            std::vector<TextureSubresourceData> subresources;
-            for (const ImageRgba8& mip : source.mips)
-                subresources.push_back({ .data = mip.pixels.data(), .rowPitch = mip.width * 4ull });
-            upload.UploadTexture(texture, subresources); // copied into the staging ring now; the CPU pixels can go
-
-            // What the GPU really allocates for it (rows padded, mips placed by the driver), not just width * height * 4.
-            D3D12_RESOURCE_ALLOCATION_INFO1 info{};
-            m_textureBytes += m_device->GetResourceAllocationInfo2(0, 1, &texture.GetResourceDesc(), &info).SizeInBytes;
-
-            const DescriptorHandle srv = m_srvHeap.Allocate();
-            texture.CreateSrv(m_device, srv.cpu);
-            srvIndices[i] = srv.index;
-            m_textureSrvs.push_back(srv);
-            m_textures.push_back(std::move(texture));
-        }
-        return srvIndices;
+        // Variants a recipe doesn't have fall back to its plain PSO.
+        const PassRecipe& recipe = RecipeOf(key.kind);
+        key.alphaTest = key.alphaTest && recipe.alphaVariant;
+        key.raytraced = key.raytraced && recipe.raytracedVariant && m_raytracingSupported;
+        return key;
     }
 
-    ScenePass::~ScenePass()
+    size_t ScenePass::SlotOf(PipelineKey key)
     {
-        m_srvHeap.Free(m_vertexSrv);
-        m_srvHeap.Free(m_instanceSrv);
-        m_srvHeap.Free(m_materialSrv);
-        m_srvHeap.Free(m_indexSrv);
-        for (const DescriptorHandle& srv : m_textureSrvs)
-            m_srvHeap.Free(srv);
-    }
-
-    uint64_t ScenePass::GetGpuBytes() const
-    {
-        return m_vertexBuffer.GetSize() + m_indexBuffer.GetSize() + m_instanceBuffer.GetSize() + m_materialBuffer.GetSize();
-    }
-
-    Buffer ScenePass::CreateStructuredBuffer(UploadContext& upload, const void* data, uint32_t count, uint32_t stride,
-                                             const wchar_t* name, DescriptorHandle& srv)
-    {
-        const uint64_t size = static_cast<uint64_t>(count) * stride;
-        Buffer buffer(m_device, BufferDesc{ .size = size, .heapType = D3D12_HEAP_TYPE_DEFAULT, .name = name });
-        upload.UploadBuffer(buffer, data, size);
-
-        const D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = StructuredBufferSrv(count, stride);
-        srv = m_srvHeap.Allocate();
-        m_device->CreateShaderResourceView(buffer.Get(), &srvDesc, srv.cpu);
-        return buffer;
+        return ((static_cast<size_t>(key.kind) * 2 + key.raytraced) * 2 + key.alphaTest) * 2 + key.cullNone;
     }
 
     void ScenePass::BuildPipelines(PipelineBuilder& builder)
     {
-        // One vertex shader; two pixel shaders built from the same source. The alpha-tested one is compiled with
-        // ALPHA_TEST=1, which adds the 'discard'. Opaque materials use the one without it.
-        const D3D12_SHADER_BYTECODE vs = builder.Shader(L"VSMain", ShaderStage::Vertex);
-        const D3D12_SHADER_BYTECODE ps = builder.Shader(L"PSMain", ShaderStage::Pixel);
-        const D3D12_SHADER_BYTECODE psAlphaTest = builder.Shader(L"PSMain", ShaderStage::Pixel, { { L"ALPHA_TEST", L"1" } });
-        const D3D12_SHADER_BYTECODE vsShadow = builder.Shader(L"VSShadow", ShaderStage::Vertex);
-        const D3D12_SHADER_BYTECODE vsShadowAlpha = builder.Shader(L"VSShadowAlphaTest", ShaderStage::Vertex);
-        const D3D12_SHADER_BYTECODE vsPrepass = builder.Shader(L"VSDepthPrepass", ShaderStage::Vertex);
-        const D3D12_SHADER_BYTECODE vsPrepassAlpha = builder.Shader(L"VSDepthPrepassAlphaTest", ShaderStage::Vertex);
-        const D3D12_SHADER_BYTECODE psDepthAlpha = builder.Shader(L"PSDepthAlphaTest", ShaderStage::Pixel);
-        const D3D12_SHADER_BYTECODE psGBuffer = builder.Shader(L"PSGBuffer", ShaderStage::Pixel);
-        const D3D12_SHADER_BYTECODE vsPointShadow = builder.Shader(L"VSPointShadow", ShaderStage::Vertex);
-        const D3D12_SHADER_BYTECODE vsPointShadowAlpha = builder.Shader(L"VSPointShadowAlphaTest", ShaderStage::Vertex);
-        // The ray-traced pixel shaders contain RayQuery, so they're only built where it's supported. [alphaTest]
-        D3D12_SHADER_BYTECODE psRt[2] = {};
-        for (int alphaTest = 0; alphaTest < 2 && m_raytracingSupported; ++alphaTest)
-            psRt[alphaTest] = builder.Shader(L"PSMain", ShaderStage::Pixel,
-                                             { { L"ALPHA_TEST", alphaTest ? L"1" : L"0" }, { L"RAYTRACED_SHADOWS", L"1" } });
+        const auto cullName = [](bool cullNone) { return cullNone ? L"CullNone" : L"CullBack"; };
+        const auto alphaName = [](bool alphaTest) { return alphaTest ? L"AlphaTest" : L"Opaque"; };
+        const auto shadowName = [](bool raytraced) { return raytraced ? L"RtShadow" : L"ShadowMap"; };
 
-        D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
-        desc.VS = vs;
-        desc.PS = ps;
-        desc.InputLayout = { nullptr, 0 }; // vertex pulling: no input layout
-        desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        // glTF's front faces are counter-clockwise, and they still are on screen: the loader mirrored the data (z
-        // negated), but the left-handed projection mirrors it back, so the image isn't mirrored and keeps its
-        // winding. D3D12's default treats clockwise as front, so flip that.
-        desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-        desc.RasterizerState.FrontCounterClockwise = TRUE;
-        desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
-        desc.SampleMask = UINT_MAX;
-        desc.NumRenderTargets = 1;
-        desc.RTVFormats[0] = m_rtvFormat;
-        desc.DSVFormat = m_dsvFormat;
-        desc.SampleDesc.Count = 1;
-        desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
-        desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER; // reversed-Z: greater = closer
-
-        const auto cullName = [](int cullNone) { return cullNone ? L"CullNone" : L"CullBack"; };
-        const auto alphaName = [](int alphaTest) { return alphaTest ? L"AlphaTest" : L"Opaque"; };
-        const auto shadowName = [](int raytraced) { return raytraced ? L"RtShadow" : L"ShadowMap"; };
-
-        // Every combination of pixel shader and cull mode: [alphaTest][cullNone], once per shadow technique
-        // [raytraced].
-        const int techniques = m_raytracingSupported ? 2 : 1;
-        PipelineTable pipelines;
-        for (int raytraced = 0; raytraced < techniques; ++raytraced)
-        {
-            for (int alphaTest = 0; alphaTest < 2; ++alphaTest)
+        const auto pixelShader = [&](PixelShader ps, bool alphaTest, bool raytraced) -> D3D12_SHADER_BYTECODE {
+            switch (ps)
             {
-                for (int cullNone = 0; cullNone < 2; ++cullNone)
-                {
-                    desc.PS = raytraced ? psRt[alphaTest] : (alphaTest ? psAlphaTest : ps);
-                    desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
-                    pipelines[raytraced][alphaTest][cullNone] = builder.Graphics(
-                        desc, std::format(L"ScenePSO_{}_{}_{}", shadowName(raytraced), alphaName(alphaTest), cullName(cullNone)));
-                }
+            case PixelShader::DepthOnly:
+                return alphaTest ? builder.Shader(L"PSDepthAlphaTest", ShaderStage::Pixel) : D3D12_SHADER_BYTECODE{};
+            case PixelShader::GBuffer:
+                return builder.Shader(L"PSGBuffer", ShaderStage::Pixel);
+            case PixelShader::Lit:
+                // One source, compiled per variant: ALPHA_TEST=1 adds the 'discard'; RAYTRACED_SHADOWS=1 adds the
+                // RayQuery shadow rays (which needs ray tracing support).
+                if (raytraced)
+                    return builder.Shader(L"PSMain", ShaderStage::Pixel,
+                                          { { L"ALPHA_TEST", alphaTest ? L"1" : L"0" }, { L"RAYTRACED_SHADOWS", L"1" } });
+                if (alphaTest)
+                    return builder.Shader(L"PSMain", ShaderStage::Pixel, { { L"ALPHA_TEST", L"1" } });
+                return builder.Shader(L"PSMain", ShaderStage::Pixel);
             }
-        }
-
-        // After a depth pre-pass, the depth buffer already holds the closest surface of every pixel. The scene pass
-        // then only shades fragments whose depth is EQUAL to it (exactly one per pixel), and doesn't write depth.
-        // Alpha-tested materials don't need 'discard' any more: the pre-pass already cut their holes into the depth
-        // buffer, and EQUAL rejects the see-through fragments. So the opaque pixel shader serves both, and
-        // early-Z (testing depth before the pixel shader runs) works for everything. [raytraced][cullNone]
-        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> equalPipelines;
-        desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_EQUAL;
-        desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-        for (int raytraced = 0; raytraced < techniques; ++raytraced)
-        {
-            desc.PS = raytraced ? psRt[0] : ps;
-            for (int cullNone = 0; cullNone < 2; ++cullNone)
-            {
-                desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
-                equalPipelines[raytraced][cullNone] = builder.Graphics(
-                    desc, std::format(L"ScenePSO_DepthEqual_{}_{}", shadowName(raytraced), cullName(cullNone)));
-            }
-        }
-
-        // G-buffer pipelines (deferred shading): the same EQUAL test after the pre-pass, but the pixel shader
-        // writes four render targets (the G-buffer's formats, in SV_Target order) instead of one lit color.
-        std::array<ComPtr<ID3D12PipelineState>, 2> gbufferPipelines;
-        desc.PS = psGBuffer;
-        desc.NumRenderTargets = GBuffer::kCount;
-        for (uint32_t i = 0; i < GBuffer::kCount; ++i)
-            desc.RTVFormats[i] = GBuffer::kFormats[i];
-        for (int cullNone = 0; cullNone < 2; ++cullNone)
-        {
-            desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
-            gbufferPipelines[cullNone] = builder.Graphics(desc, std::format(L"GBufferPSO_{}", cullName(cullNone)));
-        }
-        for (uint32_t i = 1; i < GBuffer::kCount; ++i)
-            desc.RTVFormats[i] = DXGI_FORMAT_UNKNOWN;
-        desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER;
-        desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-
-        // Depth-only pipelines: no render targets. Opaque casters have no pixel shader at all: the rasterizer writes
-        // depth by itself, the cheapest way to draw. Alpha-tested casters need a small pixel shader that discards the
-        // see-through texels of the leaf texture. Same culling rules as the scene. [alphaTest][cullNone]
-        desc.NumRenderTargets = 0;
-        desc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
-        using DepthOnlyTable = std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2>;
-        const auto buildDepthOnly = [&](D3D12_SHADER_BYTECODE vsOpaque, D3D12_SHADER_BYTECODE vsAlpha, const wchar_t* name) {
-            DepthOnlyTable table;
-            for (int alphaTest = 0; alphaTest < 2; ++alphaTest)
-            {
-                desc.VS = alphaTest ? vsAlpha : vsOpaque;
-                desc.PS = alphaTest ? psDepthAlpha : D3D12_SHADER_BYTECODE{};
-                for (int cullNone = 0; cullNone < 2; ++cullNone)
-                {
-                    desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
-                    table[alphaTest][cullNone] = builder.Graphics(
-                        desc, std::format(L"{}_{}_{}", name, alphaName(alphaTest), cullName(cullNone)));
-                }
-            }
-            return table;
+            return {};
         };
-        // The sun's shadow map.
-        desc.DSVFormat = ShadowMap::kDepthFormat;
-        DepthOnlyTable shadowPipelines = buildDepthOnly(vsShadow, vsShadowAlpha, L"ShadowPSO");
-        // Point shadows (M1): the same depth-only drawing into a cube face, with the face's camera from b1.
-        DepthOnlyTable pointShadowPipelines = buildDepthOnly(vsPointShadow, vsPointShadowAlpha, L"PointShadowPSO");
-        // Depth pre-pass: from the camera into the scene's depth buffer.
-        desc.DSVFormat = m_dsvFormat;
-        DepthOnlyTable prepassPipelines = buildDepthOnly(vsPrepass, vsPrepassAlpha, L"DepthPrepassPSO");
 
-        if (builder.Failed())
-            return;
-        m_pipelines = std::move(pipelines);
-        m_shadowPipelines = std::move(shadowPipelines);
-        m_equalPipelines = std::move(equalPipelines);
-        m_gbufferPipelines = std::move(gbufferPipelines);
-        m_prepassPipelines = std::move(prepassPipelines);
-        m_pointShadowPipelines = std::move(pointShadowPipelines);
+        PipelineArray pipelines;
+        for (const PassRecipe& recipe : kRecipes)
+        {
+            for (int raytraced = 0; raytraced < (recipe.raytracedVariant && m_raytracingSupported ? 2 : 1); ++raytraced)
+            {
+                for (int alphaTest = 0; alphaTest < (recipe.alphaVariant ? 2 : 1); ++alphaTest)
+                {
+                    for (int cullNone = 0; cullNone < 2; ++cullNone)
+                    {
+                        D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
+                        desc.VS = builder.Shader(alphaTest ? recipe.vsAlphaTest : recipe.vs, ShaderStage::Vertex);
+                        desc.PS = pixelShader(recipe.ps, alphaTest, raytraced);
+                        desc.InputLayout = { nullptr, 0 }; // vertex pulling: no input layout
+                        desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+                        // glTF's front faces are counter-clockwise, and they still are on screen: the loader mirrored
+                        // the data (z negated), but the left-handed projection mirrors it back, so the image isn't
+                        // mirrored and keeps its winding. D3D12's default treats clockwise as front, so flip that.
+                        // Double-sided materials (and "Back-face culling" off) use the CullNone PSOs.
+                        desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+                        desc.RasterizerState.FrontCounterClockwise = TRUE;
+                        desc.RasterizerState.CullMode = cullNone ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
+                        desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+                        desc.SampleMask = UINT_MAX;
+                        desc.SampleDesc.Count = 1;
+                        desc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+                        desc.DepthStencilState.DepthFunc = recipe.depthFunc;
+                        desc.DepthStencilState.DepthWriteMask = recipe.depthWrite ? D3D12_DEPTH_WRITE_MASK_ALL
+                                                                                  : D3D12_DEPTH_WRITE_MASK_ZERO;
+                        switch (recipe.targets)
+                        {
+                        case RenderTargets::None:
+                            break;
+                        case RenderTargets::SceneColor:
+                            desc.NumRenderTargets = 1;
+                            desc.RTVFormats[0] = m_rtvFormat;
+                            break;
+                        case RenderTargets::GBuffer:
+                            // The G-buffer's formats, in SV_Target order.
+                            desc.NumRenderTargets = GBuffer::kCount;
+                            for (uint32_t i = 0; i < GBuffer::kCount; ++i)
+                                desc.RTVFormats[i] = GBuffer::kFormats[i];
+                            break;
+                        }
+                        switch (recipe.depth)
+                        {
+                        case DepthTarget::Scene: desc.DSVFormat = m_dsvFormat; break;
+                        case DepthTarget::SunShadowMap: desc.DSVFormat = ShadowMap::kDepthFormat; break;
+                        case DepthTarget::PointShadowMap: desc.DSVFormat = PointShadowMaps::kDepthFormat; break;
+                        }
+
+                        std::wstring name = recipe.name;
+                        if (recipe.raytracedVariant)
+                            name += std::format(L"_{}", shadowName(raytraced));
+                        if (recipe.alphaVariant)
+                            name += std::format(L"_{}", alphaName(alphaTest));
+                        name += std::format(L"_{}", cullName(cullNone));
+                        const PipelineKey key{ recipe.kind, raytraced != 0, alphaTest != 0, cullNone != 0 };
+                        pipelines[SlotOf(key)] = builder.Graphics(desc, name);
+                    }
+                }
+            }
+        }
+        if (!builder.Failed())
+            m_pipelines = std::move(pipelines);
     }
-    void ScenePass::Render(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const
+
+    void ScenePass::Render(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
+                           const SceneViewSettings& settings) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"ScenePass");
-        RecordDraws(commandList, settings, DrawMode::Scene);
+        RecordDraws(commandList, scene, settings, settings.depthPrepass ? Kind::ForwardAfterPrepass : Kind::Forward);
     }
 
-    void ScenePass::RenderShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const
+    void ScenePass::RenderShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
+                                      const SceneViewSettings& settings) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"Shadow casters");
-        RecordDraws(commandList, settings, DrawMode::ShadowDepth);
+        RecordDraws(commandList, scene, settings, Kind::SunShadow);
     }
 
-    void ScenePass::RenderDepthPrepass(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const
+    void ScenePass::RenderDepthPrepass(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
+                                       const SceneViewSettings& settings) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"Depth pre-pass");
-        RecordDraws(commandList, settings, DrawMode::DepthPrepass);
+        RecordDraws(commandList, scene, settings, Kind::DepthPrepass);
     }
 
-    void ScenePass::RenderGBuffer(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const
+    void ScenePass::RenderGBuffer(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
+                                  const SceneViewSettings& settings) const
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"G-buffer");
-        RecordDraws(commandList, settings, DrawMode::GBuffer);
+        RecordDraws(commandList, scene, settings, Kind::GBuffer);
     }
 
-    uint32_t ScenePass::RenderPointShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings,
+    uint32_t ScenePass::RenderPointShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
+                                               const SceneViewSettings& settings,
                                                D3D12_GPU_VIRTUAL_ADDRESS faceViewProjection,
                                                const DirectX::XMFLOAT3& lightPosition, float lightRange) const
     {
         commandList->SetGraphicsRootConstantBufferView(RootParam::DrawData, faceViewProjection);
         const CullSphere cull{ lightPosition, lightRange };
-        return RecordDraws(commandList, settings, DrawMode::PointShadowDepth, &cull);
+        return RecordDraws(commandList, scene, settings, Kind::PointShadow, &cull);
     }
 
-    uint32_t ScenePass::RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings, DrawMode mode,
-                                    const CullSphere* cull) const
+    uint32_t ScenePass::RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
+                                    const SceneViewSettings& settings, Kind kind, const CullSphere* cull) const
     {
         // The camera and lights come from the frame constants (b2), which the renderer has already bound.
         // Everything else shared by all draws is set once here.
+        const SceneGpuData::Bindings bindings = scene.GetBindings();
         const SceneDrawConstants drawConstants{
-            .vertexBufferIndex = m_vertexSrv.index,
-            .instanceBufferIndex = m_instanceSrv.index,
-            .materialBufferIndex = m_materialSrv.index,
+            .vertexBufferIndex = bindings.vertices,
+            .instanceBufferIndex = bindings.instances,
+            .materialBufferIndex = bindings.materials,
             .debugView = static_cast<uint32_t>(settings.debugView),
             .instanceIndex = 0,
-            .indexBufferIndex = m_indexSrv.index,
+            .indexBufferIndex = bindings.indices,
             .normalMapping = static_cast<uint32_t>(settings.normalMapping),
         };
         commandList->SetGraphicsRoot32BitConstants(RootParam::DrawConstants, sizeof(drawConstants) / sizeof(uint32_t),
                                                    &drawConstants, 0);
 
-        const D3D12_INDEX_BUFFER_VIEW indexBufferView{
-            .BufferLocation = m_indexBuffer.GetGpuAddress(),
-            .SizeInBytes = static_cast<UINT>(m_indexBuffer.GetSize()),
-            .Format = DXGI_FORMAT_R32_UINT,
-        };
+        const D3D12_INDEX_BUFFER_VIEW indexBufferView = scene.GetIndexBufferView();
         commandList->IASetIndexBuffer(&indexBufferView);
         commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
@@ -437,35 +271,20 @@ namespace walnut
         // in D3D12 it always counts from 0 within a draw, ignoring StartInstanceLocation.
         ID3D12PipelineState* currentPipeline = nullptr;
         uint32_t drawCount = 0;
-        for (const DrawItem& draw : m_draws)
+        for (const SceneGpuData::DrawItem& draw : scene.GetDraws())
         {
-            if (cull)
-            {
-                // Sphere vs box: the box's closest point to the sphere's center, within the radius?
-                const float cx = std::clamp(cull->center.x, draw.boundsMin.x, draw.boundsMax.x) - cull->center.x;
-                const float cy = std::clamp(cull->center.y, draw.boundsMin.y, draw.boundsMax.y) - cull->center.y;
-                const float cz = std::clamp(cull->center.z, draw.boundsMin.z, draw.boundsMax.z) - cull->center.z;
-                if (cx * cx + cy * cy + cz * cz > cull->radius * cull->radius)
-                    continue;
-            }
+            if (cull && !draw.worldBounds.TouchesSphere(cull->center, cull->radius))
+                continue;
             // Double-sided materials are never culled; masked ones use the discarding pixel shader. The draws are
-            // sorted by these two flags, so each PSO is set once.
-            const bool alphaTest = settings.alphaTest && draw.alphaTest;
-            const bool cullNone = !settings.backfaceCulling || draw.doubleSided;
-            // The ray-traced variant traces whichever shadows are set to rays (frame constants pick sun / points).
-            const bool raytraced = (settings.raytracedShadows || settings.raytracedPointShadows) && m_raytracingSupported;
-            ID3D12PipelineState* pipeline = nullptr;
-            switch (mode)
-            {
-            case DrawMode::ShadowDepth: pipeline = m_shadowPipelines[alphaTest][cullNone].Get(); break;
-            case DrawMode::DepthPrepass: pipeline = m_prepassPipelines[alphaTest][cullNone].Get(); break;
-            case DrawMode::GBuffer: pipeline = m_gbufferPipelines[cullNone].Get(); break;
-            case DrawMode::PointShadowDepth: pipeline = m_pointShadowPipelines[alphaTest][cullNone].Get(); break;
-            case DrawMode::Scene:
-                pipeline = settings.depthPrepass ? m_equalPipelines[raytraced][cullNone].Get()
-                                                 : m_pipelines[raytraced][alphaTest][cullNone].Get();
-                break;
-            }
+            // sorted by these two flags, so each PSO is set once. The ray-traced variant traces whichever shadows
+            // are set to rays (the frame constants pick sun / points).
+            const PipelineKey key = Normalize({
+                .kind = kind,
+                .raytraced = settings.raytracedShadows || settings.raytracedPointShadows,
+                .alphaTest = settings.alphaTest && draw.alphaTest,
+                .cullNone = !settings.backfaceCulling || draw.doubleSided,
+            });
+            ID3D12PipelineState* pipeline = m_pipelines[SlotOf(key)].Get();
             if (pipeline != currentPipeline)
             {
                 commandList->SetPipelineState(pipeline);

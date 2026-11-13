@@ -7,6 +7,7 @@
 #include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
 #include "gfx/Views.h"
+#include "renderer/SceneGpuData.h"
 #include "scene/Scene.h"
 
 #include <algorithm>
@@ -38,9 +39,11 @@ namespace walnut
     }
 
     AccelerationStructures::AccelerationStructures(Device& device, CommandQueue& queue, DescriptorHeap& srvHeap,
-                                                   const Scene& scene, const Buffer& vertices, const Buffer& indices)
+                                                   const Scene& scene, const SceneGpuData& gpuData)
         : m_srvHeap(srvHeap)
     {
+        const Buffer& vertices = gpuData.GetVertexBuffer();
+        const Buffer& indices = gpuData.GetIndexBuffer();
         ID3D12Device10* d3d = device.Get();
         const auto start = std::chrono::steady_clock::now();
 

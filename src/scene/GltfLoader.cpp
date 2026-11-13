@@ -162,8 +162,8 @@ namespace walnut
                 lo = XMVectorMin(lo, XMLoadFloat3(&v.position));
                 hi = XMVectorMax(hi, XMLoadFloat3(&v.position));
             }
-            XMStoreFloat3(&out.boundsMin, lo);
-            XMStoreFloat3(&out.boundsMax, hi);
+            XMStoreFloat3(&out.bounds.min, lo);
+            XMStoreFloat3(&out.bounds.max, hi);
             return true;
         }
     }
@@ -342,17 +342,10 @@ namespace walnut
                     instance.primitiveIndex = primitiveIndex;
                     scene.mirroredInstances += mirrored;
 
-                    // World bounds: transform the 8 corners of the primitive's object-space box.
-                    const ScenePrimitive& primitive = scene.primitives[primitiveIndex];
-                    for (int corner = 0; corner < 8; ++corner)
-                    {
-                        const XMVECTOR p = XMVectorSet(corner & 1 ? primitive.boundsMax.x : primitive.boundsMin.x,
-                                                       corner & 2 ? primitive.boundsMax.y : primitive.boundsMin.y,
-                                                       corner & 4 ? primitive.boundsMax.z : primitive.boundsMin.z, 1.0f);
-                        const XMVECTOR worldPoint = XMVector3Transform(p, worldLH);
-                        sceneMin = XMVectorMin(sceneMin, worldPoint);
-                        sceneMax = XMVectorMax(sceneMax, worldPoint);
-                    }
+                    // World bounds: the box around the 8 transformed corners of the primitive's object-space box.
+                    instance.worldBounds = scene.primitives[primitiveIndex].bounds.Transformed(worldLH);
+                    sceneMin = XMVectorMin(sceneMin, XMLoadFloat3(&instance.worldBounds.min));
+                    sceneMax = XMVectorMax(sceneMax, XMLoadFloat3(&instance.worldBounds.max));
                 }
             }
             for (size_t i = 0; i < node.children_count; ++i)
@@ -362,8 +355,8 @@ namespace walnut
 
         if (!scene.instances.empty())
         {
-            XMStoreFloat3(&scene.boundsMin, sceneMin);
-            XMStoreFloat3(&scene.boundsMax, sceneMax);
+            XMStoreFloat3(&scene.bounds.min, sceneMin);
+            XMStoreFloat3(&scene.bounds.max, sceneMax);
         }
         return scene;
     }

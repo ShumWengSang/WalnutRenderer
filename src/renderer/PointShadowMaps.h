@@ -2,6 +2,7 @@
 
 #include "gfx/D3D12Common.h"
 #include "gfx/DescriptorHeap.h"
+#include "renderer/ShadowMap.h"
 #include "shared/Constants.h"
 
 #include <DirectXMath.h>
@@ -29,6 +30,8 @@ namespace walnut
         static constexpr uint32_t kFaceSize = kPointShadowFaceSize; // shared with the shaders (shared/Constants.h)
         static constexpr uint32_t kMaxShadowedLights = 32;
         static constexpr uint32_t kFaceCount = 6;
+        // The same formats as the sun's shadow map.
+        static constexpr DXGI_FORMAT kDepthFormat = ShadowMap::kDepthFormat;
         // Each face camera sees from nearScale * range to range. Closer than that, nothing casts a shadow (the light
         // would have to be inside an object). A larger near plane gives the depth buffer more precision.
         static constexpr float kNearScale = 0.05f;

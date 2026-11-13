@@ -4,6 +4,7 @@
 #include "gfx/ShaderCompiler.h"
 
 #include <filesystem>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -21,7 +22,8 @@ namespace walnut
         PipelineBuilder(ID3D12Device10* device, const ShaderCompiler& compiler, ID3D12RootSignature* rootSignature,
                         std::filesystem::path shaderPath);
 
-        // Compiles one entry point of the file. On failure: empty bytecode, and the errors are kept.
+        // Compiles one entry point of the file. On failure: empty bytecode, and the errors are kept. The same entry
+        // point with the same defines is compiled once per builder.
         D3D12_SHADER_BYTECODE Shader(const wchar_t* entryPoint, ShaderStage stage, ShaderDefines defines = {});
 
         // Creates a PSO and gives it a debug name (shown by PIX and the debug layer). The root signature is filled
@@ -39,6 +41,7 @@ namespace walnut
         ID3D12RootSignature* m_rootSignature = nullptr;
         std::filesystem::path m_shaderPath;
         std::vector<ComPtr<IDxcBlob>> m_shaders;
+        std::map<std::wstring, D3D12_SHADER_BYTECODE> m_compiled; // by entry point, stage and defines
         std::string m_errors;
         bool m_failed = false;
     };

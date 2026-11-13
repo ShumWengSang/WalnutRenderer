@@ -16,15 +16,23 @@ namespace walnut
 
     D3D12_SHADER_BYTECODE PipelineBuilder::Shader(const wchar_t* entryPoint, ShaderStage stage, ShaderDefines defines)
     {
+        std::wstring key = std::format(L"{}|{}", entryPoint, static_cast<int>(stage));
+        for (const auto& [name, value] : defines)
+            key += std::format(L"|{}={}", name, value);
+        if (const auto it = m_compiled.find(key); it != m_compiled.end())
+            return it->second;
+
         ShaderCompileResult result = m_compiler.Compile({ m_shaderPath, entryPoint, stage, std::move(defines) });
         m_errors += result.errors;
-        if (!result.Succeeded())
+        D3D12_SHADER_BYTECODE bytecode{};
+        if (result.Succeeded())
         {
-            m_failed = true;
-            return {};
+            bytecode = result.GetBytecode();
+            m_shaders.push_back(std::move(result.bytecode));
         }
-        const D3D12_SHADER_BYTECODE bytecode = result.GetBytecode();
-        m_shaders.push_back(std::move(result.bytecode));
+        else
+            m_failed = true;
+        m_compiled.emplace(std::move(key), bytecode);
         return bytecode;
     }
 

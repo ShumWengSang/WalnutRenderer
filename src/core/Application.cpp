@@ -108,25 +108,25 @@ namespace walnut
             m_shaderDir = m_exeDir / "shaders";
         log::Info("Compiling shaders from {}", ToUtf8(m_shaderDir.wstring()));
         m_shaderCompiler = std::make_unique<ShaderCompiler>(kShaderDebugInfo, m_shaderDir);
+        m_scenePass = std::make_unique<ScenePass>(m_renderer->GetDevice(), *m_shaderCompiler, m_shaderDir / "scene.hlsl",
+                                                  m_renderer->GetRootSignature(), Renderer::kSceneColorFormat,
+                                                  Renderer::kDepthFormat);
         if (!m_scene.instances.empty())
         {
-            m_scenePass = std::make_unique<ScenePass>(m_renderer->GetDevice(), m_renderer->GetUploadContext(),
-                                                      m_renderer->GetSrvHeap(), *m_shaderCompiler,
-                                                      m_shaderDir / "scene.hlsl", m_renderer->GetRootSignature(),
-                                                      Renderer::kSceneColorFormat, Renderer::kDepthFormat, m_scene);
+            m_sceneData = std::make_unique<SceneGpuData>(m_renderer->GetDevice(), m_renderer->GetUploadContext(),
+                                                         m_renderer->GetSrvHeap(), m_scene);
             // The pixels were copied into the upload ring, so the CPU copy (~130 MB for Sponza) can go.
             for (SceneTexture& texture : m_scene.textures)
                 texture.mips = {};
-            PlaceStartCamera(m_homeCamera, m_scene.boundsMin, m_scene.boundsMax);
+            PlaceStartCamera(m_homeCamera, m_scene.bounds);
             m_camera = m_homeCamera;
             // Cross the scene's bounding sphere in about 8 seconds.
-            const float diameter = DirectX::XMVectorGetX(DirectX::XMVector3Length(
-                DirectX::XMVectorSubtract(DirectX::XMLoadFloat3(&m_scene.boundsMax), DirectX::XMLoadFloat3(&m_scene.boundsMin))));
+            const float diameter = m_scene.bounds.Diagonal();
             m_cameraController.moveSpeed = std::clamp(diameter / 8.0f, 0.1f, 100.0f);
 
             // Lamps scaled to the scene: Sponza (37 m across) gets ~2.6 m of range, small pools of light that only
             // overlap where lamps are close. Intensity grows with range^2, so the pools look the same at any scale.
-            m_pointLights.Generate(m_scene.boundsMin, m_scene.boundsMax);
+            m_pointLights.Generate(m_scene.bounds);
             m_lighting.pointLightRange = 0.07f * diameter;
             m_lighting.pointLightIntensity = 0.3f * m_lighting.pointLightRange * m_lighting.pointLightRange;
         }
@@ -150,13 +150,12 @@ namespace walnut
         m_renderer->GetUploadContext().Flush();
 
         // Ray tracing acceleration structures are built from the uploaded geometry, so after the flush.
-        if (m_scenePass && m_renderer->GetDevice().SupportsInlineRaytracing())
+        if (m_sceneData && m_renderer->GetDevice().SupportsInlineRaytracing())
         {
             m_accelerationStructures = std::make_unique<AccelerationStructures>(
-                m_renderer->GetDevice(), m_renderer->GetDirectQueue(), m_renderer->GetSrvHeap(), m_scene,
-                m_scenePass->GetVertexBuffer(), m_scenePass->GetIndexBuffer());
+                m_renderer->GetDevice(), m_renderer->GetDirectQueue(), m_renderer->GetSrvHeap(), m_scene, *m_sceneData);
         }
-        else if (m_scenePass)
+        else if (m_sceneData)
             log::Warn("Inline ray tracing (tier 1.1) not supported: ray-traced features disabled");
 
         m_imgui = std::make_unique<ImGuiLayer>(*m_window, *m_renderer);
@@ -242,6 +241,7 @@ namespace walnut
         m_imgui.reset();
         m_accelerationStructures.reset();
         m_scenePass.reset();
+        m_sceneData.reset();
         m_shadowMap.reset();
         m_tonemapPass.reset();
         m_deferredPass.reset();
@@ -323,18 +323,7 @@ namespace walnut
             frameConstants.tanHalfFovY = std::tan(m_camera.verticalFov * 0.5f);
             frameConstants.tanHalfFovX = frameConstants.tanHalfFovY * aspect;
             frameConstants.clusterNear = m_camera.nearZ;
-            {
-                float farthest = m_camera.nearZ * 2.0f;
-                for (int corner = 0; corner < 8; ++corner)
-                {
-                    const DirectX::XMFLOAT3 p{ (corner & 1) ? m_scene.boundsMax.x : m_scene.boundsMin.x,
-                                               (corner & 2) ? m_scene.boundsMax.y : m_scene.boundsMin.y,
-                                               (corner & 4) ? m_scene.boundsMax.z : m_scene.boundsMin.z };
-                    const float dx = p.x - m_camera.position.x, dy = p.y - m_camera.position.y, dz = p.z - m_camera.position.z;
-                    farthest = std::max(farthest, std::sqrt(dx * dx + dy * dy + dz * dz));
-                }
-                frameConstants.clusterFar = farthest;
-            }
+            frameConstants.clusterFar = std::max(m_camera.nearZ * 2.0f, m_scene.bounds.FarthestCornerDistance(m_camera.position));
             frameConstants.clusterGridIndex = m_clusterGrid->GetGridSrvIndex();
             frameConstants.clusterLightIndicesIndex = m_clusterGrid->GetIndicesSrvIndex();
             frameConstants.clusteredLighting = m_lighting.clusteredLighting ? 1u : 0u;
@@ -364,10 +353,10 @@ namespace walnut
             frameConstants.metallicOverride = m_sceneView.metallicOverride;
             frameConstants.shadingModel = static_cast<uint32_t>(m_lighting.shadingModel);
             DirectX::XMStoreFloat4x4(&frameConstants.sunViewProjection,
-                                     m_lighting.GetSunViewProjection(m_scene.boundsMin, m_scene.boundsMax));
+                                     m_lighting.GetSunViewProjection(m_scene.bounds));
             frameConstants.shadowMapIndex = m_shadowMap->GetSrvIndex();
             frameConstants.shadowsEnabled = m_shadowsEnabled ? 1u : 0u;
-            const float shadowExtent = GetSunShadowExtent(m_scene.boundsMin, m_scene.boundsMax);
+            const float shadowExtent = GetSunShadowExtent(m_scene.bounds);
             frameConstants.shadowTexelWorldSize = shadowExtent / static_cast<float>(m_shadowMap->GetSize());
             frameConstants.shadowDepthPerMeter = 1.0f / shadowExtent;
             frameConstants.shadowConstantBias = m_lighting.shadowConstantBias;
@@ -377,19 +366,20 @@ namespace walnut
                                                                                   : static_cast<uint32_t>(m_lighting.shadowFilterRadius);
             frameConstants.tlasIndex = m_accelerationStructures ? m_accelerationStructures->GetTlasSrvIndex() : UINT32_MAX;
             frameConstants.rayAlphaTest = m_sceneView.alphaTest ? 1u : 0u;
-            if (m_scenePass)
+            if (m_sceneData)
             {
-                frameConstants.vertexBufferIndex = m_scenePass->GetVertexSrvIndex();
-                frameConstants.instanceBufferIndex = m_scenePass->GetInstanceSrvIndex();
-                frameConstants.materialBufferIndex = m_scenePass->GetMaterialSrvIndex();
-                frameConstants.indexBufferIndex = m_scenePass->GetIndexSrvIndex();
+                const SceneGpuData::Bindings bindings = m_sceneData->GetBindings();
+                frameConstants.vertexBufferIndex = bindings.vertices;
+                frameConstants.instanceBufferIndex = bindings.instances;
+                frameConstants.materialBufferIndex = bindings.materials;
+                frameConstants.indexBufferIndex = bindings.indices;
             }
 
             {
                 PIXScopedEvent(pix::kColorCpu, L"Render");
                 m_renderer->BeginFrame(m_clearColor);
                 // The point lights go into this frame's upload memory, which BeginFrame just made reusable.
-                if (m_scenePass)
+                if (m_sceneData)
                     m_pointLights.Update(GetAnimationTime(), static_cast<uint32_t>(m_lighting.pointLightCount),
                                          m_lighting.pointLightRange, m_lighting.pointLightIntensity,
                                          m_lighting.animatePointLights, m_pointLightData);
@@ -426,7 +416,7 @@ namespace walnut
 
                 // 0. Sort the point lights into the cluster grid (compute), before anything reads it. Brute force
                 //    doesn't read it (except the heat map view), so it's skipped there: a fair comparison.
-                if (m_scenePass && (m_lighting.clusteredLighting || m_sceneView.debugView == SceneDebugView::ClusterLights))
+                if (m_sceneData && (m_lighting.clusteredLighting || m_sceneView.debugView == SceneDebugView::ClusterLights))
                     m_clusterGrid->Build(commandList, m_renderer->GetFrameIndex());
 
                 // 1. Depth from the sun's point of view, into the shadow map. With ray-traced shadows the casters are
@@ -437,8 +427,8 @@ namespace walnut
                     m_shadowMap->Begin(commandList);
                     const bool needShadowMap = !m_sceneView.raytracedShadows ||
                                                m_sceneView.debugView == SceneDebugView::ShadowDifference;
-                    if (m_scenePass && needShadowMap)
-                        m_scenePass->RenderShadowDepth(commandList, m_sceneView);
+                    if (m_sceneData && needShadowMap)
+                        m_scenePass->RenderShadowDepth(commandList, *m_sceneData, m_sceneView);
                     m_shadowMap->End(commandList);
                 }
 
@@ -458,7 +448,7 @@ namespace walnut
                                                      PointShadowMaps::GetFaceViewProjection(light.position, light.range, face));
                             m_pointShadowMaps->BeginFace(commandList, slot, face);
                             m_pointShadowDraws += m_scenePass->RenderPointShadowDepth(
-                                commandList, m_sceneView, m_renderer->GetFrameAllocator().AllocateConstants(faceViewProjection),
+                                commandList, *m_sceneData, m_sceneView, m_renderer->GetFrameAllocator().AllocateConstants(faceViewProjection),
                                 light.position, light.range);
                         }
                     }
@@ -467,18 +457,18 @@ namespace walnut
 
                 // 2. The scene from the camera, into the HDR scene color target. With the depth pre-pass, depth
                 //    first: the scene pass then shades only the closest surface of each pixel.
-                const bool deferred = m_scenePass && m_sceneView.renderPath == RenderPath::Deferred;
-                if (m_scenePass && (m_sceneView.depthPrepass || deferred))
+                const bool deferred = m_sceneData && m_sceneView.renderPath == RenderPath::Deferred;
+                if (m_sceneData && (m_sceneView.depthPrepass || deferred))
                 {
                     m_renderer->BeginDepthPrepass();
-                    m_scenePass->RenderDepthPrepass(commandList, m_sceneView);
+                    m_scenePass->RenderDepthPrepass(commandList, *m_sceneData, m_sceneView);
                 }
                 if (deferred)
                 {
                     // Deferred: the draws write each visible pixel's material into the G-buffer, then one
                     // fullscreen pass reads it back.
                     m_renderer->BeginGBufferPass();
-                    m_scenePass->RenderGBuffer(commandList, m_sceneView);
+                    m_scenePass->RenderGBuffer(commandList, *m_sceneData, m_sceneView);
                     m_renderer->BeginDeferredPass();
                     const GBuffer& gbuffer = m_renderer->GetGBuffer();
                     const DeferredInputs inputs{
@@ -495,12 +485,12 @@ namespace walnut
                 else
                 {
                     m_renderer->BeginScenePass();
-                    if (m_scenePass)
-                        m_scenePass->Render(commandList, m_sceneView);
+                    if (m_sceneData)
+                        m_scenePass->Render(commandList, *m_sceneData, m_sceneView);
                 }
 
                 // Markers at the point lights: on top of the shaded scene, hidden behind closer geometry.
-                if (m_scenePass && m_lighting.showPointLightMarkers && !m_pointLightData.empty())
+                if (m_sceneData && m_lighting.showPointLightMarkers && !m_pointLightData.empty())
                 {
                     m_renderer->BeginOverlayPass();
                     m_lightMarkerPass->Render(commandList, static_cast<uint32_t>(m_pointLightData.size()),
@@ -568,11 +558,7 @@ namespace walnut
 
     std::vector<ShaderReloadable*> Application::GetShaderReloadables() const
     {
-        std::vector<ShaderReloadable*> passes = { m_tonemapPass.get(), m_deferredPass.get(), m_lightMarkerPass.get(),
-                                                  m_clusterGrid.get() };
-        if (m_scenePass)
-            passes.insert(passes.begin(), m_scenePass.get());
-        return passes;
+        return { m_scenePass.get(), m_tonemapPass.get(), m_deferredPass.get(), m_lightMarkerPass.get(), m_clusterGrid.get() };
     }
 
     void Application::RequestGpuCapture()
@@ -628,8 +614,8 @@ namespace walnut
             const SwapChain& swapChain = m_renderer->GetSwapChain();
             ImGui::Text("%.2f ms  (%.0f FPS)", m_smoothedFrameMs, m_smoothedFrameMs > 0.0f ? 1000.0f / m_smoothedFrameMs : 0.0f);
             ImGui::Text("%u x %u%s", swapChain.GetWidth(), swapChain.GetHeight(), m_renderer->GetVsync() ? ", vsync" : "");
-            if (m_scenePass)
-                ImGui::Text("%u draws, %.2f M triangles", m_scenePass->GetDrawCount(),
+            if (m_sceneData)
+                ImGui::Text("%u draws, %.2f M triangles", m_sceneData->GetDrawCount(),
                             static_cast<double>(m_scene.indices.size() / 3) / 1e6);
             ImGui::Text("Camera (%.1f, %.1f, %.1f)", m_camera.position.x, m_camera.position.y, m_camera.position.z);
             ImGui::TextDisabled("F1: hide UI");
@@ -668,7 +654,7 @@ namespace walnut
 
         // --- What you tweak most: open by default ----------------------------------------------------------------
 
-        if (m_scenePass && ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen))
+        if (m_sceneData && ImGui::CollapsingHeader("View", ImGuiTreeNodeFlags_DefaultOpen))
         {
             const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
 
@@ -783,7 +769,7 @@ namespace walnut
                 m_lighting.sunIntensity = defaults.sunIntensity;
                 m_lighting.ambientIntensity = defaults.ambientIntensity;
             }
-            if (m_scenePass && ImGui::TreeNodeEx("Point lights", ImGuiTreeNodeFlags_DefaultOpen))
+            if (m_sceneData && ImGui::TreeNodeEx("Point lights", ImGuiTreeNodeFlags_DefaultOpen))
             {
                 ImGui::SliderInt("Count", &m_lighting.pointLightCount, 0, static_cast<int>(PointLights::kMaxLights), "%d",
                                  ImGuiSliderFlags_Logarithmic);
@@ -869,7 +855,7 @@ namespace walnut
             ImGui::Checkbox("Sun shadows", &m_shadowsEnabled);
             {
                 // Ray-traced shadows need the TLAS, which exists only with inline ray tracing support.
-                const bool canTrace = m_scenePass && m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
+                const bool canTrace = m_scenePass->SupportsRaytracedShadows() && m_accelerationStructures;
                 ImGui::BeginDisabled(!canTrace);
                 int technique = m_sceneView.raytracedShadows && canTrace ? 1 : 0;
                 // "##technique" makes the ID unique: the "Shadow map" tree node below has the same visible label,
@@ -918,7 +904,7 @@ namespace walnut
             if (ImGui::TreeNode("Shadow map"))
             {
                 // The depth the sun sees: brighter = closer to the sun (reversed-Z).
-                const float extent = GetSunShadowExtent(m_scene.boundsMin, m_scene.boundsMax);
+                const float extent = GetSunShadowExtent(m_scene.bounds);
                 const uint32_t size = m_shadowMap->GetSize();
                 ImGui::Text("%u x %u, D32. Covers %.1f m: %.1f cm per texel", size, size, extent,
                             100.0f * extent / static_cast<float>(size));
@@ -976,15 +962,15 @@ namespace walnut
                             static_cast<size_t>(withMap(&SceneMaterial::emissiveTexture)));
                 ImGui::Text("%zu instances of %zu primitives", m_scene.instances.size(), m_scene.primitives.size());
                 ImGui::Text("%zu vertices, %zu triangles", m_scene.vertices.size(), m_scene.indices.size() / 3);
-                const DirectX::XMFLOAT3& lo = m_scene.boundsMin;
-                const DirectX::XMFLOAT3& hi = m_scene.boundsMax;
+                const DirectX::XMFLOAT3& lo = m_scene.bounds.min;
+                const DirectX::XMFLOAT3& hi = m_scene.bounds.max;
                 ImGui::Text("Size %.1f x %.1f x %.1f", hi.x - lo.x, hi.y - lo.y, hi.z - lo.z);
                 ImGui::SetItemTooltip("World bounds (%.2f, %.2f, %.2f) to (%.2f, %.2f, %.2f)", lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
-                if (m_scenePass)
+                if (m_sceneData)
                 {
                     ImGui::Text("GPU: %.1f MB of buffers, %u textures (%.1f MB with mips)",
-                                static_cast<double>(m_scenePass->GetGpuBytes()) / (1024.0 * 1024.0), m_scenePass->GetTextureCount(),
-                                static_cast<double>(m_scenePass->GetTextureBytes()) / (1024.0 * 1024.0));
+                                static_cast<double>(m_sceneData->GetBufferBytes()) / (1024.0 * 1024.0), m_sceneData->GetTextureCount(),
+                                static_cast<double>(m_sceneData->GetTextureBytes()) / (1024.0 * 1024.0));
                 }
                 if (m_accelerationStructures)
                 {

@@ -1,10 +1,7 @@
 #pragma once
 
-#include "gfx/Buffer.h"
 #include "gfx/D3D12Common.h"
-#include "gfx/DescriptorHeap.h"
 #include "gfx/PipelineBuilder.h"
-#include "gfx/Texture.h"
 #include "renderer/DebugViews.h"
 #include "shared/Constants.h"
 
@@ -13,15 +10,12 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
-#include <string>
-#include <vector>
 
 namespace walnut
 {
     class Device;
+    class SceneGpuData;
     class ShaderCompiler;
-    class UploadContext;
-    struct Scene;
 
     // Where the tangent frame for normal mapping comes from. Values shared with scene.hlsl (shared/Constants.h).
     enum class NormalMapping : uint32_t
@@ -53,108 +47,79 @@ namespace walnut
         bool depthPrepass = true;      // draw depth first, then shade each pixel once (depth EQUAL)
     };
 
-    // Draws a Scene: uploads its merged vertex/index arrays and an instance buffer once, then issues one
-    // DrawIndexedInstanced per instance. The vertex shader pulls vertices and instance data from the bindless heap.
+    // Draws a scene's GPU data (SceneGpuData) in each way the frame needs: forward shading, the G-buffer, the depth
+    // pre-pass and the shadow depth passes. It owns the PSOs for all of them; the vertex shader pulls vertices and
+    // instance data from the bindless heap, and each instance is one DrawIndexedInstanced.
     class ScenePass : public ShaderReloadable
     {
     public:
-        // The uploads are only recorded here; the caller must Flush() the UploadContext before drawing.
-        ScenePass(Device& device, UploadContext& upload, DescriptorHeap& srvHeap, const ShaderCompiler& compiler,
-                  std::filesystem::path shaderPath, ID3D12RootSignature* rootSignature,
-                  DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat, const Scene& scene);
-        ~ScenePass();
+        // The ways of drawing the scene. Each has its own PSOs (its recipe in ScenePass.cpp).
+        enum class Kind : uint8_t
+        {
+            SunShadow,           // depth only, into the sun's shadow map
+            PointShadow,         // depth only, into one face of a point light's cube
+            DepthPrepass,        // depth only, from the camera
+            Forward,             // shaded, depth test and write
+            ForwardAfterPrepass, // shaded, depth EQUAL to the pre-pass's, no depth writes
+            GBuffer,             // the material into the G-buffer, depth EQUAL
+            Count,
+        };
 
-        ScenePass(const ScenePass&) = delete;
-        ScenePass& operator=(const ScenePass&) = delete;
+        ScenePass(Device& device, const ShaderCompiler& compiler, std::filesystem::path shaderPath,
+                  ID3D12RootSignature* rootSignature, DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat);
 
         bool SupportsRaytracedShadows() const { return m_raytracingSupported; }
 
-        // Expects the bindless state (descriptor heap + root signature) and the frame constants to be bound already.
-        void Render(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const;
-        // Draws every instance into the bound shadow map: depth only, from the sun (frame constants' sunViewProjection).
-        void RenderShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const;
-        // Draws every instance into the bound depth buffer from the camera, depth only. With settings.depthPrepass,
+        // All of these expect the bindless state (descriptor heap + root signature) and the frame constants to be
+        // bound already.
+        void Render(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene, const SceneViewSettings& settings) const;
+        // Every instance into the bound shadow map: depth only, from the sun (frame constants' sunViewProjection).
+        void RenderShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
+                               const SceneViewSettings& settings) const;
+        // Every instance into the bound depth buffer from the camera, depth only. With settings.depthPrepass,
         // Render() must follow with the same settings: it then shades only the fragments matching this depth.
-        void RenderDepthPrepass(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const;
+        void RenderDepthPrepass(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
+                                const SceneViewSettings& settings) const;
         // Deferred shading: writes every visible pixel's material into the bound G-buffer. Needs the depth pre-pass
         // first (it tests depth EQUAL).
-        void RenderGBuffer(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings) const;
+        void RenderGBuffer(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
+                           const SceneViewSettings& settings) const;
         // One face of a point light's cube shadow map (M1): depth only, with the face camera's view-projection at b1.
         // Draws only the instances whose bounds reach the light's sphere. Returns how many draws it recorded.
-        uint32_t RenderPointShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings,
-                                        D3D12_GPU_VIRTUAL_ADDRESS faceViewProjection,
+        uint32_t RenderPointShadowDepth(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
+                                        const SceneViewSettings& settings, D3D12_GPU_VIRTUAL_ADDRESS faceViewProjection,
                                         const DirectX::XMFLOAT3& lightPosition, float lightRange) const;
 
-        uint32_t GetDrawCount() const { return static_cast<uint32_t>(m_draws.size()); }
-        uint32_t GetTextureCount() const { return static_cast<uint32_t>(m_textures.size()); }
-        uint64_t GetGpuBytes() const;     // buffers
-        uint64_t GetTextureBytes() const { return m_textureBytes; } // GPU memory of all textures, mips included
-        // The merged geometry, for building ray tracing acceleration structures from it.
-        const Buffer& GetVertexBuffer() const { return m_vertexBuffer; }
-        const Buffer& GetIndexBuffer() const { return m_indexBuffer; }
-        // Their bindless SRVs, for passes that read the scene outside its own draws (see FrameConstants).
-        uint32_t GetVertexSrvIndex() const { return m_vertexSrv.index; }
-        uint32_t GetInstanceSrvIndex() const { return m_instanceSrv.index; }
-        uint32_t GetMaterialSrvIndex() const { return m_materialSrv.index; }
-        uint32_t GetIndexSrvIndex() const { return m_indexSrv.index; }
-
     private:
-        void BuildPipelines(PipelineBuilder& builder) override;
-
-        // Everything one draw call needs: which indices, and which instance (world matrix) to place them with.
-        struct DrawItem
+        // Which PSO: the kind of drawing and its variants. Variants a kind doesn't have are ignored (Normalize).
+        struct PipelineKey
         {
-            uint32_t indexCount;
-            uint32_t firstIndex;
-            uint32_t instanceIndex;
-            bool doubleSided; // drawn without back-face culling
-            bool alphaTest;   // alpha-mask material: drawn with the discarding pixel shader
-            DirectX::XMFLOAT3 boundsMin, boundsMax; // world space (the primitive's box, transformed)
+            Kind kind;
+            bool raytraced; // the pixel shader can trace shadow rays
+            bool alphaTest; // alpha-mask materials: the shaders that discard
+            bool cullNone;  // double-sided materials, or back-face culling off
         };
+        static constexpr size_t kPipelineSlots = static_cast<size_t>(Kind::Count) * 8;
+        using PipelineArray = std::array<ComPtr<ID3D12PipelineState>, kPipelineSlots>;
 
-        Buffer CreateStructuredBuffer(UploadContext& upload, const void* data, uint32_t count, uint32_t stride,
-                                      const wchar_t* name, DescriptorHandle& srv);
-        // Uploads every loaded scene texture; returns each one's bindless SRV index (kNoTexture if it wasn't loaded).
-        std::vector<uint32_t> CreateTextures(UploadContext& upload, const Scene& scene);
-        enum class DrawMode { Scene, ShadowDepth, DepthPrepass, GBuffer, PointShadowDepth };
+        void BuildPipelines(PipelineBuilder& builder) override;
+        PipelineKey Normalize(PipelineKey key) const;
+        static size_t SlotOf(PipelineKey key);
+
         // Optional culling: only draws whose bounds touch this sphere.
         struct CullSphere
         {
             DirectX::XMFLOAT3 center;
             float radius;
         };
-        // Binds the geometry and issues every draw (or those touching 'cull'), with the PSOs for the given pass.
+        // Binds the geometry and issues every draw (or those touching 'cull'), with the PSOs of the given kind.
         // Returns how many draws it recorded.
-        uint32_t RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneViewSettings& settings, DrawMode mode,
-                             const CullSphere* cull = nullptr) const;
+        uint32_t RecordDraws(ID3D12GraphicsCommandList* commandList, const SceneGpuData& scene,
+                             const SceneViewSettings& settings, Kind kind, const CullSphere* cull = nullptr) const;
 
-        ID3D12Device10* m_device = nullptr;
-        DescriptorHeap& m_srvHeap;
         DXGI_FORMAT m_rtvFormat;
         DXGI_FORMAT m_dsvFormat;
-
-        Buffer m_vertexBuffer;   // StructuredBuffer<SceneVertex>, read by the vertex shader through m_vertexSrv
-        Buffer m_instanceBuffer; // StructuredBuffer<Instance>, read through m_instanceSrv
-        Buffer m_materialBuffer; // StructuredBuffer<Material>, read by the pixel shader through m_materialSrv
-        Buffer m_indexBuffer;    // 32-bit indices, bound the classic way (IASetIndexBuffer)
-        DescriptorHandle m_vertexSrv;    // their slots in the bindless heap
-        DescriptorHandle m_instanceSrv;
-        DescriptorHandle m_materialSrv;
-        DescriptorHandle m_indexSrv;
-        std::vector<Texture> m_textures;
-        std::vector<DescriptorHandle> m_textureSrvs;
-        uint64_t m_textureBytes = 0;
-        std::vector<DrawItem> m_draws;
-
-        // [raytracedShadows][alphaTest][cullNone]; the ray-traced half stays empty without ray tracing support.
-        using PipelineTable = std::array<std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2>, 2>;
-        PipelineTable m_pipelines;
-        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_shadowPipelines; // [alphaTest][cullNone]
-        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_prepassPipelines; // [alphaTest][cullNone]
-        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_pointShadowPipelines; // [alphaTest][cullNone]
-        // Scene pass after a depth pre-pass: depth EQUAL, no depth writes, no discard. [raytraced][cullNone]
-        std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_equalPipelines;
-        std::array<ComPtr<ID3D12PipelineState>, 2> m_gbufferPipelines; // [cullNone]; depth EQUAL, 4 render targets
         bool m_raytracingSupported = false;
+        PipelineArray m_pipelines; // by SlotOf(key); variants that weren't built stay empty
     };
 }

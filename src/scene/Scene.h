@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gfx/MipChain.h"
+#include "scene/Bounds.h"
 #include "shared/Constants.h" // kNoTexture, AlphaMode values
 
 #include <DirectXMath.h>
@@ -70,7 +71,7 @@ namespace walnut
         uint32_t firstVertex = 0; // the vertices its indices point at; the indices already include this offset
         uint32_t vertexCount = 0;
         uint32_t materialIndex = 0; // into Scene::materials; always valid
-        DirectX::XMFLOAT3 boundsMin{}, boundsMax{}; // object space
+        Aabb bounds; // object space
     };
 
     // A primitive placed in the world. A node whose mesh has 3 primitives becomes 3 instances.
@@ -78,6 +79,7 @@ namespace walnut
     {
         DirectX::XMFLOAT4X4 world; // row-vector convention (position * world), in the engine's left-handed space
         uint32_t primitiveIndex = 0;
+        Aabb worldBounds; // the primitive's box, transformed (the box around its 8 moved corners)
     };
 
     // Everything needed to draw a scene, independent of the file format it came from. CPU memory only.
@@ -89,7 +91,7 @@ namespace walnut
         std::vector<SceneTexture> textures;   // only the images some material uses, decoded
         std::vector<ScenePrimitive> primitives;
         std::vector<SceneInstance> instances;
-        DirectX::XMFLOAT3 boundsMin{}, boundsMax{}; // world space, over every instance
+        Aabb bounds; // world space, over every instance
 
         uint32_t skippedPrimitives = 0; // not triangle lists, or without positions
         uint32_t mirroredInstances = 0; // world matrix with a negative determinant: front faces flip winding

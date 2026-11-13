@@ -79,6 +79,8 @@ set(WALNUT_SOURCES
     src/renderer/PointShadowMaps.h
     src/renderer/Renderer.cpp
     src/renderer/Renderer.h
+    src/renderer/SceneGpuData.cpp
+    src/renderer/SceneGpuData.h
     src/renderer/ScenePass.cpp
     src/renderer/ScenePass.h
     src/renderer/ShadowMap.cpp
@@ -88,6 +90,7 @@ set(WALNUT_SOURCES
 
     src/scene/Assets.cpp
     src/scene/Assets.h
+    src/scene/Bounds.h
     src/scene/Camera.cpp
     src/scene/Camera.h
     src/scene/FlyCameraController.cpp

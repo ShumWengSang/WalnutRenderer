@@ -10,6 +10,7 @@ namespace walnut
 {
     class CommandQueue;
     class Device;
+    class SceneGpuData;
     struct Scene;
 
     // The scene in the form ray tracing hardware can search quickly: a two-level tree of bounding boxes.
@@ -27,10 +28,10 @@ namespace walnut
     class AccelerationStructures
     {
     public:
-        // Builds everything on the GPU and waits for it. 'vertices' and 'indices' are the scene's merged buffers
-        // (already uploaded): BLAS builds read the triangles straight from them, no copies.
+        // Builds everything on the GPU and waits for it. BLAS builds read the triangles straight from the scene's
+        // merged vertex and index buffers (already uploaded, in 'gpuData'), no copies.
         AccelerationStructures(Device& device, CommandQueue& queue, DescriptorHeap& srvHeap, const Scene& scene,
-                               const Buffer& vertices, const Buffer& indices);
+                               const SceneGpuData& gpuData);
         ~AccelerationStructures();
 
         AccelerationStructures(const AccelerationStructures&) = delete;
