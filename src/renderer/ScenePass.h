@@ -3,6 +3,7 @@
 #include "gfx/Buffer.h"
 #include "gfx/D3D12Common.h"
 #include "gfx/DescriptorHeap.h"
+#include "gfx/PipelineBuilder.h"
 #include "gfx/Texture.h"
 #include "renderer/DebugViews.h"
 #include "shared/Constants.h"
@@ -54,7 +55,7 @@ namespace walnut
 
     // Draws a Scene: uploads its merged vertex/index arrays and an instance buffer once, then issues one
     // DrawIndexedInstanced per instance. The vertex shader pulls vertices and instance data from the bindless heap.
-    class ScenePass
+    class ScenePass : public ShaderReloadable
     {
     public:
         // The uploads are only recorded here; the caller must Flush() the UploadContext before drawing.
@@ -66,10 +67,6 @@ namespace walnut
         ScenePass(const ScenePass&) = delete;
         ScenePass& operator=(const ScenePass&) = delete;
 
-        // Recompiles the shaders and rebuilds the PSOs. On failure the previous PSOs are kept.
-        // The old PSOs are released on success, so the GPU must be idle before calling this.
-        bool ReloadShaders();
-        const std::string& GetLastError() const { return m_lastError; }
         bool SupportsRaytracedShadows() const { return m_raytracingSupported; }
 
         // Expects the bindless state (descriptor heap + root signature) and the frame constants to be bound already.
@@ -102,6 +99,8 @@ namespace walnut
         uint32_t GetIndexSrvIndex() const { return m_indexSrv.index; }
 
     private:
+        void BuildPipelines(PipelineBuilder& builder) override;
+
         // Everything one draw call needs: which indices, and which instance (world matrix) to place them with.
         struct DrawItem
         {
@@ -131,9 +130,6 @@ namespace walnut
 
         ID3D12Device10* m_device = nullptr;
         DescriptorHeap& m_srvHeap;
-        const ShaderCompiler& m_compiler;
-        std::filesystem::path m_shaderPath;
-        ID3D12RootSignature* m_rootSignature = nullptr; // owned by the Renderer
         DXGI_FORMAT m_rtvFormat;
         DXGI_FORMAT m_dsvFormat;
 
@@ -160,6 +156,5 @@ namespace walnut
         std::array<std::array<ComPtr<ID3D12PipelineState>, 2>, 2> m_equalPipelines;
         std::array<ComPtr<ID3D12PipelineState>, 2> m_gbufferPipelines; // [cullNone]; depth EQUAL, 4 render targets
         bool m_raytracingSupported = false;
-        std::string m_lastError;
     };
 }

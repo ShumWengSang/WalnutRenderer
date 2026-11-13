@@ -559,13 +559,20 @@ namespace walnut
     {
         // The old PSOs may still be referenced by in-flight frames.
         m_renderer->WaitForGpu();
-        const bool sceneOk = !m_scenePass || m_scenePass->ReloadShaders();
-        const bool tonemapOk = m_tonemapPass->ReloadShaders();
-        const bool deferredOk = m_deferredPass->ReloadShaders();
-        const bool markersOk = m_lightMarkerPass->ReloadShaders();
-        const bool clustersOk = m_clusterGrid->ReloadShaders();
-        if (sceneOk && tonemapOk && deferredOk && markersOk && clustersOk)
+        bool allOk = true;
+        for (ShaderReloadable* pass : GetShaderReloadables())
+            allOk &= pass->ReloadShaders();
+        if (allOk)
             log::Info("Shaders reloaded");
+    }
+
+    std::vector<ShaderReloadable*> Application::GetShaderReloadables() const
+    {
+        std::vector<ShaderReloadable*> passes = { m_tonemapPass.get(), m_deferredPass.get(), m_lightMarkerPass.get(),
+                                                  m_clusterGrid.get() };
+        if (m_scenePass)
+            passes.insert(passes.begin(), m_scenePass.get());
+        return passes;
     }
 
     void Application::RequestGpuCapture()
@@ -649,15 +656,13 @@ namespace walnut
         ImGui::Begin("Settings");
 
         // Shader errors first: they would otherwise be easy to miss inside a closed section.
-        const std::string noError;
-        for (const std::string* error : { m_scenePass ? &m_scenePass->GetLastError() : &noError, &m_tonemapPass->GetLastError(),
-                                          &m_deferredPass->GetLastError(), &m_lightMarkerPass->GetLastError(),
-                                          &m_clusterGrid->GetLastError() })
+        for (const ShaderReloadable* pass : GetShaderReloadables())
         {
-            if (error->empty())
+            const std::string& error = pass->GetLastError();
+            if (error.empty())
                 continue;
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
-            ImGui::TextWrapped("%s", error->c_str());
+            ImGui::TextWrapped("%s", error.c_str());
             ImGui::PopStyleColor();
         }
 

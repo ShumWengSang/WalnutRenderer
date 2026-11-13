@@ -39,8 +39,8 @@ namespace walnut
 
     ClusterGrid::ClusterGrid(Device& device, DescriptorHeap& srvHeap, const ShaderCompiler& compiler,
                              std::filesystem::path shaderPath, ID3D12RootSignature* rootSignature, uint32_t framesInFlight)
-        : m_device(device.Get()), m_srvHeap(srvHeap), m_compiler(compiler), m_shaderPath(std::move(shaderPath)),
-          m_rootSignature(rootSignature)
+        : ShaderReloadable("cluster", device.Get(), compiler, rootSignature, std::move(shaderPath)),
+          m_device(device.Get()), m_srvHeap(srvHeap)
     {
         const auto makeBuffer = [&](uint64_t size, const wchar_t* name) {
             return Buffer(m_device, BufferDesc{ .size = size, .flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, .name = name });
@@ -60,8 +60,7 @@ namespace walnut
         CreateStructuredViews(m_device, m_indices.Get(), kIndexCapacity, sizeof(uint32_t), &m_indicesSrv, m_indicesUav);
         CreateStructuredViews(m_device, m_counter.Get(), 1, sizeof(uint32_t), nullptr, m_counterUav);
 
-        if (!ReloadShaders())
-            throw std::runtime_error("Failed to build cluster pipelines:\n" + m_lastError);
+        BuildPipelinesOrThrow();
     }
 
     ClusterGrid::~ClusterGrid()
@@ -70,42 +69,15 @@ namespace walnut
             m_srvHeap.Free(handle);
     }
 
-    bool ClusterGrid::ReloadShaders()
+    void ClusterGrid::BuildPipelines(PipelineBuilder& builder)
     {
-        const ShaderCompileResult reset = m_compiler.Compile({ m_shaderPath, L"CSResetCounter", ShaderStage::Compute });
-        const ShaderCompileResult build = m_compiler.Compile({ m_shaderPath, L"CSBuildClusters", ShaderStage::Compute });
-        if (!reset.Succeeded() || !build.Succeeded())
-        {
-            m_lastError = reset.errors + build.errors;
-            return false;
-        }
-
-        // A compute pipeline is just the root signature and one shader: no rasterizer, blend or depth state.
-        D3D12_COMPUTE_PIPELINE_STATE_DESC desc{};
-        desc.pRootSignature = m_rootSignature;
-        ComPtr<ID3D12PipelineState> resetPipeline, buildPipeline;
-        desc.CS = reset.GetBytecode();
-        HRESULT hr = m_device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&resetPipeline));
-        if (SUCCEEDED(hr))
-        {
-            desc.CS = build.GetBytecode();
-            hr = m_device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&buildPipeline));
-        }
-        if (FAILED(hr))
-        {
-            m_lastError = std::format("CreateComputePipelineState failed (0x{:08X})", static_cast<uint32_t>(hr));
-            log::Error("{}", m_lastError);
-            return false;
-        }
-        SetDebugName(resetPipeline.Get(), L"ClusterResetPSO");
-        SetDebugName(buildPipeline.Get(), L"ClusterBuildPSO");
-
+        ComPtr<ID3D12PipelineState> resetPipeline = builder.Compute(builder.Shader(L"CSResetCounter", ShaderStage::Compute), L"ClusterResetPSO");
+        ComPtr<ID3D12PipelineState> buildPipeline = builder.Compute(builder.Shader(L"CSBuildClusters", ShaderStage::Compute), L"ClusterBuildPSO");
+        if (builder.Failed())
+            return;
         m_resetPipeline = std::move(resetPipeline);
         m_buildPipeline = std::move(buildPipeline);
-        m_lastError.clear();
-        return true;
     }
-
     void ClusterGrid::Build(ID3D12GraphicsCommandList7* commandList, uint32_t frameIndex)
     {
         PIXScopedEvent(commandList, pix::kColorGpu, L"Light clusters");

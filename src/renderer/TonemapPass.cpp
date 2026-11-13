@@ -1,11 +1,8 @@
 #include "renderer/TonemapPass.h"
 
-#include "core/Log.h"
 #include "gfx/Device.h"
-#include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
 #include "gfx/RootSignature.h"
-#include "gfx/ShaderCompiler.h"
 
 #include <cmath>
 
@@ -26,51 +23,20 @@ namespace walnut
 
     TonemapPass::TonemapPass(Device& device, const ShaderCompiler& compiler, std::filesystem::path shaderPath,
                              ID3D12RootSignature* rootSignature, DXGI_FORMAT outputFormat)
-        : m_device(device.Get()), m_compiler(compiler), m_shaderPath(std::move(shaderPath)),
-          m_rootSignature(rootSignature), m_outputFormat(outputFormat)
+        : ShaderReloadable("tonemap", device.Get(), compiler, rootSignature, std::move(shaderPath)),
+          m_outputFormat(outputFormat)
     {
-        if (!ReloadShaders())
-            throw std::runtime_error("Failed to build tonemap pipeline:\n" + m_lastError);
+        BuildPipelinesOrThrow();
     }
 
-    bool TonemapPass::ReloadShaders()
+    void TonemapPass::BuildPipelines(PipelineBuilder& builder)
     {
-        const ShaderCompileResult vs = m_compiler.Compile({ m_shaderPath, L"VSMain", ShaderStage::Vertex });
-        const ShaderCompileResult ps = m_compiler.Compile({ m_shaderPath, L"PSMain", ShaderStage::Pixel });
-        if (!vs.Succeeded() || !ps.Succeeded())
-        {
-            m_lastError = vs.errors + ps.errors;
-            return false;
-        }
-
-        D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
-        desc.pRootSignature = m_rootSignature;
-        desc.VS = vs.GetBytecode();
-        desc.PS = ps.GetBytecode();
-        desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
-        desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
-        desc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
-        desc.DepthStencilState.DepthEnable = FALSE; // a 2D pass: no depth buffer
-        desc.DSVFormat = DXGI_FORMAT_UNKNOWN;
-        desc.SampleMask = UINT_MAX;
-        desc.NumRenderTargets = 1;
-        desc.RTVFormats[0] = m_outputFormat;
-        desc.SampleDesc.Count = 1;
-
-        ComPtr<ID3D12PipelineState> pipeline;
-        const HRESULT hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline));
-        if (FAILED(hr))
-        {
-            m_lastError = std::format("CreateGraphicsPipelineState failed (0x{:08X})", static_cast<uint32_t>(hr));
-            log::Error("{}", m_lastError);
-            return false;
-        }
-        SetDebugName(pipeline.Get(), L"TonemapPSO");
-
-        m_pipeline = std::move(pipeline);
-        m_lastError.clear();
-        return true;
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = FullscreenPassDesc(m_outputFormat);
+        desc.VS = builder.Shader(L"VSMain", ShaderStage::Vertex);
+        desc.PS = builder.Shader(L"PSMain", ShaderStage::Pixel);
+        ComPtr<ID3D12PipelineState> pipeline = builder.Graphics(desc, L"TonemapPSO");
+        if (!builder.Failed())
+            m_pipeline = std::move(pipeline);
     }
 
     void TonemapPass::Render(ID3D12GraphicsCommandList* commandList, uint32_t sceneColorSrvIndex,

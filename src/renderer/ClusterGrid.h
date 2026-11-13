@@ -3,6 +3,7 @@
 #include "gfx/Buffer.h"
 #include "gfx/D3D12Common.h"
 #include "gfx/DescriptorHeap.h"
+#include "gfx/PipelineBuilder.h"
 #include "shared/Constants.h"
 
 #include <cstdint>
@@ -16,7 +17,7 @@ namespace walnut
 
     // The cluster grid of clustered lighting (shaders/clusters.hlsl, layout in shaders/common/Clusters.hlsli): every
     // frame a compute shader lists, for each of the 16 x 9 x 24 view-space clusters, the point lights that reach it.
-    class ClusterGrid
+    class ClusterGrid : public ShaderReloadable
     {
     public:
         // The grid's size (kClusterCountX/Y/Z, kClusterCount) is shared with the shaders: shared/Constants.h.
@@ -30,10 +31,6 @@ namespace walnut
         ClusterGrid(const ClusterGrid&) = delete;
         ClusterGrid& operator=(const ClusterGrid&) = delete;
 
-        // Recompiles the shaders and rebuilds the PSOs. On failure the previous PSOs are kept.
-        // The old PSOs are released on success, so the GPU must be idle before calling this.
-        bool ReloadShaders();
-        const std::string& GetLastError() const { return m_lastError; }
 
         // Records the build (expects the bindless state and the frame constants, with the point lights and the
         // cluster fields, to be bound). Afterwards the grid is readable by pixel shaders. Call after
@@ -49,11 +46,10 @@ namespace walnut
         uint64_t GetBytes() const { return m_grid.GetSize() + m_indices.GetSize() + m_counter.GetSize(); }
 
     private:
+        void BuildPipelines(PipelineBuilder& builder) override;
+
         ID3D12Device10* m_device = nullptr;
         DescriptorHeap& m_srvHeap;
-        const ShaderCompiler& m_compiler;
-        std::filesystem::path m_shaderPath;
-        ID3D12RootSignature* m_rootSignature = nullptr; // owned by the Renderer
 
         Buffer m_grid;    // uint2 per cluster: (first index, count)
         Buffer m_indices; // uint per (cluster, light) pair
@@ -64,6 +60,5 @@ namespace walnut
 
         ComPtr<ID3D12PipelineState> m_resetPipeline;
         ComPtr<ID3D12PipelineState> m_buildPipeline;
-        std::string m_lastError;
     };
 }

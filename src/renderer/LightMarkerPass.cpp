@@ -1,11 +1,8 @@
 #include "renderer/LightMarkerPass.h"
 
-#include "core/Log.h"
 #include "gfx/Device.h"
-#include "gfx/GpuUtils.h"
 #include "gfx/Pix.h"
 #include "gfx/RootSignature.h"
-#include "gfx/ShaderCompiler.h"
 
 namespace walnut
 {
@@ -21,27 +18,17 @@ namespace walnut
 
     LightMarkerPass::LightMarkerPass(Device& device, const ShaderCompiler& compiler, std::filesystem::path shaderPath,
                                      ID3D12RootSignature* rootSignature, DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat)
-        : m_device(device.Get()), m_compiler(compiler), m_shaderPath(std::move(shaderPath)),
-          m_rootSignature(rootSignature), m_colorFormat(colorFormat), m_depthFormat(depthFormat)
+        : ShaderReloadable("light marker", device.Get(), compiler, rootSignature, std::move(shaderPath)),
+          m_colorFormat(colorFormat), m_depthFormat(depthFormat)
     {
-        if (!ReloadShaders())
-            throw std::runtime_error("Failed to build light marker pipeline:\n" + m_lastError);
+        BuildPipelinesOrThrow();
     }
 
-    bool LightMarkerPass::ReloadShaders()
+    void LightMarkerPass::BuildPipelines(PipelineBuilder& builder)
     {
-        const ShaderCompileResult vs = m_compiler.Compile({ m_shaderPath, L"VSMain", ShaderStage::Vertex });
-        const ShaderCompileResult ps = m_compiler.Compile({ m_shaderPath, L"PSMain", ShaderStage::Pixel });
-        if (!vs.Succeeded() || !ps.Succeeded())
-        {
-            m_lastError = vs.errors + ps.errors;
-            return false;
-        }
-
         D3D12_GRAPHICS_PIPELINE_STATE_DESC desc{};
-        desc.pRootSignature = m_rootSignature;
-        desc.VS = vs.GetBytecode();
-        desc.PS = ps.GetBytecode();
+        desc.VS = builder.Shader(L"VSMain", ShaderStage::Vertex);
+        desc.PS = builder.Shader(L"PSMain", ShaderStage::Pixel);
         desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
         desc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
         desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE; // billboards always face the camera anyway
@@ -66,19 +53,9 @@ namespace walnut
         desc.RTVFormats[0] = m_colorFormat;
         desc.SampleDesc.Count = 1;
 
-        ComPtr<ID3D12PipelineState> pipeline;
-        const HRESULT hr = m_device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline));
-        if (FAILED(hr))
-        {
-            m_lastError = std::format("CreateGraphicsPipelineState failed (0x{:08X})", static_cast<uint32_t>(hr));
-            log::Error("{}", m_lastError);
-            return false;
-        }
-        SetDebugName(pipeline.Get(), L"LightMarkerPSO");
-
-        m_pipeline = std::move(pipeline);
-        m_lastError.clear();
-        return true;
+        ComPtr<ID3D12PipelineState> pipeline = builder.Graphics(desc, L"LightMarkerPSO");
+        if (!builder.Failed())
+            m_pipeline = std::move(pipeline);
     }
 
     void LightMarkerPass::Render(ID3D12GraphicsCommandList* commandList, uint32_t lightCount, float markerRadius) const

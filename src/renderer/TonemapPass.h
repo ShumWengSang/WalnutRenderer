@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gfx/D3D12Common.h"
+#include "gfx/PipelineBuilder.h"
 #include "shared/Constants.h"
 
 #include <cstdint>
@@ -30,29 +31,20 @@ namespace walnut
 
     // Fullscreen pass that reads the HDR scene color texture, applies exposure and a tonemap curve, and writes
     // the back buffer through its _SRGB view (so the hardware does the linear -> sRGB encoding).
-    class TonemapPass
+    class TonemapPass : public ShaderReloadable
     {
     public:
         TonemapPass(Device& device, const ShaderCompiler& compiler, std::filesystem::path shaderPath,
                     ID3D12RootSignature* rootSignature, DXGI_FORMAT outputFormat);
-
-        // Recompiles the shaders and rebuilds the PSO. On failure the previous PSO is kept.
-        // The old PSO is released on success, so the GPU must be idle before calling this.
-        bool ReloadShaders();
-        const std::string& GetLastError() const { return m_lastError; }
 
         // Expects the bindless state to be bound and the back buffer to be the render target
         // (Renderer::BeginBackBufferPass).
         void Render(ID3D12GraphicsCommandList* commandList, uint32_t sceneColorSrvIndex, const TonemapSettings& settings) const;
 
     private:
-        ID3D12Device10* m_device = nullptr;
-        const ShaderCompiler& m_compiler;
-        std::filesystem::path m_shaderPath;
-        ID3D12RootSignature* m_rootSignature = nullptr; // owned by the Renderer
-        DXGI_FORMAT m_outputFormat;
+        void BuildPipelines(PipelineBuilder& builder) override;
 
+        DXGI_FORMAT m_outputFormat;
         ComPtr<ID3D12PipelineState> m_pipeline;
-        std::string m_lastError;
     };
 }

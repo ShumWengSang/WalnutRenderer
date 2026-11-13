@@ -25,6 +25,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace walnut
 {
@@ -50,6 +51,8 @@ namespace walnut
         void DrawStatsOverlay() const;
         void DrawPixUI();
         void ReloadShaders();
+        // Every pass whose shaders F5 recompiles (the scene pass only once a scene is loaded).
+        std::vector<ShaderReloadable*> GetShaderReloadables() const;
         void RequestGpuCapture();
         // The names --set and --list-settings know (core/SettingsRegistry.h).
         void RegisterSettings();

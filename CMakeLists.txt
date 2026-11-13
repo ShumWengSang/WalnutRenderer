@@ -45,6 +45,8 @@ set(WALNUT_SOURCES
     src/gfx/MipChain.cpp
     src/gfx/MipChain.h
     src/gfx/GpuUtils.h
+    src/gfx/PipelineBuilder.cpp
+    src/gfx/PipelineBuilder.h
     src/gfx/Pix.cpp
     src/gfx/Pix.h
     src/gfx/RootSignature.cpp
