@@ -23,6 +23,8 @@ set(WALNUT_SOURCES
     src/core/Input.h
     src/core/Log.cpp
     src/core/Log.h
+    src/core/RecordingScript.cpp
+    src/core/RecordingScript.h
     src/core/SettingsRegistry.cpp
     src/core/SettingsRegistry.h
     src/core/StringUtils.h

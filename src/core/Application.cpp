@@ -1,6 +1,7 @@
 #include "core/Application.h"
 
 #include "core/Log.h"
+#include "core/RecordingScript.h"
 #include "core/StringUtils.h"
 #include "core/Window.h"
 #include "gfx/Pix.h"
@@ -41,7 +42,7 @@ namespace walnut
         LoadedScene loaded = LoadSceneFile(ResolveAssetPath(options.scene));
         m_scene = std::move(loaded.scene);
         m_sceneFile = std::move(loaded.info);
-        m_window = std::make_unique<Window>(WindowDesc{ L"WalnutRenderer", 1280, 720 });
+        m_window = std::make_unique<Window>(WindowDesc{ L"WalnutRenderer", options.width, options.height });
 
         // Register input before ImGui so input always sees every message, even ones ImGui consumes.
         m_input.RegisterRawMouse(m_window->GetHandle());
@@ -53,7 +54,7 @@ namespace walnut
         RendererDesc rendererDesc;
         rendererDesc.device.enableDebugLayer = options.debugLayer;
         rendererDesc.device.enableGpuValidation = options.gpuValidation;
-        rendererDesc.vsync = true;
+        rendererDesc.vsync = options.recordScript.empty(); // recording runs as fast as it can
         m_renderer = std::make_unique<Renderer>(*m_window, rendererDesc);
         std::copy(std::begin(Renderer::kDefaultClearColor), std::end(Renderer::kDefaultClearColor), m_debugSettings.clearColor);
 
@@ -112,10 +113,25 @@ namespace walnut
         RegisterSettings();
         for (const auto& [name, value] : options.settings)
             m_settings.Set(name, value);
+
+        if (!options.recordScript.empty())
+        {
+            std::string error;
+            m_recording = RecordingScript::Load(options.recordScript, error);
+            if (!m_recording)
+                throw std::runtime_error(std::format("--record: {}: {}", ToUtf8(options.recordScript.wstring()), error));
+            m_recordDir = options.recordDir.is_absolute() ? options.recordDir : m_exeDir / options.recordDir;
+            std::filesystem::create_directories(m_recordDir);
+            m_showUI = false;
+            log::Info("Recording {} frames at {} fps into {}", m_recording->GetFrameCount(), m_recording->GetFps(),
+                      ToUtf8(m_recordDir.wstring()));
+        }
     }
 
     double Application::GetAnimationTime() const
     {
+        if (m_recording)
+            return m_recording->GetFrameTime(m_recordFrame);
         return m_options.fixedTime ? *m_options.fixedTime : m_timer.GetTotalSeconds();
     }
 
@@ -237,6 +253,10 @@ namespace walnut
                 m_settingsPanel->Draw(deltaSeconds, m_showUI);
             }
 
+            // --record: the timeline decides the camera and settings (after the UI, so it wins).
+            if (m_recording)
+                m_recording->Apply(GetAnimationTime(), m_camera, m_settings);
+
             // This frame's decisions, from the settings the UI just changed.
             const FrameSettings frame = ResolveFrameSettings(m_renderSettings, m_debugSettings, m_sceneRenderer->GetCaps());
 
@@ -254,7 +274,7 @@ namespace walnut
                 // --screenshot: the frame as tonemapped, before the UI is drawn over it.
                 const bool screenshotFrame = !m_options.screenshot.empty() &&
                                              m_renderer->GetFrameCount() + 1 == m_options.screenshotFrame;
-                if (screenshotFrame)
+                if (screenshotFrame || m_recording)
                     m_renderer->CaptureBackBuffer();
                 m_renderer->BeginUiPass();
                 m_imgui->Render(m_renderer->GetCommandList());
@@ -263,6 +283,16 @@ namespace walnut
                 {
                     m_renderer->SaveScreenshot(m_options.screenshot);
                     break;
+                }
+                if (m_recording)
+                {
+                    m_renderer->SaveScreenshot(m_recordDir / std::format("frame_{:05}.png", m_recordFrame), true /*fast*/);
+                    if (++m_recordFrame == m_recording->GetFrameCount())
+                    {
+                        m_renderer->FinishScreenshotWrites();
+                        log::Info("Recorded {} frames", m_recordFrame);
+                        break;
+                    }
                 }
             }
 

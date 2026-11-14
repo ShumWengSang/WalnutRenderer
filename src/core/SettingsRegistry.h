@@ -37,8 +37,8 @@ namespace walnut
         // Anything else: a custom setter (returns false for a bad value) and getter.
         void AddCustom(std::string name, std::function<bool(std::string_view)> set, std::function<std::string()> get);
 
-        // Returns false (and logs why) for an unknown name or a bad value.
-        bool Set(std::string_view name, std::string_view value);
+        // Returns false (and logs why) for an unknown name or a bad value. 'quiet': don't log a successful change.
+        bool Set(std::string_view name, std::string_view value, bool quiet = false);
         // "name = value" for every setting.
         std::vector<std::string> List() const;
 

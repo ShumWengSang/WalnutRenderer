@@ -1,0 +1,9 @@
+# README GIF: the sun sweeps across the sky and back; the shadow map follows (loops).
+fps 30
+duration 6
+set 0 points.count 0
+set 0 tonemap.exposure 0.5
+set 0 sun.elevation 72
+ramp 0 3 sun.azimuth -120 60
+ramp 3 6 sun.azimuth 60 -120
+camera 0 0.0 3.0 0.3 91 -6

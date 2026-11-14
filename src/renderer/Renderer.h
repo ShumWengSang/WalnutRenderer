@@ -13,6 +13,9 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
+#include <future>
+#include <vector>
 #include <filesystem>
 #include <memory>
 
@@ -104,7 +107,10 @@ namespace walnut
         // Screenshots (--screenshot): copies the back buffer as it is now (call after the tonemap pass, before the
         // UI, to leave the UI out) into a readback buffer. SaveScreenshot waits for the GPU and writes a PNG.
         void CaptureBackBuffer();
-        bool SaveScreenshot(const std::filesystem::path& path);
+        // 'fast': lighter PNG compression (bigger files, much quicker), encoded and written on a worker thread, for
+        // recording every frame; FinishScreenshotWrites waits for those.
+        bool SaveScreenshot(const std::filesystem::path& path, bool fast = false);
+        void FinishScreenshotWrites();
         void EndFrame();
         void Resize(uint32_t width, uint32_t height);
         void WaitForGpu();
@@ -176,5 +182,9 @@ namespace walnut
         ComPtr<ID3D12Resource> m_screenshotReadback; // created on first use
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT m_screenshotFootprint{};
         bool m_screenshotPending = false;
+        static constexpr size_t kMaxPendingWrites = 16;
+        std::deque<std::future<bool>> m_pendingWrites;
+        static bool WritePng(const std::filesystem::path& path, uint32_t width, uint32_t height,
+                             const std::vector<uint8_t>& pixels, bool quiet);
     };
 }

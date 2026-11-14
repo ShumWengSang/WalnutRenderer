@@ -1,0 +1,10 @@
+# README GIF: 512 animated lamps at night, the nearest 32 with cube shadow maps. One bob period (2 pi / 1.3 s), so
+# it loops seamlessly.
+fps 30
+duration 4.8332
+set 0 sun.intensity 0
+set 0 ambient.intensity 0.02
+set 0 points.count 512
+set 0 points.shadows cube
+set 0 points.budget 32
+camera 0 4.0 1.3 4.3 248 -6

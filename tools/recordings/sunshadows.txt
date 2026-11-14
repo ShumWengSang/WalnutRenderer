@@ -1,0 +1,12 @@
+# README GIF: the sun's shadow from the 2048^2 shadow map, from one ray per pixel, and where they disagree (red:
+# only the map shadows, blue: only the ray does). Three stills, 1.5 s each, from the upper gallery with a low sun.
+fps 10
+duration 4.5
+set 0 points.count 0
+set 0 tonemap.exposure 0.3
+set 0 sun.azimuth -70
+set 0 sun.elevation 40
+set 0 sun.technique map
+set 1.5 sun.technique ray
+set 3 view.show shadowdiff
+camera 0 6.0 6.4 4.5 240 -28

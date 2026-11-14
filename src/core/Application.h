@@ -2,6 +2,7 @@
 
 #include "core/CommandLine.h"
 #include "core/Input.h"
+#include "core/RecordingScript.h"
 #include "core/SettingsRegistry.h"
 #include "core/Timer.h"
 #include "renderer/RenderSettings.h"
@@ -85,6 +86,9 @@ namespace walnut
         bool m_showUI = true; // F1
         std::filesystem::path m_lastCapturePath;
         SettingsRegistry m_settings;
+        std::optional<RecordingScript> m_recording; // --record
+        std::filesystem::path m_recordDir;
+        uint32_t m_recordFrame = 0;
         // Last: it refers to the members above.
         std::unique_ptr<SettingsPanel> m_settingsPanel;
     };

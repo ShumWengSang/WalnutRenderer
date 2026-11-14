@@ -97,7 +97,7 @@ namespace walnut
         m_entries.push_back(Entry{ std::move(name), std::move(set), std::move(get) });
     }
 
-    bool SettingsRegistry::Set(std::string_view name, std::string_view value)
+    bool SettingsRegistry::Set(std::string_view name, std::string_view value, bool quiet)
     {
         const auto entry = std::ranges::find(m_entries, name, &Entry::name);
         if (entry == m_entries.end())
@@ -110,7 +110,8 @@ namespace walnut
             log::Warn("--set: bad value '{}' for '{}' (currently {})", value, name, entry->get());
             return false;
         }
-        log::Info("--set {} = {}", name, entry->get());
+        if (!quiet)
+            log::Info("--set {} = {}", name, entry->get());
         return true;
     }
 

@@ -1,0 +1,15 @@
+# README GIF: point light shadows off, from cube shadow maps, and ray traced. Three stills, 1.5 s each; 40 bright
+# lamps with a long range, so the shadows of the curtains and pillars are easy to see.
+fps 10
+duration 4.5
+set 0 sun.intensity 0
+set 0 ambient.intensity 0.02
+set 0 points.count 40
+set 0 points.range 6
+set 0 points.intensity 10
+set 0 points.animate 0
+set 0 points.budget 32
+set 0 points.shadows off
+set 1.5 points.shadows cube
+set 3 points.shadows ray
+camera 0 -9.4 2.1 0.3 90 -4

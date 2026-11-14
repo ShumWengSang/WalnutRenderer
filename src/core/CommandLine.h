@@ -35,6 +35,9 @@ namespace walnut
         std::filesystem::path screenshot;  // --screenshot=file.png: save frame screenshotFrame (without UI), then exit
         uint64_t screenshotFrame = 5;      // --screenshot-frame=N
         bool listSettings = false;         // --list-settings: log every --set name and its current value, then exit
+        uint32_t width = 1280, height = 720; // --size=WxH: the window's client area (at 100% display scaling)
+        std::filesystem::path recordScript; // --record=SCRIPT: play a timeline (core/RecordingScript.h), save every frame
+        std::filesystem::path recordDir = "recording"; // --record-dir=DIR: where the frames go (frame_00000.png, ...)
         bool help = false;                 // --help: log the options, then exit
     };
 

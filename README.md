@@ -75,6 +75,8 @@ The script does a sparse, shallow fetch of [KhronosGroup/glTF-Sample-Assets](htt
 | `--set=NAME=VALUE` | Change a setting at startup, e.g. `--set=view.path=deferred --set=points.shadows=ray`. Repeatable. |
 | `--list-settings` | Log every `--set` name with its current value, then quit. |
 | `--screenshot=FILE.png` | Save the tonemapped frame (without the UI) at frame 5 (`--screenshot-frame=N`), then quit. |
+| `--size=WxH` | Window client size (default 1280x720). |
+| `--record=SCRIPT` | Play a timeline of camera keyframes and setting changes (format in `src/core/RecordingScript.h`, examples in `tools/recordings/`), rendering every frame at an exact time and saving it as a PNG into `--record-dir=DIR` (default `recording/` next to the exe), then quit. |
 | `--help` | Log all options, then quit. |
 
 Logs go to the debugger output and to `WalnutRenderer.log` next to the exe. When the debug layer is active, its messages also go to the log.
@@ -89,6 +91,10 @@ Logs go to the debugger output and to `WalnutRenderer.log` next to the exe. When
 .\tools\screenshot-matrix.ps1 -OutDir captures\after
 .\tools\compare-images.ps1 captures\before captures\after   # exits 1 if any image differs
 ```
+
+### Videos and GIFs
+
+`tools\make-media.ps1` renders the timelines in `tools/recordings/` with `--record` and encodes them with ffmpeg (`winget install Gyan.FFmpeg`) into `docs/media/`: the README's GIFs and the 30 s showcase video. Each frame is rendered at an exact time, so the result is smooth and the same on every run. `-Only sun,night` renders just those.
 
 ## Controls
 
@@ -118,7 +124,8 @@ shaders/                  HLSL sources, compiled at runtime straight from here (
                           so both sides use the same values: Constants.h (enum values, cluster counts, cube face size),
                           FrameConstants.h (the per-frame constant buffer, in 16-byte blocks)
                           and DebugViewList.h (every debug view: value, --set name, UI label, forward-only/ray-traced flags)
-src/core/                 Application loop, command line, settings registry (--set), Win32 Window, Input, Timer, Log
+src/core/                 Application loop, command line, settings registry (--set), recording timelines (--record),
+                          Win32 Window, Input, Timer, Log
 src/gfx/                  Device, CommandQueue (+fence), DescriptorHeap, SwapChain, RootSignature (shared bindless),
                           Buffer, Texture, UploadContext (staging ring), FrameAllocator (per-frame constants),
                           MipChain, ShaderCompiler, PipelineBuilder (+ ShaderReloadable: F5), Pix, Views (view descriptions), Barriers (named barrier states +
@@ -133,7 +140,8 @@ src/scene/                Camera, fly controller, lighting, point lights, bounds
 src/ui/                   ImGuiLayer (Win32 + DX12 backends), SettingsPanel (the Settings window, one function per section),
                           Widgets (EnumRadio, EnumCombo, OverrideSlider, DebugViewCombo)
 tools/                    fetch-assets.ps1 (download glTF models), pix-capture.ps1 (capture via pixtool), pix-mcp.cmd (PIX MCP server launcher),
-                          screenshot-matrix.ps1 + compare-images.ps1 (before/after image comparisons)
+                          screenshot-matrix.ps1 + compare-images.ps1 (before/after image comparisons),
+                          make-media.ps1 + recordings/ (README GIFs and the showcase video, via --record)
 ```
 
 ## Profiling and debugging with PIX

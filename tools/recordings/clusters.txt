@@ -1,0 +1,10 @@
+# README GIF: the lights-per-cluster heat map as the lamp count grows from 32 to 1024 and back (loops).
+fps 30
+duration 6
+set 0 sun.intensity 0
+set 0 ambient.intensity 0.02
+set 0 points.animate 0
+set 0 view.show clusterlights
+ramp 0 3 points.count 32 1024
+ramp 3 6 points.count 1024 32
+camera 0 -9.4 2.1 0.3 90 5

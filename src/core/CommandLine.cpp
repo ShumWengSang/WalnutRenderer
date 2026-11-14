@@ -73,6 +73,19 @@ namespace walnut
                   [](AppOptions& o, std::wstring_view v) { o.screenshot = v; return true; } },
                 { L"--screenshot-frame=", "N", "Which frame --screenshot saves (default 5).",
                   [=](AppOptions& o, std::wstring_view v) { o.screenshotFrame = toU64(v); return true; } },
+                { L"--size=", "WxH", "Window client size (default 1280x720).",
+                  [](AppOptions& o, std::wstring_view v) {
+                      unsigned w = 0, h = 0;
+                      if (swscanf_s(std::wstring(v).c_str(), L"%ux%u", &w, &h) != 2 || w == 0 || h == 0)
+                          return false;
+                      o.width = w;
+                      o.height = h;
+                      return true;
+                  } },
+                { L"--record=", "SCRIPT", "Play a camera/settings timeline and save every frame as a PNG, then quit.",
+                  [](AppOptions& o, std::wstring_view v) { o.recordScript = v; return true; } },
+                { L"--record-dir=", "DIR", "Where --record saves its frames (default recording/ next to the exe).",
+                  [](AppOptions& o, std::wstring_view v) { o.recordDir = v; return true; } },
                 { L"--help", "", "Log these options, then quit.",
                   [](AppOptions& o, std::wstring_view) { o.help = true; return true; } },
             };

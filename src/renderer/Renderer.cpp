@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <string>
 #include <vector>
@@ -65,6 +66,7 @@ namespace walnut
 
     Renderer::~Renderer()
     {
+        FinishScreenshotWrites();
         WaitForGpu();
     }
 
@@ -259,7 +261,7 @@ namespace walnut
         m_screenshotPending = true;
     }
 
-    bool Renderer::SaveScreenshot(const std::filesystem::path& path)
+    bool Renderer::SaveScreenshot(const std::filesystem::path& path, bool fast)
     {
         if (!m_screenshotPending)
             return false;
@@ -270,7 +272,8 @@ namespace walnut
         const uint32_t height = m_screenshotFootprint.Footprint.Height;
         const uint32_t pitch = m_screenshotFootprint.Footprint.RowPitch;
         void* mapped = nullptr;
-        const D3D12_RANGE readRange{ 0, static_cast<SIZE_T>(pitch) * height };
+        // Rows are 256-byte aligned, except the last: it ends right after its pixels.
+        const D3D12_RANGE readRange{ 0, static_cast<SIZE_T>(pitch) * (height - 1) + static_cast<SIZE_T>(width) * 4 };
         WR_CHECK(m_screenshotReadback->Map(0, &readRange, &mapped));
         // The back buffer is RGBA8 holding sRGB-encoded values (the tonemap wrote through the _SRGB view): exactly
         // what a PNG stores. Alpha is forced opaque.
@@ -286,19 +289,48 @@ namespace walnut
         const D3D12_RANGE noWrite{ 0, 0 };
         m_screenshotReadback->Unmap(0, &noWrite);
 
+        if (path.has_parent_path())
+            std::filesystem::create_directories(path.parent_path());
+        if (!fast)
+        {
+            stbi_write_png_compression_level = 8; // stb's default
+            return WritePng(path, width, height, pixels, false);
+        }
+        // Recording: light compression, on worker threads (encoding takes longer than rendering). A few writes at
+        // most are queued, so memory stays bounded.
+        stbi_write_png_compression_level = 1;
+        while (m_pendingWrites.size() >= kMaxPendingWrites)
+        {
+            m_pendingWrites.front().wait();
+            m_pendingWrites.pop_front();
+        }
+        m_pendingWrites.push_back(std::async(std::launch::async, [path, width, height, pixels = std::move(pixels)] {
+            return WritePng(path, width, height, pixels, true);
+        }));
+        return true;
+    }
+
+    void Renderer::FinishScreenshotWrites()
+    {
+        for (std::future<bool>& write : m_pendingWrites)
+            write.wait();
+        m_pendingWrites.clear();
+    }
+
+    bool Renderer::WritePng(const std::filesystem::path& path, uint32_t width, uint32_t height,
+                            const std::vector<uint8_t>& pixels, bool quiet)
+    {
         std::vector<uint8_t> png;
         stbi_write_png_to_func([](void* context, void* data, int size) {
             auto* bytes = static_cast<std::vector<uint8_t>*>(context);
             bytes->insert(bytes->end(), static_cast<uint8_t*>(data), static_cast<uint8_t*>(data) + size);
         }, &png, static_cast<int>(width), static_cast<int>(height), 4, pixels.data(), static_cast<int>(width) * 4);
-        if (png.empty())
-            return false;
-        if (path.has_parent_path())
-            std::filesystem::create_directories(path.parent_path());
         std::ofstream file(path, std::ios::binary);
-        file.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
-        const bool ok = file.good();
-        log::Info("Screenshot {}x{} -> {}{}", width, height, ToUtf8(path.wstring()), ok ? "" : " (write failed)");
+        if (!png.empty())
+            file.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+        const bool ok = !png.empty() && file.good();
+        if (!quiet || !ok)
+            log::Info("Screenshot {}x{} -> {}{}", width, height, ToUtf8(path.wstring()), ok ? "" : " (write failed)");
         return ok;
     }
 
