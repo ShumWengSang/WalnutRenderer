@@ -1,9 +1,83 @@
 # WalnutRenderer
 
-A small Direct3D 12 learning engine for Windows. It uses raw Win32 for the window and input, Dear ImGui for UI, and compiles HLSL at runtime with DXC.
+A Direct3D 12 renderer written from scratch to learn how modern real-time rendering works: raw Win32, Dear ImGui, HLSL compiled at runtime with DXC, and no engine underneath. It renders Sponza with PBR materials, a sun with shadow-mapped or ray-traced shadows, and up to 1024 clustered point lights with cube-map or ray-traced shadows, in forward or deferred.
 
-It loads a glTF scene (Sponza by default) and renders it with:
-- **Bindless resources**: one shader-visible descriptor heap and one shared root signature; shaders find buffers and textures through `ResourceDescriptorHeap[index]` (Shader Model 6.6).
+[![WalnutRenderer showcase video (30 s): click to play](docs/media/showcase-poster.jpg)](docs/media/showcase.mp4)
+
+<sub>▶ 30 s showcase, 1080p60 ([showcase.mp4](docs/media/showcase.mp4), 71 MB; [720p](docs/media/showcase-720p.mp4), 9 MB). Every frame is rendered offline at an exact time with `--record`, so it's smooth and reproducible (`tools/make-media.ps1`).</sub>
+
+| | |
+|---|---|
+| ![The sun sweeps across the sky; shadows follow](docs/media/sun.gif) | ![512 animated point lights at night with cube shadow maps](docs/media/night.gif) |
+| **Sun and shadow map.** The sun moves; a 2048² shadow map with 3×3 PCF is re-rendered every frame. | **512 point lights**, clustered, animated; the nearest 32 cast shadows from cube maps. |
+| ![Lights per cluster heat map as the lamp count changes](docs/media/clusters.gif) | ![Point light shadows: off, cube maps, ray traced](docs/media/pointshadows.gif) |
+| **Clustered lighting.** Lights per cluster (16×9×24 view-space grid) as the lamp count goes 32 → 1024. | **Point light shadows**: none, cube shadow maps, and inline ray tracing for every lamp. |
+| ![Sun shadow: shadow map, ray traced, and their difference](docs/media/sunshadows.gif) | |
+| **Sun shadows**: shadow map vs one ray per pixel, and where they disagree. | |
+
+## Feature list
+
+| Area | What's there |
+|---|---|
+| **API** | Direct3D 12 with the Agility SDK (1.620.1): Shader Model 6.6 **bindless** (`ResourceDescriptorHeap[]`), **Enhanced Barriers** only, inline ray tracing (DXR 1.1 `RayQuery`), one shared root signature |
+| **Geometry** | glTF 2.0 loading (cgltf), merged vertex/index buffers, **vertex pulling**, one draw per instance, per-instance world bounds |
+| **Materials** | glTF metallic-roughness PBR: base color, metallic-roughness, normal, occlusion and emissive maps, alpha test, double-sided; CPU mip chains (sRGB-correct, renormalized normals); mesh or derived tangents |
+| **Lighting** | Cook-Torrance GGX specular + Lambert diffuse, sky/ground hemisphere ambient with an analytic environment BRDF, HDR FP16 target, exposure + ACES / Reinhard tonemapping |
+| **Sun shadows** | 2048² shadow map (slope-scaled + normal-offset bias, alpha-tested casters, PCF), or one ray-traced shadow ray per pixel (BLAS per primitive + TLAS); a difference view compares them |
+| **Rendering paths** | Depth pre-pass (depth-EQUAL shading), forward or **deferred** (4-target G-buffer, octahedral normals), same shading code in both |
+| **Many lights** | Up to 1024 point lights, **clustered** (16×9×24 view-space clusters built by a compute shader with groupshared batching), or brute force to compare |
+| **Point light shadows** | **Cube shadow maps** for the nearest N lamps (one 2D array, sampled as a `TextureCubeArray`, sphere-culled draws), or **ray traced** for every lamp |
+| **Debug views** | 22 views: material maps, normals, lighting terms, shadow visibility, lights per cluster, and difference views comparing shadow techniques |
+| **Tooling** | Live shader reload (F5), PIX markers and capture scripts (with PIX's MCP servers), `--set` for any setting, `--screenshot`, a 51-shot screenshot matrix compared pixel by pixel, `--record` for videos, GPU-based validation runs |
+
+## Performance
+
+GPU frame time (median), PIX Timing Captures of the current code. RTX 3070 Ti, 1280×720, Release, vsync off, Sponza start view, sun on, frozen animation (`--time=2`). Each row is one `--set` configuration, so any of them can be reproduced with `tools\pix-capture.ps1 -AppArgs "..."`.
+
+**One sun, no point lights**
+
+| Configuration | GPU frame | Biggest pass |
+|---|---|---|
+| Forward, no depth pre-pass | 0.39 ms | scene 0.31 ms |
+| Forward + depth pre-pass, shadow map | **0.30 ms** | scene 0.17 ms, pre-pass 0.04, shadow map 0.06 |
+| Forward + pre-pass, ray-traced sun shadows | 0.56 ms | scene (with rays) 0.48 ms |
+| Deferred, shadow map | 0.33 ms | G-buffer 0.12 ms, lighting 0.08 ms |
+
+**1024 point lights** (no point light shadows)
+
+| | Brute force | Clustered | Speed-up |
+|---|---|---|---|
+| Forward | 9.64 ms | **1.14 ms** | 8.5× |
+| Deferred | 6.04 ms | **0.88 ms** | 6.8× |
+
+The cluster build (compute) takes 0.12 ms at 1024 lamps; each pixel then visits about 37 lamps instead of 1024.
+
+**1024 point lights with shadows** (forward, clustered)
+
+| Point light shadows | GPU frame | Shadow cost |
+|---|---|---|
+| Off | 1.14 ms | – |
+| Cube maps, nearest 16 | 1.64 ms | cube rendering 0.45 ms |
+| Cube maps, nearest 32 | 2.11 ms | cube rendering 0.88 ms (48 MB of cubes) |
+| Ray traced, every lamp | 7.49 ms | rays in the scene pass, ~6.3 ms |
+
+The default start-up configuration (128 lamps, 16 cube shadows, forward) runs at 0.98 ms on the GPU. The refactor (step 7, 17 commits) changed no pixel, and timings stayed within 2%: the same configurations measured before it (1024 lamps forward / deferred, 16 / 32 cubes, rays) were 1.13 / 0.88 / 1.63 / 2.12 / 7.34 ms. The sections under [How a frame works](#how-a-frame-works) explain each technique and its measurements in detail.
+
+## How it was built
+
+One idea per step, each measured and verified before the next:
+
+1. **Foundations**: window, input, device, swap chain, bindless root signature, upload ring, glTF scene with mips, fly camera, HDR + tonemapping.
+2. **Shadows**: shadow map with bias and PCF, then inline ray-traced shadows and a difference view.
+3. **PBR**: GGX BRDF, normal mapping, all glTF maps, hemisphere ambient.
+4. **Depth pre-pass and deferred shading**.
+5. **Many lights**: brute force, a compute-built cluster grid, clustered shading, groupshared batching.
+6. **Point light shadows**: cube shadow maps and ray-traced point shadows.
+7. **Refactor**: C++/HLSL shared headers, pipeline builder, settings resolved per frame, a `SceneRenderer`, tracked barriers, self-freeing descriptors. Every commit was checked with a pixel-exact screenshot matrix and GPU-based validation.
+
+## Details
+
+It loads a glTF scene (Sponza by default) and renders it with:- **Bindless resources**: one shader-visible descriptor heap and one shared root signature; shaders find buffers and textures through `ResourceDescriptorHeap[index]` (Shader Model 6.6).
 - **Vertex pulling**: no input layouts; vertex shaders read a merged `StructuredBuffer` of vertices. One `DrawIndexedInstanced` per instance, with the instance index as the only per-draw root constant.
 - **glTF materials** (metallic-roughness): base color, metallic/roughness, normal, occlusion and emissive maps (including `KHR_materials_emissive_strength`), with CPU-generated mip chains (linear-light averaging for sRGB colors, re-normalized normals for normal maps). Normal mapping uses the mesh's tangents, or derives them per pixel from screen-space derivatives. Alpha test for `MASK` materials, and double-sided materials are drawn without culling.
 - **Lighting**: PBR shading (`shaders/common/Brdf.hlsli`): Lambert diffuse plus Cook-Torrance specular (GGX distribution, height-correlated Smith visibility, Schlick Fresnel), for a directional sun and for a sky/ground hemisphere ambient (an analytic split-sum environment BRDF), with occlusion and emission. Sun shadows come from either:
