@@ -20,7 +20,7 @@ struct DrawConstants
     uint emissiveIndex;
     uint depthIndex;
 };
-ConstantBuffer<DrawConstants> g_draw : register(b0);
+WALNUT_CONSTANT_BUFFER(DrawConstants, g_draw, b0);
 
 // One triangle that covers the whole screen (common/Fullscreen.hlsli).
 float4 VSMain(uint vertexId : SV_VertexID) : SV_Position

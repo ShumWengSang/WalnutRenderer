@@ -15,7 +15,7 @@ struct DrawConstants
     uint counterUavIndex;  // RWStructuredBuffer<uint>: how many indices are used so far
     uint indexCapacity;    // size of the index list
 };
-ConstantBuffer<DrawConstants> g_draw : register(b0);
+WALNUT_CONSTANT_BUFFER(DrawConstants, g_draw, b0);
 
 // One thread: the counter starts every frame at 0. (A separate dispatch, so it's done before any thread of the next
 // one adds to it; threads of one dispatch can't wait for each other across groups.)

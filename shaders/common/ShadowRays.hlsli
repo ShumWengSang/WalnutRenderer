@@ -70,7 +70,11 @@ float TraceShadowRay(float3 origin, float3 direction, float maxDistance)
     // ACCEPT_FIRST_HIT_AND_END_SEARCH: any hit means shadow, no need to find the closest one.
     // SKIP_PROCEDURAL_PRIMITIVES: the scene only has triangles; lets the compiler drop that path.
     // FORCE_OPAQUE (only with alpha testing turned off): treat every triangle as solid, no candidates at all.
+#ifdef WALNUT_INTELLISENSE
+    RayQueryStandIn query; // the editor's HLSL extension doesn't know RayQuery (common/IntelliSense.hlsli)
+#else
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> query;
+#endif
     query.TraceRayInline(scene, g_frame.scene.rayAlphaTest ? RAY_FLAG_NONE : RAY_FLAG_FORCE_OPAQUE, 0xFF /*instance mask: all*/, ray);
     while (query.Proceed())
     {

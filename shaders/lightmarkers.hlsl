@@ -14,7 +14,7 @@ struct DrawConstants
 {
     float markerRadius; // meters
 };
-ConstantBuffer<DrawConstants> g_draw : register(b0);
+WALNUT_CONSTANT_BUFFER(DrawConstants, g_draw, b0);
 
 struct VSOutput
 {

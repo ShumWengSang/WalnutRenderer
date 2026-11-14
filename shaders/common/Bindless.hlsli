@@ -1,7 +1,7 @@
 // HLSL side of the bindless root signature (src/gfx/RootSignature.h). Keep the two in sync.
 //
 //   b0  root constants  per-draw values (e.g. descriptor indices); each shader declares its own
-//                       ConstantBuffer<T> at b0 with up to 8 uints
+//                       constant buffer at b0 (WALNUT_CONSTANT_BUFFER) with up to 8 uints
 //   b1  root CBV        per-draw data, e.g. a world matrix
 //   b2  root CBV        per-frame data, e.g. camera and lights
 //   s0..s6              static samplers declared below
@@ -11,6 +11,16 @@
 
 #ifndef WALNUT_BINDLESS_HLSLI
 #define WALNUT_BINDLESS_HLSLI
+
+// WALNUT_CONSTANT_BUFFER(Type, name, register): a constant buffer whose contents are one struct, read as name.field.
+// In the editor (WALNUT_INTELLISENSE, see common/IntelliSense.hlsli) it's a plain variable: the HLSL extension can't
+// read fields through ConstantBuffer<T>. DXC never defines WALNUT_INTELLISENSE and compiles the real declaration.
+#ifdef WALNUT_INTELLISENSE
+#include "common/IntelliSense.hlsli"
+#define WALNUT_CONSTANT_BUFFER(Type, name, slot) Type name
+#else
+#define WALNUT_CONSTANT_BUFFER(Type, name, slot) ConstantBuffer<Type> name : register(slot)
+#endif
 
 SamplerState g_samplerAnisotropicWrap : register(s0);
 SamplerState g_samplerLinearClamp     : register(s1);

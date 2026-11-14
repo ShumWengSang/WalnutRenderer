@@ -2,8 +2,9 @@
 #ifndef WALNUT_FRAME_CONSTANTS_HLSLI
 #define WALNUT_FRAME_CONSTANTS_HLSLI
 
+#include "common/Bindless.hlsli"
 #include "shared/FrameConstants.h"
 
-ConstantBuffer<FrameConstants> g_frame : register(b2);
+WALNUT_CONSTANT_BUFFER(FrameConstants, g_frame, b2);
 
 #endif

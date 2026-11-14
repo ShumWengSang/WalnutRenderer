@@ -122,7 +122,7 @@ winget install Microsoft.VisualStudio.BuildTools --override "--quiet --wait --ad
 
 **In VS Code**
 
-1. Install the recommended extensions: C/C++, CMake Tools, and HLSL Tools.
+1. Install the recommended extensions: C/C++, CMake Tools, and HLSL Tools. HLSL Tools reads its include path and defines from `shaders/shadertoolsconfig.json`, and sees editor-only stand-ins for the newer HLSL features it doesn't know (`shaders/common/IntelliSense.hlsli`).
 2. Open the folder and pick the **x64 Debug** configure preset. CMake Tools sets up the MSVC environment for you.
 3. Press **F5**. This builds and launches under the debugger (`.vscode/launch.json`).
 

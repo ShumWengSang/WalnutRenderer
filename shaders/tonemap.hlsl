@@ -13,7 +13,7 @@ struct DrawConstants
     float exposure;        // linear multiplier (2^stops)
     uint  tonemapOperator; // TonemapOperator in TonemapPass.h
 };
-ConstantBuffer<DrawConstants> g_draw : register(b0);
+WALNUT_CONSTANT_BUFFER(DrawConstants, g_draw, b0);
 
 
 // x / (1 + x): maps 0..infinity smoothly onto 0..1 and never clips. Simple, but it compresses everything

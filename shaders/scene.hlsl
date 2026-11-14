@@ -21,7 +21,7 @@ struct DrawConstants
 {
     uint instanceIndex; // which instance this draw is
 };
-ConstantBuffer<DrawConstants> g_draw : register(b0);
+WALNUT_CONSTANT_BUFFER(DrawConstants, g_draw, b0);
 
 
 struct PSInput
@@ -124,7 +124,7 @@ struct PointShadowFace
 {
     row_major float4x4 viewProjection;
 };
-ConstantBuffer<PointShadowFace> g_pointShadowFace : register(b1);
+WALNUT_CONSTANT_BUFFER(PointShadowFace, g_pointShadowFace, b1);
 
 float4 VSPointShadow(uint vertexId : SV_VertexID) : SV_Position
 {

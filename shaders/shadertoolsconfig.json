@@ -1,0 +1,10 @@
+{
+    "hlsl.additionalIncludeDirectories": [
+        "."
+    ],
+    "hlsl.preprocessorDefinitions": {
+        "__HLSL_VERSION": "2021",
+        "RAYTRACED_SHADOWS": "1",
+        "WALNUT_INTELLISENSE": "1"
+    }
+}
